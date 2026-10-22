@@ -95,8 +95,14 @@ STOP AND ASK THE OWNER (do not proceed alone) when:
 - Anything would deploy, cost money, or touch production.
 - Docs conflict with each other. Point out the conflict instead of guessing.
 
+MERGING
+- Follow the "Merge policy" in AGENTS.md exactly: merge only with green CI on the
+  head commit AND a "🔎 Claude supervisor review (<sha7>)" comment for that exact
+  commit saying "Ready to merge", in dependency order, using a merge commit.
+  Otherwise wait, or fix the review findings first.
+
 NEVER
-- Merge your own PRs or close issues yourself.
+- Merge without that review, bypass checks, or close issues except via merged PRs.
 - Force-push main.
 - Change the scope of an issue. If you find extra work, open a new issue with
   the right labels and milestone, and link it.
@@ -116,7 +122,7 @@ Work on issue #<N> in arvindjonn09/tax-invoice. Follow plan.md, AGENTS.md, CLAUD
 role file .claude/agents/<agent-label>.md. Confirm every "Depends on" issue is
 closed, then: branch from the latest main, implement with tests, run type-check,
 lint, tests and build, and open a PR with "Closes #<N>" and an acceptance-criteria
-checklist backed by real test output. Do not merge.
+checklist backed by real test output. Merge only under the AGENTS.md merge policy.
 ```
 
 ---
@@ -128,7 +134,7 @@ PR #<P> in arvindjonn09/tax-invoice has review comments. Read them with
 gh pr view <P> --json title,body,reviews,comments and gh pr diff <P>.
 Fix every Blocking and Should-fix item on the same branch, add tests that would
 have caught each bug, rerun type-check, lint, tests and build, push, and reply to
-each comment with what changed. Do not merge.
+each comment with what changed. Then wait for a new supervisor review of the new commit.
 ```
 
 ## Your loop as owner
@@ -136,5 +142,5 @@ each comment with what changed. Do not merge.
 2. Optionally have Claude review it: *"use the code-reviewer agent on PR #N"* (and the security-engineer agent for
    auth, money, files or personal data).
 3. If changes are needed, give Codex Prompt 3.
-4. You merge. Any issue whose dependencies are now all closed can start; give Codex Prompt 2 for it.
+4. Codex merges once Claude's review of the exact head commit says "Ready to merge" (AGENTS.md merge policy). Any issue whose dependencies are now all closed can start; give Codex Prompt 2 for it.
 5. Issues with no dependencies on each other can run as parallel Codex tasks (in M0: #8, #16, #18, #24).
