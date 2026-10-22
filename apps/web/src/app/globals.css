@@ -1,33 +1,212 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  color-scheme: light dark;
-  font-family: Arial, sans-serif;
-  background: #f1f5f9;
-  color: #0f172a;
+  --foreground: #0f172a;
+  --background: #f8fafc;
+  --card-foreground: #0f172a;
+  --card: #ffffff;
+  --muted-foreground: #475569;
+  --muted: #f1f5f9;
+  --primary-foreground: #ffffff;
+  --primary: #1e40af;
+  --primary-hover-foreground: #ffffff;
+  --primary-hover: #1e3a8a;
+  --link: #1e40af;
+  --success-foreground: #166534;
+  --success: #dcfce7;
+  --warning-foreground: #854d0e;
+  --warning: #fef3c7;
+  --danger-foreground: #991b1b;
+  --danger: #fee2e2;
+  --info-foreground: #1e40af;
+  --info: #dbeafe;
+  --destructive-foreground: #ffffff;
+  --destructive: #b91c1c;
+  --control-border: #64748b;
+  --focus-ring: #1d4ed8;
+  --border: var(--control-border);
+  --input: var(--control-border);
+  --ring: var(--focus-ring);
+  --secondary: var(--muted);
+  --secondary-foreground: var(--muted-foreground);
+  --accent: var(--info);
+  --accent-foreground: var(--info-foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--card-foreground);
+  color-scheme: light;
 }
-body {
-  margin: 0;
+.dark {
+  --foreground: #f8fafc;
+  --background: #0f172a;
+  --card-foreground: #f8fafc;
+  --card: #1e293b;
+  --muted-foreground: #cbd5e1;
+  --muted: #334155;
+  --primary-foreground: #0f172a;
+  --primary: #93c5fd;
+  --primary-hover-foreground: #0f172a;
+  --primary-hover: #bfdbfe;
+  --link: #93c5fd;
+  --success-foreground: #bbf7d0;
+  --success: #14532d;
+  --warning-foreground: #fde68a;
+  --warning: #713f12;
+  --danger-foreground: #fecaca;
+  --danger: #7f1d1d;
+  --info-foreground: #bfdbfe;
+  --info: #1e3a8a;
+  --destructive-foreground: #0f172a;
+  --destructive: #fca5a5;
+  --control-border: #94a3b8;
+  --focus-ring: #93c5fd;
+  --border: var(--control-border);
+  --input: var(--control-border);
+  --ring: var(--focus-ring);
+  --secondary: var(--muted);
+  --secondary-foreground: var(--muted-foreground);
+  --accent: var(--info);
+  --accent-foreground: var(--info-foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--card-foreground);
+  color-scheme: dark;
 }
-main {
-  max-width: 52rem;
-  margin: 10vh auto;
-  padding: 2rem;
+@theme inline {
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-primary-hover-foreground: var(--primary-hover-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-link: var(--link);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-danger: var(--danger);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive: var(--destructive);
+  --color-control-border: var(--control-border);
+  --color-focus-ring: var(--focus-ring);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --radius-sm: 8px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
 }
-h1 {
-  font-size: clamp(2rem, 6vw, 3.5rem);
-  line-height: 1.1;
+@layer base {
+  * {
+    border-color: var(--control-border);
+  }
+  body {
+    margin: 0;
+    overflow-wrap: anywhere;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+    font-size: 1rem;
+    line-height: 1.5rem;
+  }
+  h1 {
+    font-size: 1.75rem;
+    line-height: 2.25rem;
+    font-weight: 600;
+  }
+  h2 {
+    font-size: 1.25rem;
+    line-height: 1.75rem;
+    font-weight: 600;
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 2px var(--background);
+  }
+  a {
+    color: var(--link);
+    text-decoration: underline;
+    text-underline-offset: 4px;
+  }
+  button,
+  select,
+  input {
+    font: inherit;
+  }
+  button,
+  select {
+    min-height: 44px;
+  }
+  button:disabled,
+  select:disabled {
+    background: var(--muted);
+    color: var(--muted-foreground);
+    cursor: not-allowed;
+  }
+  ::selection {
+    color: var(--info-foreground);
+    background: var(--info);
+  }
 }
-p {
-  line-height: 1.6;
+@layer components {
+  .foundation {
+    max-width: 64rem;
+    margin: 8vh auto;
+    padding: 16px;
+  }
+  .foundation > * + * {
+    margin-top: 24px;
+  }
+  .money {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+    font-variant-numeric: tabular-nums lining-nums;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
 }
-aside {
-  margin-top: 3rem;
-  padding: 1.5rem;
-  border: 1px solid #64748b;
-  border-radius: 0.75rem;
+@media (min-width: 768px) {
+  .foundation {
+    padding: 24px;
+  }
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    background: #0f172a;
-    color: #f1f5f9;
+@media (min-width: 1024px) {
+  .foundation {
+    padding: 32px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+  }
+  button,
+  select,
+  .status-pill {
+    border: 1px solid ButtonText;
   }
 }
