@@ -11,6 +11,10 @@ Create an original, polished business application for Australian job management,
 
 Record the version, source URLs, licences and decisions in docs/UI_REFERENCES.md if third-party code is incorporated. Never copy MYOB branding, screenshots, exact layouts or copyrighted assets. Keep code and appearance original.
 
+## Detailed specification
+
+[Design system](design/design-system.md) defines semantic light/dark tokens, verified contrast pairs, component contracts and financial/demo/preview patterns for #18. Implementation remains in #19 onward.
+
 ## Visual direction
 - Trustworthy modern accounting and field operations, not flashy marketing or generic admin-template clutter.
 - Neutral/slate surfaces, navy/blue primary, green positive, amber pending, red destructive/overdue. Use semantic tokens and accessible contrast; never rely on colour alone.
