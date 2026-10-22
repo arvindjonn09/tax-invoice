@@ -32,7 +32,8 @@ access ID, committed only in a disposable local Git repository and never pushed.
 No valid credential, broken source or vulnerable package is added to the project.
 The assertions require the intended diagnostic as well as nonzero exit status,
 and cleanup runs on failure. Logs redact scanner output. Audit registry availability
-is required: a network failure does not count as proof of a vulnerability rejection.
+is required: the probe parses audit JSON and requires a high/critical lodash advisory;
+a network failure does not count as proof of a vulnerability rejection.
 
 This demonstrates the blocking commands in a PR CI job. The server-side merge
 restriction still requires the owner-approved branch protection proposal to be

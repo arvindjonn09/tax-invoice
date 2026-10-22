@@ -33,7 +33,12 @@ function pass(command, args, cwd) {
 }
 function rejects(label, command, args, expected, cwd) {
   const result = execute(command, args, cwd);
-  if (result.status === 0 || !expected.test(result.stdout + result.stderr)) {
+  if (
+    result.status === 0 ||
+    !(typeof expected === "function"
+      ? expected(result)
+      : expected.test(result.stdout + result.stderr))
+  ) {
     throw new Error(
       `${label} did not reject the intended fault (exit ${result.status})`,
     );
@@ -116,8 +121,19 @@ try {
   rejects(
     "Dependency audit",
     "pnpm",
-    ["audit", "--prod", "--audit-level", "high"],
-    /lodash/,
+    ["audit", "--prod", "--audit-level", "high", "--json"],
+    (result) => {
+      try {
+        const report = JSON.parse(result.stdout);
+        return Object.values(report.advisories ?? {}).some(
+          (advisory) =>
+            advisory.module_name === "lodash" &&
+            ["high", "critical"].includes(advisory.severity),
+        );
+      } catch {
+        return false;
+      }
+    },
     vulnerable,
   );
 
