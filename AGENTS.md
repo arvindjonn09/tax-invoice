@@ -29,3 +29,7 @@ Write tests and migrations alongside each change. Do not claim feature complete 
 
 ## GST scope update (2026-10-22)
 GST is now INCLUDED in v1; read [Australian GST requirements](docs/GST.md). Any previous text excluding GST/BAS is superseded for GST computation and draft BAS support only. BAS lodgement, superannuation, PAYG/STP and payroll processing remain excluded. Implement effective-dated GST registration, taxable/GST-free/input-taxed/out-of-scope codes, GST-inclusive/exclusive pricing, supplier credit eligibility, mixed lines, payment-basis attribution, tax invoice validation, adjustments, period locking and accountant export. Complete the GST tests before production use.
+
+
+## UI design instructions (2026-10-22)
+Read [docs/UI_DESIGN.md](docs/UI_DESIGN.md) before implementing screens. Use an original professional shadcn/ui-based design system, check licence terms of reference projects, implement a consistent responsive shell, dashboard and GST-aware invoice builder first, then expand to other modules. Verify accessibility, mobile layouts, financial labelling and server-side permissions. Do not copy MYOB or competitor branding.
