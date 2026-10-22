@@ -19,9 +19,10 @@ it("connects through Prisma only to this run's migrated database", async () => {
   expect(rows).toEqual([{ name: databaseName }]);
   const history = await client.$queryRaw<
     { migration_name: string; finished: boolean }[]
-  >`SELECT migration_name, finished_at IS NOT NULL AS finished FROM "_prisma_migrations"`;
+  >`SELECT migration_name, finished_at IS NOT NULL AS finished FROM "_prisma_migrations" ORDER BY migration_name`;
   expect(history).toEqual([
     { migration_name: "20261022000000_bootstrap", finished: true },
+    { migration_name: "20261023000000_core_tenancy", finished: true },
   ]);
 });
 

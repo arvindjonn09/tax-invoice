@@ -29,3 +29,9 @@ The GST-registered variant of this test is in [GST.md](GST.md#combined-gst-and-p
 
 ## Required tests
 Partial/multiple payment allocations, retries and concurrency, zero/negative values and large numbers, void after receipt, refunds, credits, rate change historical preservation, incorrect tenant IDs, end-of-month reporting, filtering and sum reconciliation. GST: mixed codes, ex/incl entry, rounding boundaries, non-creditable GST in cost, registration-date boundaries, cash vs non-cash attribution, locked periods — always asserted together with the job-profit result.
+
+## Implemented foundation
+
+The #12 tenancy models, constraints, index rationale, ER diagram and migration
+verification are documented in [core tenancy](testing/core-tenancy.md). Business
+tables listed above remain planned until their milestone implementation.
