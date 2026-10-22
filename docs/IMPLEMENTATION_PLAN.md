@@ -6,8 +6,9 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 
 ## M0 Foundation
 - [x] Tech-stack ADR and monorepo scaffold (Next.js strict TypeScript) — #8 merged after passing CI and exact-head Claude supervisor review
-- [ ] PostgreSQL Docker Compose + Prisma + test database — #9 implemented with isolated integration database harness; pending CI and exact-head Claude supervisor review
+- [x] PostgreSQL Docker Compose + Prisma + test database — #9 merged via #82 after real Compose CI and exact-head supervisor approval
 - [ ] CI: type-check, lint, unit/integration tests, build, dependency audit, secret scan, static analysis; protected `main`
+- [ ] Test infrastructure — #11 named projects, per-test rollback, synthetic factories, browser checks and [domain coverage strategy](testing/strategy.md); pending CI and exact-head supervisor merge gate
 - [ ] Core tenancy schema: companies, users, memberships, roles, audit events, idempotency keys — #12 implementation and integration evidence: [core tenancy](testing/core-tenancy.md); pending CI/supervisor merge gate
 - [ ] Authentication, sessions, login throttling
 - [ ] Authorisation framework (deny by default, company + object scope) with access-denied tests
