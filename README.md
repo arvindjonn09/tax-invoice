@@ -1,1 +1,410 @@
 # tax-invoice
+Build Plan: Custom Job Management & Accounting Application
+
+We will build a web application similar to the core job-tracking features of MYOB Business Pro, but tailored to your contracting business.
+
+The application will track every dollar received, spent, owed and earned on each job, whether the work is completed by your employees or an external subcontractor.
+
+We will not build GST calculation, BAS reporting, superannuation calculation, STP payroll reporting or tax lodgement.
+
+Important: Removing these features from the application does not remove any GST, superannuation, payroll or recordkeeping obligations your Australian business may have. This application will initially be an operational and financial tracking system, not a replacement for compliant accounting and payroll software.
+
+1. Application modules
+
+Module	Main functions
+Dashboard	Revenue, expenses, gross profit, payments outstanding, active jobs
+Customers	Companies, contacts, locations, billing details
+Jobs	Work orders, deadlines, status, internal notes, agreed prices
+Quotes	Customer quotes, approval, conversion to jobs
+Employees	Employee records, job assignments, hours, labour cost
+Subcontractors	Contractor directory, quotes, assignments, agreed rates, invoices
+Expenses	Materials, parking, transport, purchases, other job costs
+Invoices	Numbered customer invoices, PDFs, due dates, partial payments
+Payments	Customer receipts, supplier payments, outstanding balances
+Profitability	Profit by job, customer, technician, month and year
+Documents	Work orders, receipts, photos, customer signatures
+Reports	Revenue, cash flow, job profitability, receivables and payables
+Administration	Users, permissions, settings, activity logs and backups
+
+2. Business workflow
+
+1. Receive customer job
+
+Create work order and customer quote
+
+2. Choose who completes the work
+
+Employee or external subcontractor
+
+Employee
+
+Hours × internal cost rate
+
+Subcontractor
+
+Quoted and approved fee
+
+3. Complete and approve the job
+
+Timesheets, photos, expenses, customer sign-off
+
+4. Invoice the customer
+
+Record full or partial customer payments
+
+5. Record supplier payments
+
+Track committed, invoiced and paid costs separately
+
+6. Calculate job profit and cash position
+
+Estimated vs actual costs, margin, outstanding money
+
+3. Application architecture
+
+I recommend a modular monolith, not microservices. This means one maintainable application with well-separated features.
+
+Layer	Technology
+Frontend	Next.js, React, TypeScript
+Styling	Tailwind CSS and shadcn/ui
+Backend	Node.js with Next.js server APIs or a separately organised service layer
+Database	PostgreSQL
+ORM	Prisma
+Authentication	Auth.js or an equivalent established solution
+File storage	S3-compatible storage
+Background tasks	Redis-backed job queue when required
+PDF invoices	Server-side PDF generation
+Hosting	Docker on Ubuntu with HTTPS
+Testing	Vitest, Playwright and database integration tests
+
+Suggested project structure:
+
+jobflow/
+├── apps/
+│   └── web/
+│       ├── src/app/
+│       ├── src/components/
+│       └── src/features/
+│           ├── dashboard/
+│           ├── customers/
+│           ├── jobs/
+│           ├── contractors/
+│           ├── employees/
+│           ├── quotes/
+│           ├── invoices/
+│           ├── expenses/
+│           ├── payments/
+│           └── reports/
+├── packages/
+│   ├── database/
+│   ├── business-logic/
+│   ├── permissions/
+│   └── shared-types/
+├── infra/
+│   ├── docker/
+│   └── nginx/
+├── tests/
+├── docs/
+└── README.md
+
+The next important design decision is the financial data model. A simple jobs table with a profit column will not be reliable enough. Costs and payments must be recorded as separate transactions with an audit history.
+
+4. Database and financial calculation rules
+
+We need these primary database entities:
+
+companies
+users
+roles
+customers
+customer_contacts
+jobs
+job_assignments
+employees
+subcontractors
+subcontractor_offers
+timesheets
+job_costs
+quotes
+quote_items
+invoices
+invoice_items
+customer_payments
+supplier_bills
+supplier_payments
+documents
+audit_logs
+settings
+
+Every financial record must have a unique ID, company ID, currency, timestamp, creator and appropriate approval status. Use database transactions and foreign keys to prevent orphaned records.
+
+Profit calculation
+
+Assume a job has:
+
+Description	Amount
+Customer invoice	$2,500
+Subcontractor cost	$900
+Employee labour cost	$300
+Materials	$150
+Travel	$100
+Gross job profit	$1,050
+Gross profit margin	42%
+
+The calculation is:
+
+\text{Job Profit}=\text{Job Revenue}-\text{Job Costs}\text{Margin}=\frac{\text{Job Profit}}{\text{Job Revenue}}\times100
+
+But the application must separately track:
+
+* Estimated profit: quoted revenue minus estimated costs.
+* Actual gross profit: recognised job revenue minus actual incurred job costs.
+* Customer outstanding: invoiced amount minus payments received and applicable credits.
+* Supplier outstanding: approved supplier bills minus supplier payments and applicable credits.
+* Cash position: actual customer receipts minus actual job-related cash payments.
+
+Do not calculate profit from money received alone or count a subcontractor bill again when it is paid. Those are two different financial events.
+
+5. Screens to develop
+
+Dashboard
+
+Revenue, job cost, profitability, outstanding invoices, pending contractor payments and recent jobs, all with date filters.
+
+Jobs and work orders
+
+Customer, work description, agreed price, technician assignment, due date, status, documents and job-specific financial summary.
+
+Invoices and payments
+
+Create invoice, generate PDF, mark sent, record partial payments, manage due dates and show unpaid balances.
+
+Illustrative interface references. The application should use its own original design rather than copying MYOB’s branding or screens.
+
+6. Access control
+
+Role	Permissions
+Owner	Complete access to all business and financial records
+Admin/Manager	Create jobs, assign technicians, approve costs and view profits
+Accountant	View invoices, expenses, financial reports and payments
+Employee	View assigned jobs, submit hours, receipts and completion evidence
+Subcontractor	View only their offers/jobs, submit invoices and completion evidence
+
+Employees and subcontractors must never see your overall business profit, customer pricing or other contractors’ agreed rates unless explicitly authorised.
+
+For version one, build the application for your own business with one company tenant. Even then, use company_id consistently to permit future expansion without rewriting the whole database.
+
+7. Development steps
+
+Build sequence and completion checklist
+
+0 of 7 completed
+
+0%
+
+1. Foundation
+
+Create the project, database, Docker configuration, authentication and roles.
+
+2. Customers and jobs
+
+Build customer CRUD, job numbers, work-order statuses and assignments.
+
+3. Contractors and employees
+
+Add contractor offers, approvals, employee time tracking and cost rates.
+
+4. Financial records
+
+Build expenses, supplier bills, customer invoices and separate payment entries.
+
+5. Profit dashboard
+
+Calculate job profit, margin, unpaid invoices, outstanding bills and cash position.
+
+6. Documents and PDFs
+
+Generate invoices and work orders; support authorised evidence uploads.
+
+7. Testing and deployment
+
+Implement financial tests, security testing, backups, HTTPS and deployment.
+
+8. Ready-to-use development instructions for Codex
+
+You can paste the following into Codex in an empty Git repository. It establishes the project specification, development conventions and first implementation milestone.
+
+PROJECT: JobFlow - Job, Contractor and Financial Tracking
+Build an original, production-oriented web application for
+a small Australian contracting company.
+BUSINESS MODEL
+- The company receives jobs from customers.
+- Jobs can be assigned to company employees or external
+  subcontractors hired as needed.
+- The company invoices customers and pays workers.
+- The owner needs accurate job profitability, amounts
+  received, amounts spent, and amounts still outstanding.
+- Support 1-5 employees initially.
+- Design for future growth.
+OUT OF SCOPE
+- GST calculations, BAS reporting or tax lodgement.
+- Superannuation calculations.
+- PAYG withholding, STP submissions or payroll runs.
+- Bank payment initiation.
+- Direct MYOB/Xero integration in version 1.
+- AI features in version 1.
+TECHNOLOGY
+- Next.js App Router with TypeScript
+- Tailwind CSS and shadcn/ui
+- PostgreSQL and Prisma ORM
+- Established authentication library
+- Server-side authorisation on every protected operation
+- Docker Compose for local development
+- Vitest and Playwright
+- S3-compatible private document storage abstraction
+BUSINESS REQUIREMENTS
+1. Secure login, company owner, admin, accountant,
+   employee and subcontractor roles.
+2. Customers:
+   - Create/edit/archive
+   - Contacts, addresses, billing details
+   - Customer-specific job and invoice history
+3. Jobs:
+   - Unique sequential job number per company
+   - Customer, service location, description
+   - Agreed customer price, dates, priority
+   - Status: draft, quoted, approved, assigned,
+     in_progress, awaiting_review, completed,
+     invoiced, closed, cancelled
+   - Support multiple visits and assignments
+   - Record immutable history of status changes
+4. Employees:
+   - Assign employees to jobs
+   - Record hours and internal hourly cost
+   - Store historical cost-rate snapshots
+   - No automated payroll calculations
+5. Subcontractors:
+   - Maintain contractor records
+   - Create offers with agreed fees
+   - Record accepted/rejected offers
+   - Record contractor invoices and payments
+   - Contractors see only authorised assignments
+6. Expenses:
+   - Labour, contractor fee, materials, travel,
+     parking, equipment, miscellaneous
+   - Job-specific or general company expense
+   - Record category, amount, date, supplier
+   - Approval status and receipt attachment
+   - Committed and incurred costs separately
+7. Customer invoices:
+   - Unique sequential invoice number
+   - Draft, issued, partially_paid, paid, void
+   - Line items, due dates and PDF generation
+   - Multiple invoices per job
+   - Multiple partial payments per invoice
+   - Credit note support
+8. Supplier bills:
+   - Record subcontractor/supplier liabilities
+   - Support partial supplier payments
+   - Prevent double-counting costs when paid
+9. Financial dashboard:
+   - Quoted job revenue and estimated profit
+   - Actual incurred cost and gross job profit
+   - Gross profit percentage
+   - Customer invoice outstanding balances
+   - Supplier bills outstanding balances
+   - Cash received and cash paid
+   - Filters by date, customer and job
+   - CSV report export
+FINANCIAL RULES
+- Currency: AUD for version 1.
+- Store monetary values as integer cents.
+- Never use floating-point arithmetic for money.
+- Never calculate profit solely from cash received.
+- Never count a supplier bill and its payment as
+  two different expenses.
+- Record financial corrections through reversals
+  or adjustment records, not silent edits.
+- Prevent allocations exceeding allowed balances.
+- Use transactions for multi-record changes.
+- Use idempotency keys for payment creation.
+- Separate invoice issue date from payment date.
+- Preserve historical rate and price snapshots.
+SECURITY
+- Secure password storage/session handling
+- Server-side role and object-level authorisation
+- Deny access by default
+- Private document storage and signed download URLs
+- Validate all input on the server
+- CSRF protections where applicable
+- Rate limiting for authentication endpoints
+- No secrets in Git
+- Auditing for financial and permission changes
+- Never expose internal profit to subcontractors
+- No cross-company data access
+INTERFACE
+- Responsive desktop and mobile design
+- Professional light/dark appearance
+- Sidebar navigation
+- Clear status badges and searchable data tables
+- Accessible forms and confirmation dialogues
+- Financial dashboard with useful charts
+- Empty, loading and error states
+- Original interface, not a MYOB clone
+DEVELOPMENT APPROACH
+First:
+1. Inspect the repository before changing files.
+2. Write docs/ARCHITECTURE.md.
+3. Write docs/REQUIREMENTS.md.
+4. Write docs/DATA_MODEL.md.
+5. Write docs/SECURITY.md.
+6. Write docs/IMPLEMENTATION_PLAN.md.
+7. Define acceptance criteria for every module.
+Then:
+8. Scaffold the application and database.
+9. Implement authentication and permissions.
+10. Build customers and jobs first.
+11. Add realistic seed/demo data.
+12. Add automated tests for each feature.
+13. Implement subsequent modules incrementally.
+QUALITY GATES
+- TypeScript strict mode.
+- Schema validation on write operations.
+- Database migrations version controlled.
+- Unit tests for financial calculations.
+- API integration tests for authorisation.
+- End-to-end tests for the main workflow.
+- Test backup and restoration procedures.
+- Never deploy demo credentials to production.
+- Do not declare a feature complete without tests.
+CRITICAL ACCEPTANCE TEST
+Create a customer job priced at $2,500.
+Assign a subcontractor for $900.
+Record employee labour costing $300.
+Record materials costing $150.
+Record travel costing $100.
+Expected job cost: $1,450
+Expected gross profit: $1,050
+Expected gross margin: 42%
+Issue a customer invoice for $2,500.
+Record a partial receipt of $1,000.
+Expected customer outstanding: $1,500.
+Expected job gross profit remains $1,050.
+Pay $400 against the subcontractor bill.
+Expected supplier outstanding: $500.
+Expected job cost remains $1,450.
+Expected gross profit remains $1,050.
+Test duplicate payment submissions, negative
+amounts, unauthorised access, overpayments,
+invoice voiding and correction workflows.
+START WITH THE FOUNDATION AND THE FIRST WORKING
+CUSTOMER-TO-JOB FLOW. DO NOT IMPLEMENT ALL MODULES
+IN ONE UNTESTED CHANGE.
+
+9. Important compliance and deployment decisions
+
+Because the application will store financial information and employee work records, implement audit logging, secure backups, retention rules and exports from the beginning. Australian businesses generally need to retain most business records for five years; employee time and wage records generally need seven years.
+
+Use a local development environment and a separate staging deployment with demonstration records before processing actual customer or employee information.
+
+My recommendation is to build Customers → Jobs → Contractor Assignments → Costs → Invoices → Payments → Profit Reports in that order. Once these modules work correctly, you will have the core of the MYOB-style system you need, without getting tangled in GST and payroll functionality.
