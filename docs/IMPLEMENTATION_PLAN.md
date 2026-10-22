@@ -15,7 +15,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Design tokens, themes, typography, shadcn/ui setup — #18 specification in [design system](design/design-system.md); implementation and rendered tests pending #19
 - [ ] Application shell and role-aware navigation
 - [ ] Database-backed synthetic demo data with a persistent "Demo Data" indicator
-- [ ] Dashboard and invoice-builder **design previews** (non-functional, clearly labelled, no financial logic)
+- [ ] Dashboard and invoice-builder **design previews** (non-functional, clearly labelled, no financial logic) — #22 [screen specifications and owner review sheet](design/review-22.md) owner layouts approved with changes on #22; requested specification updates in #76, supervisor review and #23 implementation/rendered owner review pending
 - [ ] Threat model — drafted in [security/threat-model.md](security/threat-model.md) for #24; architect/QA design review completed; controls unverified, mitigation follow-ups #70/#71
 - [ ] GST + profit rules verified against ATO sources — research and exact-cent contract prepared in #16; QA/code review completed, accountant review before production remains required
 
