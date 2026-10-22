@@ -79,11 +79,12 @@ namespaces and explicit concurrency assertions. Authorization tests must cover e
 role, missing/inactive membership, wrong company and wrong object when #14 lands.
 
 Domain coverage includes new unimported source files automatically; reports are saved
-under ignored `coverage/domain/` and uploaded by CI. **The current domain package is
-an empty reserved module: 0 executable statements/functions.** A displayed 100% of
-0/0 is not financial coverage or a completed calculation core. #17 must add behavior
-and the combined GST/profit fixtures before making a coverage claim. No arbitrary
-threshold is offered as a substitute for acceptance tests.
+under ignored `coverage/domain/` and uploaded by CI. Since #17, `packages/domain`
+holds the money/GST/job-profit core and `pnpm test:coverage` **enforces 100%**
+lines, branches, functions and statements, as #17's acceptance criteria require.
+Coverage is a floor, not a substitute: the combined GST/profit fixtures in
+`packages/domain/test/fixtures.test.ts` and the seeded property tests in
+`packages/domain/test/rules.test.ts` are the acceptance evidence.
 
 Playwright starts its own server and refuses to reuse another process on the port.
 It uses en-AU/Australia-Sydney, retains failing traces/screenshots and HTML reports,
