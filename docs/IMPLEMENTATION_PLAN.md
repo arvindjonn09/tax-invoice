@@ -8,7 +8,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [x] Tech-stack ADR and monorepo scaffold (Next.js strict TypeScript) — #8 merged after passing CI and exact-head Claude supervisor review
 - [ ] PostgreSQL Docker Compose + Prisma + test database — #9 implemented with isolated integration database harness; pending CI and exact-head Claude supervisor review
 - [ ] CI: type-check, lint, unit/integration tests, build, dependency audit, secret scan, static analysis; protected `main`
-- [ ] Core tenancy schema: companies, users, memberships, roles, audit events, idempotency keys
+- [ ] Core tenancy schema: companies, users, memberships, roles, audit events, idempotency keys — #12 implementation and integration evidence: [core tenancy](testing/core-tenancy.md); pending CI/supervisor merge gate
 - [ ] Authentication, sessions, login throttling
 - [ ] Authorisation framework (deny by default, company + object scope) with access-denied tests
 - [ ] Money, GST and job-profit calculation core (pure domain package) with the combined fixtures
