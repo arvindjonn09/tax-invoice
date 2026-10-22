@@ -1,6 +1,6 @@
 # JobFlow (tax-invoice) — Claude Code team playbook
 
-**Read [`AGENTS.md`](AGENTS.md) first.** It holds the product and engineering rules (scope, GST, money, security,
+**Read [`plan.md`](plan.md) for the overview and [`AGENTS.md`](AGENTS.md) for the rules first.** `AGENTS.md` holds the product and engineering rules (scope, GST, money, security,
 demo data, quality gates) and applies to every agent. This file holds the **team workflow** — who does what and how
 work moves through GitHub. The two must stay consistent; if you change one, check the other.
 

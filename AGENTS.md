@@ -8,6 +8,7 @@ This file and [`CLAUDE.md`](CLAUDE.md) must stay consistent: `AGENTS.md` holds t
 `CLAUDE.md` still agrees, and vice versa.
 
 ## Required reading
+- [plan.md](plan.md) — project overview, end goals, milestones and owner checkpoints
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — roles, modules, business rules, scope
 - [docs/GST.md](docs/GST.md) — Australian GST rules and the combined GST + profit acceptance fixture
 - [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — tables and financial definitions
