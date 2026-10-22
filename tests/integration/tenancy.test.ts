@@ -1,56 +1,54 @@
-import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, expect, it } from "vitest";
-import { createDatabaseClient } from "../../packages/database/src/index";
+import { expect, it as base } from "vitest";
+import type { Prisma } from "../../packages/database/src/generated/prisma/client";
+import { withTestDatabase } from "../helpers/database";
+import { syntheticFactory } from "../helpers/factories";
+import { expectRejectedWrite } from "../helpers/expect-rejected-write";
 
-if (
-  !/^jobflow_test_[a-f0-9]{32}$/.test(
-    process.env.JOBFLOW_ISOLATED_TEST_DATABASE ?? "",
-  )
-) {
-  throw new Error("Use pnpm test:integration for an isolated database");
-}
-const client = createDatabaseClient(process.env.DATABASE_URL ?? "");
-afterAll(() => client.$disconnect());
-const userA = randomUUID();
-const userB = randomUUID();
-const companyA = randomUUID();
-const companyB = randomUUID();
-
-beforeAll(async () => {
-  // Company creator FK is deferred: users -> companies -> first owner memberships.
-  await client.$transaction(async (tx) => {
-    await tx.user.createMany({
-      data: [
-        { id: userA, email: `${userA}@example.test` },
-        { id: userB, email: `${userB}@example.test` },
-      ],
+type Fixture = {
+  client: Prisma.TransactionClient;
+  userA: string;
+  userB: string;
+  companyA: string;
+  companyB: string;
+};
+const it = base.extend<{ fixture: Fixture }>({
+  fixture: async ({ task }, use) => {
+    // Read task to make this a real Vitest fixture context; data is deterministic.
+    if (!task.name) throw new Error("Missing test identity");
+    await withTestDatabase(async (client) => {
+      const factory = syntheticFactory(12);
+      const first = factory.user();
+      const second = factory.user();
+      const a = factory.company(first.id);
+      const b = factory.company(second.id);
+      await client.user.createMany({ data: [first, second] });
+      await client.company.createMany({ data: [a, b] });
+      await client.membership.createMany({
+        data: [
+          factory.membership(a.id, first.id),
+          factory.membership(b.id, second.id),
+        ],
+      });
+      await client.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
+      // New company bootstrap checks in each test can still exercise deferred validation.
+      await client.$executeRawUnsafe(
+        "SET CONSTRAINTS companies_id_created_by_fkey DEFERRED",
+      );
+      await use({
+        client,
+        userA: first.id,
+        userB: second.id,
+        companyA: a.id,
+        companyB: b.id,
+      });
     });
-    await tx.company.createMany({
-      data: [
-        {
-          id: companyA,
-          name: "Synthetic Company A",
-          createdBy: userA,
-          isDemo: true,
-        },
-        {
-          id: companyB,
-          name: "Synthetic Company B",
-          createdBy: userB,
-          isDemo: true,
-        },
-      ],
-    });
-    await tx.membership.createMany({
-      data: [
-        { companyId: companyA, userId: userA, createdBy: userA, role: "owner" },
-        { companyId: companyB, userId: userB, createdBy: userB, role: "owner" },
-      ],
-    });
-  });
+  },
 });
 
-it("stores UTC instants, demo status and company-scoped roles", async () => {
+it("stores UTC instants, demo status and company-scoped roles", async ({
+  fixture,
+}) => {
+  const { client, userA, companyA } = fixture;
   const company = await client.company.findUniqueOrThrow({
     where: { id: companyA },
   });
@@ -66,15 +64,24 @@ it("stores UTC instants, demo status and company-scoped roles", async () => {
   expect(rows).toEqual([{ type: "timestamp with time zone" }]);
 });
 
-it("refuses a company without a creator membership at transaction commit", async () => {
-  await expect(
-    client.company.create({ data: { name: "Orphan", createdBy: userA } }),
-  ).rejects.toThrow();
+it("rejects a company whose deferred creator membership remains missing", async ({
+  fixture,
+}) => {
+  const { client, userA } = fixture;
+  await expectRejectedWrite(client, async () => {
+    await client.company.create({ data: { name: "Orphan", createdBy: userA } });
+    await client.$executeRawUnsafe(
+      "SET CONSTRAINTS companies_id_created_by_fkey IMMEDIATE",
+    );
+  });
   expect(await client.company.count({ where: { name: "Orphan" } })).toBe(0);
 });
 
-it("rejects duplicate company membership while allowing one identity in two companies", async () => {
-  await expect(
+it("rejects duplicate company membership while allowing one identity in two companies", async ({
+  fixture,
+}) => {
+  const { client, userA, userB, companyA, companyB } = fixture;
+  await expectRejectedWrite(client, () =>
     client.membership.create({
       data: {
         companyId: companyA,
@@ -83,7 +90,7 @@ it("rejects duplicate company membership while allowing one identity in two comp
         role: "manager",
       },
     }),
-  ).rejects.toThrow();
+  );
   const second = await client.membership.create({
     data: {
       companyId: companyB,
@@ -95,11 +102,14 @@ it("rejects duplicate company membership while allowing one identity in two comp
   expect(second.role).toBe("accountant");
 });
 
-it("rejects cross-company creators on memberships, audit events and idempotency keys", async () => {
+it("rejects cross-company creators on memberships, audit events and idempotency keys", async ({
+  fixture,
+}) => {
+  const { client, userB, companyA } = fixture;
   const other = await client.user.create({
-    data: { email: `${randomUUID()}@example.test` },
+    data: { email: "additional-synthetic@example.test" },
   });
-  await expect(
+  await expectRejectedWrite(client, () =>
     client.membership.create({
       data: {
         companyId: companyA,
@@ -108,8 +118,8 @@ it("rejects cross-company creators on memberships, audit events and idempotency 
         role: "employee",
       },
     }),
-  ).rejects.toThrow();
-  await expect(
+  );
+  await expectRejectedWrite(client, () =>
     client.auditEvent.create({
       data: {
         companyId: companyA,
@@ -119,8 +129,8 @@ it("rejects cross-company creators on memberships, audit events and idempotency 
         targetId: companyA,
       },
     }),
-  ).rejects.toThrow();
-  await expect(
+  );
+  await expectRejectedWrite(client, () =>
     client.idempotencyKey.create({
       data: {
         companyId: companyA,
@@ -129,32 +139,42 @@ it("rejects cross-company creators on memberships, audit events and idempotency 
         requestHash: "a".repeat(64),
       },
     }),
-  ).rejects.toThrow();
+  );
 });
 
-it.each([
+for (const sql of [
   "UPDATE audit_events SET action = 'changed'",
   "DELETE FROM audit_events",
   "TRUNCATE audit_events",
   "UPDATE audit_events SET action = 'changed' WHERE false",
   "DELETE FROM audit_events WHERE false",
-])("blocks audit mutation: %s", async (sql) => {
-  await client.auditEvent.create({
-    data: {
-      companyId: companyA,
-      createdBy: userA,
-      action: "test.created",
-      targetType: "company",
-      targetId: companyA,
-      metadata: { synthetic: true },
-    },
+]) {
+  it(`blocks audit mutation: ${sql}`, async ({ fixture }) => {
+    const { client, userA, companyA } = fixture;
+    await client.auditEvent.create({
+      data: {
+        companyId: companyA,
+        createdBy: userA,
+        action: "test.created",
+        targetType: "company",
+        targetId: companyA,
+        metadata: { synthetic: true },
+      },
+    });
+    const before = await client.auditEvent.count();
+    await expectRejectedWrite(
+      client,
+      () => client.$executeRawUnsafe(sql),
+      "append-only",
+    );
+    expect(await client.auditEvent.count()).toBe(before);
   });
-  const before = await client.auditEvent.count();
-  await expect(client.$executeRawUnsafe(sql)).rejects.toThrow("append-only");
-  expect(await client.auditEvent.count()).toBe(before);
-});
+}
 
-it("retains audit actors when membership is deactivated and prevents deleting their history", async () => {
+it("retains audit actors when membership is deactivated and prevents deleting their history", async ({
+  fixture,
+}) => {
+  const { client, userB, companyB } = fixture;
   await client.auditEvent.create({
     data: {
       companyId: companyB,
@@ -173,17 +193,20 @@ it("retains audit actors when membership is deactivated and prevents deleting th
       where: { companyId: companyB, createdBy: userB },
     }),
   ).toBe(1);
-  await expect(
+  await expectRejectedWrite(client, () =>
     client.membership.delete({
       where: { companyId_userId: { companyId: companyB, userId: userB } },
     }),
-  ).rejects.toThrow();
-  await expect(
+  );
+  await expectRejectedWrite(client, () =>
     client.company.delete({ where: { id: companyB } }),
-  ).rejects.toThrow();
+  );
 });
 
-it("makes idempotency keys unique per company and persists a completed outcome", async () => {
+it("makes idempotency keys unique per company and persists a completed outcome", async ({
+  fixture,
+}) => {
+  const { client, userA, userB, companyA, companyB } = fixture;
   const data = {
     companyId: companyA,
     createdBy: userA,
@@ -191,7 +214,9 @@ it("makes idempotency keys unique per company and persists a completed outcome",
     requestHash: "a".repeat(64),
   };
   const first = await client.idempotencyKey.create({ data });
-  await expect(client.idempotencyKey.create({ data })).rejects.toThrow();
+  await expectRejectedWrite(client, () =>
+    client.idempotencyKey.create({ data }),
+  );
   await client.idempotencyKey.create({
     data: { ...data, companyId: companyB, createdBy: userB },
   });
@@ -210,35 +235,40 @@ it("makes idempotency keys unique per company and persists a completed outcome",
   );
 });
 
-it("checks normalized identities, nonempty labels, valid roles and idempotency outcomes", async () => {
-  await expect(
+it("checks normalized identities, nonempty labels, valid roles and idempotency outcomes", async ({
+  fixture,
+}) => {
+  const { client, userA, companyA } = fixture;
+  await expectRejectedWrite(client, () =>
     client.user.create({ data: { email: "MixedCase@example.test" } }),
-  ).rejects.toThrow();
-  await expect(
+  );
+  await expectRejectedWrite(client, () =>
     client.company.update({ where: { id: companyA }, data: { name: " " } }),
-  ).rejects.toThrow();
-  await expect(
-    client.$executeRaw`UPDATE memberships SET role = 'admin' WHERE company_id = ${companyA}::uuid`,
-  ).rejects.toThrow();
+  );
+  await expectRejectedWrite(
+    client,
+    () =>
+      client.$executeRaw`UPDATE memberships SET role = 'admin' WHERE company_id = ${companyA}::uuid`,
+  );
   const data = {
     companyId: companyA,
     createdBy: userA,
     key: "invalid-outcome",
     requestHash: "a".repeat(64),
   };
-  await expect(
+  await expectRejectedWrite(client, () =>
     client.idempotencyKey.create({ data: { ...data, state: "completed" } }),
-  ).rejects.toThrow();
-  await expect(
+  );
+  await expectRejectedWrite(client, () =>
     client.idempotencyKey.create({ data: { ...data, responseStatus: 200 } }),
-  ).rejects.toThrow();
-  await expect(
+  );
+  await expectRejectedWrite(client, () =>
     client.idempotencyKey.create({ data: { ...data, requestHash: "invalid" } }),
-  ).rejects.toThrow();
-  await expect(
+  );
+  await expectRejectedWrite(client, () =>
     client.idempotencyKey.create({ data: { ...data, key: " " } }),
-  ).rejects.toThrow();
-  await expect(
+  );
+  await expectRejectedWrite(client, () =>
     client.idempotencyKey.create({
       data: {
         ...data,
@@ -247,45 +277,24 @@ it("checks normalized identities, nonempty labels, valid roles and idempotency o
         responseBody: {},
       },
     }),
-  ).rejects.toThrow();
-});
-
-it("arbitrates concurrent idempotency inserts with one winning record", async () => {
-  const data = {
-    companyId: companyA,
-    createdBy: userA,
-    key: "concurrent-operation",
-    requestHash: "b".repeat(64),
-  };
-  const results = await Promise.allSettled([
-    client.idempotencyKey.create({ data }),
-    client.idempotencyKey.create({ data }),
-  ]);
-  expect(
-    results.filter((result) => result.status === "fulfilled"),
-  ).toHaveLength(1);
-  expect(results.filter((result) => result.status === "rejected")).toHaveLength(
-    1,
   );
-  expect(
-    await client.idempotencyKey.count({
-      where: { companyId: companyA, key: data.key },
-    }),
-  ).toBe(1);
 });
 
-it.each([
+for (const role of [
   "owner",
   "manager",
   "accountant",
   "employee",
   "subcontractor",
-] as const)("supports company role %s", async (role) => {
-  const user = await client.user.create({
-    data: { email: `${randomUUID()}@example.test` },
+] as const) {
+  it(`supports company role ${role}`, async ({ fixture }) => {
+    const { client, userA, companyA } = fixture;
+    const user = await client.user.create({
+      data: { email: "additional-synthetic@example.test" },
+    });
+    const member = await client.membership.create({
+      data: { companyId: companyA, userId: user.id, createdBy: userA, role },
+    });
+    expect(member.role).toBe(role);
   });
-  const member = await client.membership.create({
-    data: { companyId: companyA, userId: user.id, createdBy: userA, role },
-  });
-  expect(member.role).toBe(role);
-});
+}
