@@ -388,7 +388,7 @@ flowchart LR
   B --> P[Pull request<br/>Closes #17]
   P --> CI[CI checks green]
   CI --> R[QA + code review<br/>+ security if needed]
-  R --> M[Owner merges]
+  R --> M[Merge after Claude review<br/>says Ready to merge]
   M --> N[Dependants become ready]
 ```
 
@@ -402,7 +402,7 @@ flowchart LR
 - **Branches:** `<type>/<issue>-<slug>`, never commit to `main`.
 - **Commits:** Conventional Commits mentioning the issue, e.g. `feat(invoices): validate tax invoice fields (#47)`.
 - **PRs:** use the template — summary, acceptance-criteria checklist, real test output, screenshots for UI.
-- Only the owner merges.
+- Merging follows the **merge policy** in `AGENTS.md`: green CI plus a "Ready to merge" Claude supervisor review of the exact commit, in dependency order.
 
 ---
 
@@ -551,7 +551,7 @@ You (the owner) are needed at these points:
 | When | What you do |
 |---|---|
 | Now | Merge PR #1, then PR #68 |
-| Every PR | Review and merge (optionally after a Claude code review) |
+| Any time | Read Claude's supervisor reviews; Codex merges only after a "Ready to merge" review |
 | #10 | Approve branch protection settings for `main` |
 | #16 | Confirm any GST questions the domain-expert raises |
 | #22, #23 | Review the dashboard and invoice-builder design |
@@ -572,7 +572,7 @@ You (the owner) are needed at these points:
 | Silent changes to financial history | Immutability, credit/void/reversal, audit log |
 | Demo data mistaken for real | Database flag, persistent banner, production guard |
 | Data loss | Encrypted backups, rehearsed restore drill |
-| Large untested changes | One issue per PR, CI gates, owner merges only |
+| Large untested changes | One issue per PR, CI gates, merge only after Claude review |
 | Design drift or copying competitors | Design system first, owner review of previews, licence checks |
 | Instructions drifting apart | `AGENTS.md` ↔ `CLAUDE.md` consistency rule; this plan points to the source docs |
 
