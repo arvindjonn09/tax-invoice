@@ -11,6 +11,9 @@ import { withIsolatedDatabase } from './scripts/database/test-runner.mjs';
 const { Pool } = createRequire(new URL('./packages/database/package.json', import.meta.url))('pg');
 await withIsolatedDatabase(async env => {
   const pool = new Pool({ connectionString: env.DATABASE_URL, max: 2 });
+  // DROP DATABASE ... WITH (FORCE) after the test terminates any connection still
+  // closing; without a listener that late error crashes the process (flaky).
+  pool.on('error', () => {});
   const user = '00000011-0000-4000-8000-000000000001';
   const company = '00000011-0000-4000-8000-000000000002';
   const setup = await pool.connect();
