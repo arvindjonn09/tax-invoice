@@ -16,7 +16,8 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Application shell and role-aware navigation
 - [ ] Database-backed synthetic demo data with a persistent "Demo Data" indicator
 - [ ] Dashboard and invoice-builder **design previews** (non-functional, clearly labelled, no financial logic)
-- [ ] Threat model; GST + profit rules verified against ATO sources
+- [ ] Threat model
+- [ ] GST + profit rules verified against ATO sources — research and exact-cent contract prepared in #16; pending review
 
 ## M1 Customers, company settings and jobs
 - [ ] Company profile and effective-dated GST registration settings (ABN, basis, BAS period)

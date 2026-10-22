@@ -218,7 +218,7 @@ pay twice. Over-allocation and overpayment are rejected.
 | Pay $400 of the $900 subcontractor bill | We owe **$500**; cost still $1,450; profit still $1,050 |
 
 ### Same job — business registered for GST
-*(Proposed; issue #16 verifies against ATO guidance and pins the rounding rules.)*
+*(Verified for ordinary supplies on 22 October 2026; [rules and assumptions](docs/research/domain-gst-profit.md). Accountant review remains required.)*
 
 | Item | Ex GST | GST | Incl GST | Job cost |
 |---|---|---|---|---|
