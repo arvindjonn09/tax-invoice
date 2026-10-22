@@ -26,3 +26,6 @@ Write tests and migrations alongside each change. Do not claim feature complete 
 
 ## Financial fixture
 250000 invoice cents; costs 90000+30000+15000+10000 = 145000 cents; 105000 profit, 42% margin. Receipt 100000 → 150000 owing. Contractor payment 40000 against 90000 bill → 50000 owing. Payments must not change gross profit.
+
+## GST scope update (2026-10-22)
+GST is now INCLUDED in v1; read [Australian GST requirements](docs/GST.md). Any previous text excluding GST/BAS is superseded for GST computation and draft BAS support only. BAS lodgement, superannuation, PAYG/STP and payroll processing remain excluded. Implement effective-dated GST registration, taxable/GST-free/input-taxed/out-of-scope codes, GST-inclusive/exclusive pricing, supplier credit eligibility, mixed lines, payment-basis attribution, tax invoice validation, adjustments, period locking and accountant export. Complete the GST tests before production use.
