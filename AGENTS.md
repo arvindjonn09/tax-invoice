@@ -1,35 +1,78 @@
-# Codex / AI coding-agent instructions
+# AI coding-agent instructions (Codex, Claude Code and others)
 
-You are implementing a small-business job management and invoice tracking platform. Read all docs before coding. Inspect repository before editing and preserve prior work.
+You are implementing **JobFlow**, a small-business job management, tax-invoice and job-profitability platform for an
+Australian contracting company. Read all docs before coding. Inspect the repository before editing and preserve prior work.
+
+This file and [`CLAUDE.md`](CLAUDE.md) must stay consistent: `AGENTS.md` holds the **product and engineering rules**;
+`CLAUDE.md` holds the **team workflow** (agent roles, GitHub issues, branches, PRs). If you change a rule here, check
+`CLAUDE.md` still agrees, and vice versa.
+
+## Required reading
+- [plan.md](plan.md) — project overview, end goals, milestones and owner checkpoints
+- [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — roles, modules, business rules, scope
+- [docs/GST.md](docs/GST.md) — Australian GST rules and the combined GST + profit acceptance fixture
+- [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — tables and financial definitions
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SECURITY.md](docs/SECURITY.md)
+- [docs/UI_DESIGN.md](docs/UI_DESIGN.md) — design system, screens, accessibility
+- [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) — milestones M0–M5 (tracked as GitHub milestones/issues)
+
+## Scope
+- **Included in v1:** effective-dated GST registration; TAXABLE_10 / GST_FREE / INPUT_TAXED / OUT_OF_SCOPE line codes;
+  GST-inclusive and GST-exclusive entry; mixed-tax lines; tax-invoice validation; supplier creditable-GST eligibility;
+  cash/non-cash attribution; adjustments; period locking; **draft** GST/BAS summaries (G1, 1A, 1B) and accountant export.
+- **Excluded:** BAS/tax lodgement, superannuation, PAYG withholding, STP, payroll processing, bank-payment initiation,
+  MYOB/Xero integration and AI features in v1. Exclusions do not change the business's legal obligations.
 
 ## Mandatory technical requirements
-- Modular monolith: Next.js strict TypeScript, PostgreSQL + Prisma, Tailwind/shadcn, established authentication.
-- Secure server-side permission checks for owner, admin, bookkeeper, employee and subcontractor; company and object scope on every operation.
+- Modular monolith: Next.js App Router, strict TypeScript, PostgreSQL + Prisma, Tailwind/shadcn/ui, established auth library.
+- Roles: `owner`, `manager`, `accountant` (bookkeeper), `employee`, `subcontractor`. Deny by default; server-side role,
+  company and object-level checks on every operation, report, export and file download.
 - Separate quoted, committed, incurred and paid costs; separately track invoiced, received and unpaid customer balances.
-- Store AUD in integer cents or safe BigInt; **never use floating point for money**. Snapshots preserve accepted rates and prices.
+- Store AUD as integer cents (or safe BigInt); **never use floating point for money**. Snapshots preserve accepted rates,
+  prices and tax-code percentages.
 - Transactional and idempotent allocations for customer receipts and supplier payments; block duplicates and overpayments.
-- No silent changes to issued invoices or approved financial records. Credit/void/reversal and immutable audit events instead.
-- No GST, BAS, super, PAYG, STP, payroll engine, tax lodgement or bank-payment initiation. This exclusion does not change external legal obligations.
-- Reuse documented components only after auditing them; no copying MYOB branding or proprietary screens.
-- Private uploads, signed file access, rate limits, validated inputs, CSRF protections, no secrets or customer files in Git.
-- Synthetic demo data; test tenant isolation, RBAC, concurrency, corrections, rounding and report reconciliations.
+- No silent changes to issued invoices or approved financial records: credit note / void / reversal plus immutable audit events.
+- Private uploads, signed expiring file access, rate limits, validated inputs, CSRF protection, no secrets or customer files in Git.
+- Reuse third-party components only after auditing their licence; never copy MYOB branding or proprietary screens.
 
-## Implementation order
-1. Docs + scaffolding + Postgres/Docker + CI + auth
-2. Customers + jobs + statuses
-3. Employees + contractors + offers + labour/expense tracking
-4. Quotes + supplier bills + invoices + partial payments
-5. Profit and outstanding reports + CSV/PDF
-6. Security review, backup/restore, staging pilot
+## GST and profit — built and tested together
+GST calculation and job profitability are one piece of domain logic and must be implemented and tested together
+(the same domain package, the same fixtures, the same PR when either changes):
+- Job profit and margin use **GST-exclusive** amounts.
+- **Recoverable GST is never revenue, profit or expense.** GST on sales is a liability to the ATO; creditable GST on
+  purchases is an asset (input tax credit).
+- Only **non-creditable** GST (e.g. no valid tax invoice, input-taxed activity, partial eligibility) is part of job cost.
+- Every change to GST or profit code must keep the fixtures in [docs/GST.md](docs/GST.md#combined-gst-and-profit-acceptance-fixture)
+  passing in both the GST-registered and not-registered variants.
 
-Write tests and migrations alongside each change. Do not claim feature complete until tests run. Report known limitations. Keep docs and checklist updated.
+## Demo data
+Demonstration data is synthetic, stored in the database and flagged as demo. Whenever demo records exist the UI shows a
+persistent, unmissable **"Demo Data"** indicator. Demo seeding must refuse to run against production. Never use real
+customer, employee or tax-identifier data in seeds, tests or screenshots.
 
-## Financial fixture
-250000 invoice cents; costs 90000+30000+15000+10000 = 145000 cents; 105000 profit, 42% margin. Receipt 100000 → 150000 owing. Contractor payment 40000 against 90000 bill → 50000 owing. Payments must not change gross profit.
+## Implementation order (backend milestones keep this order)
+1. **M0 Foundation** — scaffolding, Postgres/Docker, CI, auth and roles, audit log, money/GST/profit calculation core,
+   design tokens, navigation and app shell, demo-data indicator, and **design previews** (non-functional, clearly
+   labelled) of the dashboard and invoice builder.
+2. **M1** Customers, company GST settings, employees, jobs and statuses
+3. **M2** Contractors, offers, timesheets, expenses (with GST treatment), documents
+4. **M3** Quotes, supplier bills, tax invoices, receipts and payment allocations
+5. **M4** Job profitability, draft GST/BAS, reports and the real dashboard
+6. **M5** Security review, accessibility, backup/restore, staging pilot
 
-## GST scope update (2026-10-22)
-GST is now INCLUDED in v1; read [Australian GST requirements](docs/GST.md). Any previous text excluding GST/BAS is superseded for GST computation and draft BAS support only. BAS lodgement, superannuation, PAYG/STP and payroll processing remain excluded. Implement effective-dated GST registration, taxable/GST-free/input-taxed/out-of-scope codes, GST-inclusive/exclusive pricing, supplier credit eligibility, mixed lines, payment-basis attribution, tax invoice validation, adjustments, period locking and accountant export. Complete the GST tests before production use.
+Do not implement dashboard or invoice financial functionality ahead of the modules that supply its data.
 
+## Quality gates (every application PR)
+TypeScript strict type-check, lint, unit + integration tests (incl. authorisation), and security checks (dependency
+audit, secret scan, static analysis) pass in CI before merge. Write tests and migrations alongside each change. Do not
+claim a feature complete until tests run. Report known limitations. Keep docs and the milestone checklist updated.
 
-## UI design instructions (2026-10-22)
-Read [docs/UI_DESIGN.md](docs/UI_DESIGN.md) before implementing screens. Use an original professional shadcn/ui-based design system, check licence terms of reference projects, implement a consistent responsive shell, dashboard and GST-aware invoice builder first, then expand to other modules. Verify accessibility, mobile layouts, financial labelling and server-side permissions. Do not copy MYOB or competitor branding.
+## Financial fixture (GST-exclusive / not registered)
+250000 invoice cents; costs 90000+30000+15000+10000 = 145000 cents; 105000 profit, 42% margin. Receipt 100000 → 150000
+owing. Contractor payment 40000 against 90000 bill → 50000 owing. Payments must not change gross profit.
+The GST-registered variant is in [docs/GST.md](docs/GST.md#combined-gst-and-profit-acceptance-fixture).
+
+## UI
+Read [docs/UI_DESIGN.md](docs/UI_DESIGN.md) before implementing screens. Original professional shadcn/ui-based design
+system; consistent responsive shell; verify accessibility, mobile layouts, explicit ex/incl GST labelling and
+server-side permissions.

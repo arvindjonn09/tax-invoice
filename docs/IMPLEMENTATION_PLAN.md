@@ -1,46 +1,65 @@
 # Development milestones
 
-## M0 Foundation
-- [ ] Scaffold Next.js TypeScript project + design system
-- [ ] PostgreSQL Docker Compose + Prisma + seed synthetic data
-- [ ] Authentication, sessions, company and roles
-- [ ] CI lint/typecheck/unit test scripts
-- [ ] Access denied tests
+Milestones M0–M5 are tracked as GitHub milestones with one issue per task:
+https://github.com/arvindjonn09/tax-invoice/milestones. Backend milestones are built in this order. Each task is one
+reviewed PR with passing CI (type-check, lint, tests, security checks).
 
-## M1 Customers and jobs
+## M0 Foundation
+- [ ] Tech-stack ADR and monorepo scaffold (Next.js strict TypeScript)
+- [ ] PostgreSQL Docker Compose + Prisma + test database
+- [ ] CI: type-check, lint, unit/integration tests, build, dependency audit, secret scan, static analysis; protected `main`
+- [ ] Core tenancy schema: companies, users, memberships, roles, audit events, idempotency keys
+- [ ] Authentication, sessions, login throttling
+- [ ] Authorisation framework (deny by default, company + object scope) with access-denied tests
+- [ ] Money, GST and job-profit calculation core (pure domain package) with the combined fixtures
+- [ ] Design tokens, themes, typography, shadcn/ui setup
+- [ ] Application shell and role-aware navigation
+- [ ] Database-backed synthetic demo data with a persistent "Demo Data" indicator
+- [ ] Dashboard and invoice-builder **design previews** (non-functional, clearly labelled, no financial logic)
+- [ ] Threat model; GST + profit rules verified against ATO sources
+
+## M1 Customers, company settings and jobs
+- [ ] Company profile and effective-dated GST registration settings (ABN, basis, BAS period)
+- [ ] User and role management
 - [ ] Customers, locations and contacts
-- [ ] Per-company job numbers, detail, status timeline
+- [ ] Employee records
+- [ ] Per-company job numbers, detail, status timeline, visits
 - [ ] Assignment to employee and authorisation tests
 
-## M2 Contractors and job expenses
-- [ ] Contractors, offers, approvals and acceptance history
+## M2 Contractors, timesheets and job expenses
+- [ ] Private document storage with signed URLs
+- [ ] Contractors, offers, approvals and acceptance history; restricted contractor portal
 - [ ] Employee timesheets with cost-rate snapshots
-- [ ] Expense categories, receipts, approvals and private storage
+- [ ] Expenses with GST code, creditable portion, receipts and approvals
 - [ ] Work evidence and completion approval
 
-## M3 Invoices and payments
-- [ ] Quotes and accepted variations
-- [ ] Supplier bills and their payment allocations
-- [ ] Customer invoice lines/PDF, partial receipts, credits, voids
-- [ ] Financial transaction concurrency/idempotency tests
+## M3 Quotes, bills, invoices and payments
+- [ ] Quotes with tax-coded lines and accepted variations
+- [ ] Supplier bills with creditable GST and payment allocations
+- [ ] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids
+- [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
+- [ ] Customer receipts and allocations
+- [ ] Financial concurrency/idempotency tests
 
-## M4 Profit and reporting
-- [ ] Separate estimated, committed, incurred and paid costs
-- [ ] Invoiced profit and margin by job/customer/date
-- [ ] AR/AP ageing, cash tracking, CSV exports
-- [ ] Dashboard reconciliation tests
+## M4 Profit, GST reporting and dashboard
+- [ ] Job profitability: estimated, committed, incurred and paid costs — GST-exclusive, tested with GST fixtures
+- [ ] Draft GST/BAS summary (G1, 1A, 1B), cash/non-cash attribution, period lock and adjustments
+- [ ] AR/AP ageing, cash tracking, CSV and accountant exports
+- [ ] Real dashboard and reports UI
+- [ ] End-to-end critical acceptance test (registered and not-registered variants) and reconciliation tests
 
 ## M5 Production pilot
-- [ ] Mobile-responsive UX and accessibility
+- [ ] Mobile-responsive UX and accessibility audit
 - [ ] Threat-model/permission audit
-- [ ] Database and storage restore test
-- [ ] Staging smoke test with synthetic data
-- [ ] Deployment and rollback documentation
+- [ ] Record retention and data export
+- [ ] Database and storage backup/restore test
+- [ ] Staging deployment (Docker, HTTPS) and smoke test with synthetic data
+- [ ] Deployment, rollback and user documentation
+- [ ] Accountant review of GST outputs before real use
 
 ## Acceptance
-Invoice $2500; costs $1450; profit $1050; margin 42%; customer receipt $1000 leaves $1500 outstanding; contractor bill $900 paid $400 leaves $500 outstanding. Payment changes do not change profit.
+Invoice $2,500 ex GST; costs $1,450; profit $1,050; margin 42%; customer receipt $1,000 leaves $1,500 outstanding
+(not registered) or $1,750 (registered, $2,750 incl GST); contractor bill $900 ex GST paid $400 leaves $500 (not registered)
+or $590 (registered) outstanding. Payments and recoverable GST do not change profit. See [GST.md](GST.md#combined-gst-and-profit-acceptance-fixture).
 
 At every milestone: implement schema, routes, UI, tests and documentation; do not mark done without passing tests. Avoid bulk unreviewed implementation.
-
-## GST scope update (2026-10-22)
-GST is now INCLUDED in v1; read [Australian GST requirements](GST.md). Any previous text excluding GST/BAS is superseded for GST computation and draft BAS support only. BAS lodgement, superannuation, PAYG/STP and payroll processing remain excluded. Implement effective-dated GST registration, taxable/GST-free/input-taxed/out-of-scope codes, GST-inclusive/exclusive pricing, supplier credit eligibility, mixed lines, payment-basis attribution, tax invoice validation, adjustments, period locking and accountant export. Complete the GST tests before production use.

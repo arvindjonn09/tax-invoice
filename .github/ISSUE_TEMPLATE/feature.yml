@@ -1,0 +1,24 @@
+name: Feature / user story
+description: Something new the product should do
+labels: ["type:feature", "status:needs-info"]
+body:
+  - type: textarea
+    id: story
+    attributes:
+      label: User story
+      placeholder: As a <persona>, I want <capability>, so that <benefit>.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] Given ..., when ..., then ...
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes, scope, dependencies
+      placeholder: Out of scope, related issues ("Part of #", "Depends on #"), designs, rules.
