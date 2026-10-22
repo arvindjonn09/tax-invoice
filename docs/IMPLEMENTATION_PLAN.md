@@ -17,7 +17,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Database-backed synthetic demo data with a persistent "Demo Data" indicator
 - [ ] Dashboard and invoice-builder **design previews** (non-functional, clearly labelled, no financial logic)
 - [ ] Threat model; GST + profit rules verified against ATO sources — threat model drafted in
-  [security/threat-model.md](security/threat-model.md) for #24; architect/QA/code review pending, mitigation follow-ups #70/#71
+  [security/threat-model.md](security/threat-model.md) for #24; architect/QA design review completed; controls unverified, mitigation follow-ups #70/#71
 
 ## M1 Customers, company settings and jobs
 - [ ] Company profile and effective-dated GST registration settings (ABN, basis, BAS period)

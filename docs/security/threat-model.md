@@ -1,6 +1,7 @@
 # JobFlow v1 threat model
 
-Status: proposed for architect, QA and code review; implementation controls are not yet verified.
+Status: architect and QA design/specification review completed on 22 October 2026 with no blocking findings.
+Implementation controls and their security effectiveness remain unverified; this is not release approval.
 Prepared 22 October 2026 for #24. Scope follows [architecture](../ARCHITECTURE.md),
 [requirements](../REQUIREMENTS.md), [security policy](../SECURITY.md) and [financial rules](../GST.md).
 This is a design analysis, not a penetration test or a claim of production readiness.
@@ -97,6 +98,7 @@ application tests: the base has specifications only. Run these in CI as their mo
   do not invent legal retention guarantees from this threat model.
 - #70 and #71 capture gaps discovered during this analysis; all linked controls are planned. Dependency ordering
   does not permit enabling an affected endpoint before its security acceptance cases pass.
-- Before pilot: architect reviews boundaries and mitigation ownership; QA/code reviewer review this model and the
-  resulting tests. #61 refreshes it against actual routes, dependencies, hosting and residual findings. No open
+- Design review evidence: the root architect/QA reviewer inspected all 13 threats, boundaries, negative-test cases
+  and #70/#71 ownership against product rules, with no blocking findings. Implementation tests and controls still
+  require QA/code/security review as they land. Before pilot, #61 refreshes it against actual routes, dependencies, hosting and residual findings. No open
   Critical/High findings may remain; #67 separately validates GST outputs. Owner checkpoints remain in force.
