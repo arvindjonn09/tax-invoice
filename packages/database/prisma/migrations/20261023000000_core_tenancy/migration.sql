@@ -176,4 +176,28 @@ $$;
 CREATE TRIGGER audit_events_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON audit_events
   FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_audit_mutation();
 
+-- Only the company's initial active owner can self-create a membership.
+-- Later role/deactivation changes retain historical creator identity; authorization
+-- and last-owner policy belong to the service layer, not this insert guard.
+CREATE FUNCTION jobflow_guard_membership_self_creation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' AND ROW(NEW.company_id, NEW.user_id, NEW.created_by)
+      IS NOT DISTINCT FROM ROW(OLD.company_id, OLD.user_id, OLD.created_by) THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.created_by = NEW.user_id AND (
+    NEW.role <> 'owner' OR NOT NEW.is_active OR NOT EXISTS (
+      SELECT 1 FROM companies WHERE id = NEW.company_id AND created_by = NEW.user_id
+    )
+  ) THEN
+    RAISE EXCEPTION 'self-created membership must be the company bootstrap owner'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER memberships_self_creation_guard
+  BEFORE INSERT OR UPDATE OF company_id, user_id, created_by ON memberships
+  FOR EACH ROW EXECUTE FUNCTION jobflow_guard_membership_self_creation();
+
 COMMIT;

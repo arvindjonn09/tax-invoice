@@ -25,6 +25,7 @@
     "test:coverage": "vitest run --project unit --coverage"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@eslint/js": "^9.39.0",
     "@playwright/test": "^1.56.1",
     "@types/node": "^22.19.0",

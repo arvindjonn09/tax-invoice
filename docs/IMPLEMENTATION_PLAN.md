@@ -12,7 +12,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Authentication, sessions, login throttling
 - [ ] Authorisation framework (deny by default, company + object scope) with access-denied tests
 - [ ] Money, GST and job-profit calculation core (pure domain package) with the combined fixtures
-- [ ] Design tokens, themes, typography, shadcn/ui setup — #18 specification in [design system](design/design-system.md); implementation and rendered tests pending #19
+- [ ] Design tokens, themes, typography, shadcn/ui setup — #18 specification in [design system](design/design-system.md); tokens, themes, self-hosted Geist, shadcn base and component/browser tests implemented in #19; CI and exact-head review pending
 - [ ] Application shell and role-aware navigation
 - [ ] Database-backed synthetic demo data with a persistent "Demo Data" indicator
 - [ ] Dashboard and invoice-builder **design previews** (non-functional, clearly labelled, no financial logic) — #22 [screen specifications and owner review sheet](design/review-22.md) owner layouts approved with changes on #22; requested specification updates in #76, supervisor review and #23 implementation/rendered owner review pending

@@ -10,7 +10,7 @@ local application. These deliberate local I/O checks do not mock the database/br
 
 | Command | What it proves |
 | --- | --- |
-| `pnpm test` | Vitest `unit` project: pure behavior, configuration/safety checks, deterministic factories |
+| `pnpm test` | Vitest `unit` project: pure/component behavior, configuration/safety checks, deterministic factories |
 | `pnpm test:integration` | Vitest `integration` project in a newly provisioned migrated PostgreSQL database |
 | `pnpm test:coverage` | Unit tests plus text/JSON/LCOV/HTML coverage scoped to `packages/domain/src/**/*.ts` |
 | `pnpm test:e2e` | Playwright Chromium scaffold/health/responsive smoke tests against a fresh local server |

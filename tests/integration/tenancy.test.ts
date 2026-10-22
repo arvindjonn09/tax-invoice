@@ -298,3 +298,56 @@ for (const role of [
     expect(member.role).toBe(role);
   });
 }
+
+for (const role of [
+  "employee",
+  "subcontractor",
+  "manager",
+  "accountant",
+] as const) {
+  it(`refuses self-created non-owner bootstrap role ${role}`, async ({
+    fixture,
+  }) => {
+    const { client } = fixture;
+    const factory = syntheticFactory(1202);
+    const person = await client.user.create({ data: factory.user() });
+    const company = await client.company.create({
+      data: factory.company(person.id),
+    });
+    await expectRejectedWrite(
+      client,
+      () =>
+        client.membership.create({
+          data: { ...factory.membership(company.id, person.id), role },
+        }),
+      "bootstrap owner",
+    );
+  });
+}
+
+it("refuses inactive or additional self-created owners", async ({
+  fixture,
+}) => {
+  const { client, companyA } = fixture;
+  const factory = syntheticFactory(1203);
+  const person = await client.user.create({ data: factory.user() });
+  const company = await client.company.create({
+    data: factory.company(person.id),
+  });
+  await expectRejectedWrite(
+    client,
+    () =>
+      client.membership.create({
+        data: { ...factory.membership(company.id, person.id), isActive: false },
+      }),
+    "bootstrap owner",
+  );
+  await expectRejectedWrite(
+    client,
+    () =>
+      client.membership.create({
+        data: factory.membership(companyA, person.id),
+      }),
+    "bootstrap owner",
+  );
+});
