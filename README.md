@@ -430,3 +430,11 @@ Use a local development environment and a separate staging deployment with demon
 Demonstration records are stored in the database like real records but flagged as demo data, and the interface shows a persistent **"Demo Data"** indicator whenever they are present so they cannot be mistaken for real business records. Demo seeding is refused in production.
 
 My recommendation is to build Customers → Jobs → Contractor Assignments → Costs → Invoices → Payments → Profit Reports in that order, with GST treatment built into costs, bills and invoices as they are created (not added afterwards). Payroll and superannuation remain out of scope. The milestone plan is in [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+
+## Running the foundation scaffold (#8)
+
+Requires Node.js 22+ and pnpm 9.15.4. Run `pnpm install --frozen-lockfile`, then `pnpm dev` and open http://localhost:3000. The home page is a placeholder; `/api/health` reports application liveness only. No database or environment variables are needed yet.
+
+Validation: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:integration`, `pnpm build`. Browser smoke test: `pnpm exec playwright install chromium`, then `pnpm test:e2e`. Format new source with `pnpm format`; check with `pnpm format:check`.
+
+The database, authentication, authorisation and financial modules are reserved boundaries, not implemented features. Follow the milestone dependencies before adding functionality. See [ADR 0001](docs/adr/0001-tech-stack.md).

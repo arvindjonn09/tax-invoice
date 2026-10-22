@@ -31,13 +31,14 @@ and fills in the commands below.
 
 | Task | Command |
 |---|---|
-| Install | _TBD in M0_ |
-| Dev server | _TBD in M0_ |
-| Type-check | _TBD in M0_ |
-| Lint | _TBD in M0_ |
-| Unit / integration tests | _TBD in M0_ |
-| E2E tests | _TBD in M0_ |
-| DB migrate / seed demo | _TBD in M0_ |
+| Install | `pnpm install --frozen-lockfile` |
+| Dev server | `pnpm dev` |
+| Type-check | `pnpm typecheck` |
+| Lint | `pnpm lint` (format: `pnpm format:check`) |
+| Unit / integration tests | `pnpm test` / `pnpm test:integration` |
+| E2E tests | `pnpm exec playwright install chromium` then `pnpm test:e2e` |
+| DB migrate / seed demo | Not available until #9 / demo-seed issue; no database in scaffold |
+| Production build / start | `pnpm build` / `pnpm --filter @jobflow/web start` |
 
 ## The team (`.claude/agents/`)
 
