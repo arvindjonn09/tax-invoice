@@ -6,7 +6,7 @@ Status: proposed for review under issue #8. Date: 22 October 2026.
 JobFlow needs tenant isolation, auditable financial operations and one shared GST/profit domain. The existing architecture specifies a modular monolith. This change establishes boundaries without implementing later issues.
 
 ## Decision
-Use Node.js 22 or newer, pnpm 9.15.4, Next.js 16.4.2 App Router, React 19.3.1, TypeScript 5.9.3, ESLint 9, Prettier 3, Vitest 5 and Playwright 1.64.1. Exact resolved dependency versions are recorded in pnpm-lock.yaml. Runtime dependencies are pinned. Node 24 was used for local verification.
+Use Node.js 24.x (selected by .nvmrc in development and CI), pnpm 9.15.4, Next.js 16.4.2 App Router, React 19.3.1, TypeScript 5.9.3, ESLint 9, Prettier 3, Vitest 5 and Playwright 1.64.1. Exact resolved dependency versions are recorded in pnpm-lock.yaml. Runtime dependencies are pinned. Node 24 was used for local verification.
 
 The app lives in apps/web. Reserved workspace packages are database, domain, authz and shared-types. Packages expose TypeScript sources; Next.js compilation is the application build boundary. Each package extends the root strict configuration. The typecheck command also inspects effective compiler options to reject local strict-mode overrides.
 

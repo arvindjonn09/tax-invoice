@@ -433,7 +433,7 @@ My recommendation is to build Customers → Jobs → Contractor Assignments → 
 
 ## Running the foundation scaffold (#8)
 
-Requires Node.js 22+ and pnpm 9.15.4. Run `pnpm install --frozen-lockfile`, then `pnpm dev` and open http://localhost:3000. The home page is a placeholder; `/api/health` reports application liveness only. No database or environment variables are needed yet.
+Requires Node.js 24.x (`nvm use`) and pnpm 9.15.4. Run `pnpm install --frozen-lockfile`, then `pnpm dev` and open http://localhost:3000. The home page is a placeholder; `/api/health` reports application liveness only. No database or environment variables are needed yet.
 
 Validation: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:integration`, `pnpm build`. Browser smoke test: `pnpm exec playwright install chromium`, then `pnpm test:e2e`. Format new source with `pnpm format`; check with `pnpm format:check`.
 

@@ -6,16 +6,16 @@ Local environment: Node 24.21.0, pnpm 9.15.4, Linux.
 - `pnpm typecheck`: passed for root and all five workspace packages.
 - `pnpm lint`: passed, zero warnings.
 - `pnpm format:check`: passed.
-- `pnpm test`: one strict-configuration test passed.
+- `pnpm test`: three tests passed (strict configuration and two production-audit isolation/exit-code tests).
 - `pnpm test:integration`: one route-contract test passed. This is not database integration coverage.
 - `pnpm build`: passed; home and /api/health routes generated.
-- `pnpm audit --prod --audit-level high`: no known vulnerabilities.
-- `pnpm audit --audit-level high`: blocked by GHSA-vfj7-8cjw-p6xm in braces 3.0.3, through eslint-config-next → @next/eslint-plugin-next → fast-glob → micromatch. Registry currently offers no patched braces release. The CI gate remains enabled; no exception or suppression added.
+- `pnpm audit:prod`: no known vulnerabilities; invokes `pnpm audit --prod --audit-level high` in an isolated copy with all manifest audit exceptions removed.
+- `pnpm audit --audit-level high`: passes with exactly one ignored advisory, GHSA-vfj7-8cjw-p6xm in braces 3.0.3. Owner-approved, development-only exception expires for review on 21 November 2026 or when #10 lands, whichever is sooner. See [audit exception record](../security/audit-exceptions.md). All other high/critical findings remain blocking.
 - `pnpm test:e2e`: **12 passed against development (7.7s) and production (2.8s) builds** in local Chromium after extracting Ubuntu browser libraries into /tmp/jobflow-browser-libs (no system package installation). The original smoke test also passed in GitHub Actions run 39768121004. CI installs system dependencies with Playwright's --with-deps option.
 
 ## Review status and limitations
 
-The scaffold is implemented, but #8 is not complete until the security audit and independent review pass. No database, auth, demo records, financial functionality or design preview is included. Database migration and seeding commands are explicitly marked unavailable until their issues land. Full security automation and branch protection remain #10; no production deployment or protection changes were made.
+The scaffold is implemented, but #8 is not complete until CI and independent review pass. No database, auth, demo records, financial functionality or design preview is included. Database migration and seeding commands are explicitly marked unavailable until their issues land. Full security automation and branch protection remain #10; no production deployment or protection changes were made.
 
 The working tree initially contained owner documentation edits. A concurrent owner documentation commit appeared during implementation; those files and commits were preserved. The scaffold branch was not rebased over or reset against that work.
 
@@ -43,4 +43,10 @@ The database, tenancy, audit/idempotency schema, GST/profit core, design system,
 
 **Finding:** issue #8's placeholder works. The planned product remains unimplemented beyond its scaffold; a successful browser smoke test does not establish financial correctness, security or usable business functionality. Continue in milestone/dependency order, beginning with the PostgreSQL/Prisma foundation after #8 review, alongside dependency-free M0 tasks. Do not add invoice/dashboard financial functionality ahead of its data modules.
 
-**Release blocker:** GitHub Actions run 39768121004 passed install, typecheck, lint, formatting, unit/integration tests, build and the original browser test. Its final dependency audit failed on the braces advisory above. No audit suppression has been applied.
+**Historical CI failure:** GitHub Actions run 39768121004 passed install, typecheck, lint, formatting, unit/integration tests, build and the original browser test, then failed the dependency audit. The owner subsequently approved the narrow exception documented above; it does not apply to production audits.
+
+## Owner audit decision follow-up
+
+Applied the approved advisory exception on 22 October 2026. CI now checks the review deadline and #10 state, audits production with no exceptions, and runs the full audit with only the approved advisory ignored. Production-audit regression tests verify unchanged lockfile contents, removal of all manifest auditConfig entries, cleanup on success/failure and propagation of a failing audit exit code.
+
+CI runs on pull requests and pushes to main. Node 24.x is aligned in .nvmrc, engines, ADR and CI. Local install, typecheck, lint, formatting, three unit tests, one integration test, build and both audits pass. Updated CI results will be recorded after the pushed commit completes.

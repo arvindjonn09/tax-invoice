@@ -1,7 +1,11 @@
 name: Scaffold checks
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 permissions:
   contents: read
+  issues: read
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -10,7 +14,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
@@ -27,4 +31,16 @@ jobs:
           name: browser-report-${{ github.event_name }}
           path: playwright-report/
           retention-days: 14
-      - run: pnpm audit --audit-level high
+      - name: Check audit exception review deadline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module -e 'if (new Date() >= new Date("2026-11-21T00:00:00+11:00")) throw new Error("Audit exception requires owner review: GHSA-vfj7-8cjw-p6xm")'
+          if [ "$(gh api repos/arvindjonn09/tax-invoice/issues/10 --jq .state)" = "closed" ]; then
+            echo "Audit exception requires review because issue #10 has landed"
+            exit 1
+          fi
+      - name: Audit production dependencies without exceptions
+        run: pnpm audit:prod
+      - name: Audit all dependencies with approved exception
+        run: pnpm audit --audit-level high
