@@ -1,0 +1,46 @@
+# Local development only; production requires separate credentials and least-privilege roles.
+services:
+  postgres:
+    image: postgres:16.15-bookworm
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Run pnpm db:env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run pnpm db:env}
+      POSTGRES_DB: ${POSTGRES_DB:?Run pnpm db:env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init-test-db.sh:/docker-entrypoint-initdb.d/10-test-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  minio:
+    build:
+      context: ./infra/docker/minio
+    image: jobflow-local-minio:2025-10-15-9e49d5e
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Run pnpm db:env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Run pnpm db:env}
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "--fail",
+          "--silent",
+          "http://localhost:9000/minio/health/ready",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  postgres_data:
+  minio_data:
