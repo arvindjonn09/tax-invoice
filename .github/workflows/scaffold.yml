@@ -21,4 +21,10 @@ jobs:
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-report-${{ github.event_name }}
+          path: playwright-report/
+          retention-days: 14
       - run: pnpm audit --audit-level high
