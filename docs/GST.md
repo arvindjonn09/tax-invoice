@@ -46,7 +46,7 @@ GST calculation and job profitability share one domain package and one set of fi
 8. Mixed GST codes, GST-free lines, input-taxed expenses, GST registration date, credit/void/refund, partial supplier payment, rounding boundaries, concurrency and report period locking have automated tests.
 
 ## Combined GST and profit acceptance fixture
-The core fixture from the README, for a **GST-registered** company. Amounts are GST-exclusive unless stated. (Status: proposed — to be verified against ATO guidance by the domain-expert before implementation.)
+The core fixture from the README, for a **GST-registered** company. Amounts are GST-exclusive unless stated. (Status: verified for the stated ordinary-supply assumptions, 22 October 2026; see [sourced rules and exact-cent examples](research/domain-gst-profit.md). Accountant review before real use remains required.)
 
 | Item | Ex GST | GST | Incl GST | Creditable GST | Job cost |
 |---|---|---|---|---|---|
@@ -61,11 +61,14 @@ Expected:
 - Draft GST (same period, non-cash basis): 1A $250.00; 1B $105.00; indicative net GST payable $145.00.
 - Receipt of $1,000.00 → customer outstanding **$1,750.00** (GST-inclusive). Profit unchanged.
 - Payment of $400.00 against the $990.00 subcontractor bill → supplier outstanding **$590.00**. Job cost and profit unchanged.
-- Cash basis: the $1,000.00 receipt attributes 1/11 of the receipt to 1A (≈ $90.91); the exact rounding rule must be pinned by the domain-expert and tested.
-- Non-creditable variant: if the materials purchase has no valid tax invoice / is not creditable, its $15.00 GST becomes cost → job cost $1,465.00, profit $1,035.00, 1B $90.00.
+- Cash basis: the $1,000.00 receipt attributes 1/11 of the receipt to 1A, rounded to **9091 cents ($90.91)**; use cumulative rounding and residual settlement in research rule R7.
+- Non-creditable variant: if the materials purchase is not creditable (or provisionally unclaimable pending required evidence), its $15.00 GST becomes cost → job cost $1,465.00, profit $1,035.00, 1B $90.00.
 - Not-registered company: no GST charged, document titled "Invoice", all figures as in the README fixture.
 
 ## Official references
 - https://www.ato.gov.au/businesses-and-organisations/gst-excise-and-indirect-taxes/gst/registering-for-gst
 - https://www.ato.gov.au/businesses-and-organisations/gst-excise-and-indirect-taxes/gst/accounting-for-gst-in-your-business
 - https://www.ato.gov.au/api/public/content/0-53cc7a8e-0668-4c9d-95d7-eb841eb09c04
+
+## Pinned implementation decisions
+See [research rules R1–R10](research/domain-gst-profit.md): per-supply half-up rounding, integer rational arithmetic, supplier invoice preservation, evidence deferral, cash cumulative attribution and explicit accountant review boundaries. The not-registered fixture uses independent total prices, not the registered supplier gross prices with GST discarded.

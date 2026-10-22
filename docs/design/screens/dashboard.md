@@ -6,7 +6,7 @@ Issue #22 · owner review pending. Uses the [design system](../design-system.md)
 
 The owner can see invoiced profit, outstanding balances and the next operational task without confusing profit with cash. The manager receives authorised operational and job-profit sections; the accountant receives authorised financial/reporting sections. Server policy decides each section and drill-down. Employee and subcontractor dashboards show only their assignments/offers and never receive customer prices, profits or other workers' rates. Do not fetch a full owner payload then hide fields.
 
-In M0 use `/design-previews/dashboard` (or an explicitly named preview route selected in #23), with the persistent “Design preview — not real data” banner. Every amount below is an immutable labelled sample. No data queries, financial computations, writes, drill-down to fake business records or simulated success. Real `/dashboard` and linked business routes arrive with M4 dependencies. Navigation between preview specimens may work.
+In M0 use `/design-preview/dashboard` (or an explicitly named preview route selected in #23), with the persistent “Design preview — not real data” banner. Every amount below is an immutable labelled sample. No data queries, financial computations, writes, drill-down to fake business records or simulated success. Real `/dashboard` and linked business routes arrive with M4 dependencies. Navigation between preview specimens may work.
 
 ## Desktop layout and content
 

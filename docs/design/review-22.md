@@ -13,6 +13,6 @@ Read the [dashboard wireframe and states](screens/dashboard.md) and [invoice-bui
 | Safety | Persistent preview/demo banners; explicit issue review; issued snapshots read-only | Are warnings visible and understandable? |
 | Mobile | Single-column cards and line fieldsets; all amounts and tax codes retained | Does the proposed order match field use? |
 
-Record a review comment on #22 with accepted items and requested changes. Implementation teams can continue dependency-independent work, but must not mark this checkpoint complete or claim approval from silence. Owner review of rendered #23 previews is a further checkpoint before broad design rollout.
+Record a review comment on #22 with accepted items and requested changes. Implementation teams can continue dependency-independent work, but must not mark this checkpoint complete or claim approval from silence. Preview routes are not linked from production navigation. Owner review of rendered #23 previews is a further checkpoint before broad design rollout.
 
 Evidence so far: documentation link validation and the existing token contrast checks are automated. No rendered viewport, assistive-technology, application financial or authorisation testing is claimed by these artifacts.
