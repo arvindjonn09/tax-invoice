@@ -12,3 +12,6 @@ test-results/
 
 # Prisma generated client (regenerated from committed schema)
 packages/database/src/generated/
+
+# Python contract-test bytecode
+__pycache__/

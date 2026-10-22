@@ -73,6 +73,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm test
+      - run: pnpm test:coverage
       - run: pnpm test:integration
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
@@ -88,6 +89,12 @@ jobs:
         with:
           name: browser-report-${{ github.event_name }}
           path: playwright-report/
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: domain-coverage
+          path: coverage/domain/
           retention-days: 14
       - name: Check audit exception review deadline
         env:
