@@ -41,3 +41,6 @@
 Invoice $2500; costs $1450; profit $1050; margin 42%; customer receipt $1000 leaves $1500 outstanding; contractor bill $900 paid $400 leaves $500 outstanding. Payment changes do not change profit.
 
 At every milestone: implement schema, routes, UI, tests and documentation; do not mark done without passing tests. Avoid bulk unreviewed implementation.
+
+## GST scope update (2026-10-22)
+GST is now INCLUDED in v1; read [Australian GST requirements](GST.md). Any previous text excluding GST/BAS is superseded for GST computation and draft BAS support only. BAS lodgement, superannuation, PAYG/STP and payroll processing remain excluded. Implement effective-dated GST registration, taxable/GST-free/input-taxed/out-of-scope codes, GST-inclusive/exclusive pricing, supplier credit eligibility, mixed lines, payment-basis attribution, tax invoice validation, adjustments, period locking and accountant export. Complete the GST tests before production use.
