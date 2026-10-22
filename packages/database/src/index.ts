@@ -14,3 +14,12 @@ export function createDatabaseAdapter(connectionString: string): PrismaPg {
 export function createDatabaseClient(connectionString: string): PrismaClient {
   return new PrismaClient({ adapter: createDatabaseAdapter(connectionString) });
 }
+
+export {
+  REDACTED,
+  auditChanges,
+  listAuditEvents,
+  withAudit,
+  type AuditEventInput,
+  type AuditRecorder,
+} from "./audit";
