@@ -435,7 +435,7 @@ My recommendation is to build Customers → Jobs → Contractor Assignments → 
 
 Requires Node.js 24.x (`nvm use`) and pnpm 9.15.4. Run `pnpm install --frozen-lockfile`, then `pnpm dev` and open http://localhost:3000. The home page is a placeholder; `/api/health` reports application liveness only. The placeholder and liveness endpoint can run without a database; integration tests require the local database setup below.
 
-Generate the database client first with `pnpm db:generate`. Validation: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:integration`, `pnpm build`. Browser smoke test: `pnpm exec playwright install chromium`, then `pnpm test:e2e`. Format new source with `pnpm format`; check with `pnpm format:check`.
+The root `pnpm typecheck` regenerates the ignored database client automatically, so install → type-check works on a fresh clone. Use `pnpm db:generate` explicitly before direct workspace database commands. Validation: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:integration`, `pnpm build`. Browser smoke test: `pnpm exec playwright install chromium`, then `pnpm test:e2e`. Format new source with `pnpm format`; check with `pnpm format:check`.
 
 Database tooling is provided by #9. Authentication, authorisation, tenancy and financial modules remain later issues. Follow the milestone dependencies before adding functionality. See [ADR 0001](docs/adr/0001-tech-stack.md).
 

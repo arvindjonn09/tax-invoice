@@ -14,7 +14,7 @@ Baseline: PostgreSQL 16.15, Node 24.21.0, pnpm 9.15.4; Linux local run on 23 Oct
 
 - `pnpm install --frozen-lockfile`: success, lockfile current.
 - `pnpm db:generate`, `pnpm db:validate`: success, Prisma 7.10.1.
-- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`: exit 0.
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`: exit 0. Verified install → type-check after removing only the ignored generated Prisma client; root type-check regenerated it automatically.
 - `pnpm test`: 5 files, 29 tests passed, including unsafe targets, production
   guards, reset acknowledgement and a runner path containing spaces and `#`. Quoted/whitespace credentials and malformed configuration cannot leak connection URLs in diagnostics.
 - Migrations applied twice against isolated local PG16: the second execution

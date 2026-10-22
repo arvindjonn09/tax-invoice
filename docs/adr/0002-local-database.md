@@ -42,7 +42,9 @@ network deployment. No bucket, anonymous policy or file-upload API is introduced
 ## Consequences and limits
 
 A clean Compose start builds MinIO from source, so the first run downloads Go modules and takes
-longer than a prebuilt image. Local generation uses random credentials in a mode-0600 ignored `.env`;
+longer than a prebuilt image. Root type-check regenerates the ignored Prisma client before checking workspace imports.
+MinIO build-layer caching is a follow-up for the CI/storage work (#10/#34); it is not
+a reason to skip actual service startup or integration tests. Local generation uses random credentials in a mode-0600 ignored `.env`;
 example files contain placeholders only. Docker's local Postgres superuser is development-only.
 Changes to init scripts apply only to fresh database volumes. Keep data with `docker compose down`;
 `--volumes` is destructive and reserved for disposable local environments.
