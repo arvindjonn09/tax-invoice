@@ -5,8 +5,8 @@ https://github.com/arvindjonn09/tax-invoice/milestones. Backend milestones are b
 reviewed PR with passing CI (type-check, lint, tests, security checks).
 
 ## M0 Foundation
-- [ ] Tech-stack ADR and monorepo scaffold (Next.js strict TypeScript) — implemented locally for #8; pending CI and review
-- [ ] PostgreSQL Docker Compose + Prisma + test database
+- [x] Tech-stack ADR and monorepo scaffold (Next.js strict TypeScript) — #8 merged after passing CI and exact-head Claude supervisor review
+- [ ] PostgreSQL Docker Compose + Prisma + test database — #9 implemented with isolated integration database harness; pending CI and exact-head Claude supervisor review
 - [ ] CI: type-check, lint, unit/integration tests, build, dependency audit, secret scan, static analysis; protected `main`
 - [ ] Core tenancy schema: companies, users, memberships, roles, audit events, idempotency keys
 - [ ] Authentication, sessions, login throttling

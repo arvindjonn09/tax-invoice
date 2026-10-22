@@ -433,8 +433,57 @@ My recommendation is to build Customers → Jobs → Contractor Assignments → 
 
 ## Running the foundation scaffold (#8)
 
-Requires Node.js 24.x (`nvm use`) and pnpm 9.15.4. Run `pnpm install --frozen-lockfile`, then `pnpm dev` and open http://localhost:3000. The home page is a placeholder; `/api/health` reports application liveness only. No database or environment variables are needed yet.
+Requires Node.js 24.x (`nvm use`) and pnpm 9.15.4. Run `pnpm install --frozen-lockfile`, then `pnpm dev` and open http://localhost:3000. The home page is a placeholder; `/api/health` reports application liveness only. The placeholder and liveness endpoint can run without a database; integration tests require the local database setup below.
 
-Validation: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:integration`, `pnpm build`. Browser smoke test: `pnpm exec playwright install chromium`, then `pnpm test:e2e`. Format new source with `pnpm format`; check with `pnpm format:check`.
+The root `pnpm typecheck` regenerates the ignored database client automatically, so install → type-check works on a fresh clone. Use `pnpm db:generate` explicitly before direct workspace database commands. Validation: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:integration`, `pnpm build`. Browser smoke test: `pnpm exec playwright install chromium`, then `pnpm test:e2e`. Format new source with `pnpm format`; check with `pnpm format:check`.
 
-The database, authentication, authorisation and financial modules are reserved boundaries, not implemented features. Follow the milestone dependencies before adding functionality. See [ADR 0001](docs/adr/0001-tech-stack.md).
+Database tooling is provided by #9. Authentication, authorisation, tenancy and financial modules remain later issues. Follow the milestone dependencies before adding functionality. See [ADR 0001](docs/adr/0001-tech-stack.md).
+
+
+## Local database and object storage (#9)
+
+Requires Docker Engine with Compose v2 in addition to Node 24/pnpm. From the repository root:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm db:generate
+pnpm db:env
+docker compose up --build -d --wait --wait-timeout 180
+pnpm db:migrate
+pnpm test:integration
+```
+
+`db:env` creates a private, ignored `.env` with random development credentials and refuses to overwrite
+an existing file. [.env.example](.env.example) documents every setting. Keep it local; never reuse
+these credentials or Compose roles in staging/production. Compose binds PostgreSQL to loopback 5432,
+MinIO API to loopback 9000 and its console to loopback 9001. Adjust the ports **and database URLs**
+together in `.env` if occupied. MinIO builds pinned official source because upstream prebuilt
+artifacts are unavailable; the first build can take several minutes. See [ADR 0002](docs/adr/0002-local-database.md)
+for provenance, licensing and operational limits. No public buckets or upload features exist yet.
+
+`jobflow` is the development database; `jobflow_test` is the base used to provision a fresh
+`jobflow_test_<uuid>` database for each integration run. The runner migrates the unique database,
+passes its URL only to that run, and drops it on completion, failure or normal interruption.
+Tests never reset the development database. The local test role needs CREATEDB; the default
+Compose development role is an administrator and must never be used by a production application.
+A hard kill or host/database failure may leave an abandoned temporary database; inspect exact names
+before manually removing one. Never drop databases by wildcard.
+
+For an existing database server, set `DATABASE_URL` and `TEST_DATABASE_URL` in the process environment
+(or root `.env`), create those two UTF8 databases, and grant the local test role CREATEDB. Test/reset
+helpers accept only loopback `jobflow_test`, no URL query/fragment options, and reject production
+mode or the same development database. Process environment values override `.env`.
+
+Migration commands:
+
+- `pnpm db:validate` validates the schema without a server.
+- `pnpm db:generate` regenerates the ignored TypeScript Prisma client.
+- `pnpm db:migrate` applies committed migrations (safe to repeat).
+- `pnpm db:migrate:dev -- --name <change>` creates a development migration; review SQL and commit it.
+- `RESET_TEST_DATABASE=yes pnpm db:test:reset` destructively resets **only local jobflow_test** and reapplies migrations.
+
+The bootstrap migration creates only Prisma migration history; business/tenancy tables arrive in #12.
+Prisma uses forward migrations, not automatic down migrations. Stop services with `docker compose down`
+to preserve volumes. `docker compose down --volumes` deletes **all local Compose database and MinIO data**;
+use it only for disposable environments. Initial test-database creation runs only on a fresh volume.
+There is no demo seed until its own milestone issue; demo rules and production refusal remain required.

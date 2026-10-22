@@ -8,14 +8,20 @@
   "scripts": {
     "dev": "pnpm --filter @jobflow/web dev",
     "build": "pnpm --filter @jobflow/web build",
-    "typecheck": "node scripts/check-strict.mjs && tsc --noEmit && pnpm -r typecheck",
+    "typecheck": "pnpm db:generate && node scripts/check-strict.mjs && tsc --noEmit && pnpm -r typecheck",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run tests/unit",
-    "test:integration": "vitest run tests/integration",
+    "test:integration": "node scripts/database/test-runner.mjs",
     "test:e2e": "playwright test",
-    "audit:prod": "node scripts/audit-production.mjs"
+    "audit:prod": "node scripts/audit-production.mjs",
+    "db:env": "node scripts/database/create-local-env.mjs",
+    "db:generate": "node scripts/database/cli.mjs generate",
+    "db:validate": "node scripts/database/cli.mjs validate",
+    "db:migrate": "node scripts/database/cli.mjs migrate deploy",
+    "db:migrate:dev": "node scripts/database/cli.mjs migrate dev",
+    "db:test:reset": "node scripts/database/reset-test.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

@@ -9,3 +9,6 @@ test-results/
 .env
 .env.*
 !.env.example
+
+# Prisma generated client (regenerated from committed schema)
+packages/database/src/generated/

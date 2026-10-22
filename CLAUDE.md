@@ -37,7 +37,8 @@ and fills in the commands below.
 | Lint | `pnpm lint` (format: `pnpm format:check`) |
 | Unit / integration tests | `pnpm test` / `pnpm test:integration` |
 | E2E tests | `pnpm exec playwright install chromium` then `pnpm test:e2e` |
-| DB migrate / seed demo | Not available until #9 / demo-seed issue; no database in scaffold |
+| DB generate / migrate / test reset | `pnpm db:generate` / `pnpm db:migrate` / `RESET_TEST_DATABASE=yes pnpm db:test:reset` (local test only) |
+| Demo seed | Not available until demo-seed issue; see README for local `pnpm db:env` + Compose setup |
 | Production build / start | `pnpm build` / `pnpm --filter @jobflow/web start` |
 
 ## The team (`.claude/agents/`)
