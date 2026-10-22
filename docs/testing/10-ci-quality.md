@@ -10,8 +10,7 @@ run CodeQL and reject SARIF findings, and check design/domain contracts.
 Every action is pinned to a full upstream commit SHA; Dependabot proposes weekly
 npm workspace and Actions updates. Prisma and Next toolchain updates are grouped
 for compatible review. Workflow defaults grant only contents:read; CodeQL alone
-grants security-events:write, and verify alone needs issues:read for the existing
-audit exception deadline. Checkout credentials are not persisted. No workflow uses
+grants security-events:write, and no job needs issues:read after the owner-approved exception review. Checkout credentials are not persisted. No workflow uses
 pull_request_target or accepts arbitrary code with a privileged repository token.
 
 `gate-regressions` invokes `scripts/ci/prove-gates.mjs`. It copies tracked source to
@@ -51,10 +50,11 @@ All five fault probes passed on 22 October 2026. This host has no Docker; actual
 Compose startup and CodeQL execution are validated by the PR's CI, not claimed
 locally. Native PostgreSQL is available for local integration checks.
 
-The pre-existing `braces` development-only exception was reviewed again; see the
-[exception record](../security/audit-exceptions.md). No renewal has been applied.
-Owner approval of branch protection and an exception resolution/decision remain
-required before #10 can close. Do not treat this document as owner authorization.
+The pre-existing `braces` development-only exception was reviewed again. The owner
+approved retaining only that advisory until November 21 and removing only the
+issue-10-closure condition; see the [exception record](../security/audit-exceptions.md).
+The owner approved the exact branch-protection proposal as well; apply it only
+after green CI and exact-head supervisor approval, then verify the API settings.
 
 MinIO currently rebuilds its pinned source in CI. BuildKit registry/GHA caching
 needs a separate reviewed implementation (#34), including cache permissions and
