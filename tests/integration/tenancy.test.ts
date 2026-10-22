@@ -289,3 +289,62 @@ it.each([
   });
   expect(member.role).toBe(role);
 });
+
+it.each(["employee", "subcontractor", "manager", "accountant"] as const)(
+  "refuses a self-created non-owner bootstrap role %s",
+  async (role) => {
+    const person = await client.user.create({
+      data: { email: `${randomUUID()}@example.test` },
+    });
+    await expect(
+      client.$transaction(async (tx) => {
+        const company = await tx.company.create({
+          data: { name: "Invalid bootstrap", createdBy: person.id },
+        });
+        await tx.membership.create({
+          data: {
+            companyId: company.id,
+            userId: person.id,
+            createdBy: person.id,
+            role,
+          },
+        });
+      }),
+    ).rejects.toThrow("bootstrap owner");
+    expect(
+      await client.company.count({ where: { name: "Invalid bootstrap" } }),
+    ).toBe(0);
+  },
+);
+
+it("refuses inactive or additional self-created owners", async () => {
+  const person = await client.user.create({
+    data: { email: `${randomUUID()}@example.test` },
+  });
+  await expect(
+    client.$transaction(async (tx) => {
+      const company = await tx.company.create({
+        data: { name: "Inactive bootstrap", createdBy: person.id },
+      });
+      await tx.membership.create({
+        data: {
+          companyId: company.id,
+          userId: person.id,
+          createdBy: person.id,
+          role: "owner",
+          isActive: false,
+        },
+      });
+    }),
+  ).rejects.toThrow("bootstrap owner");
+  await expect(
+    client.membership.create({
+      data: {
+        companyId: companyA,
+        userId: person.id,
+        createdBy: person.id,
+        role: "owner",
+      },
+    }),
+  ).rejects.toThrow("bootstrap owner");
+});

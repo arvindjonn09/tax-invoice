@@ -8,6 +8,7 @@ DROP TABLE memberships;
 DROP TABLE companies;
 DROP TABLE users;
 DROP FUNCTION jobflow_reject_audit_mutation();
+DROP FUNCTION jobflow_guard_membership_self_creation();
 DROP FUNCTION jobflow_touch_updated_at();
 DROP TYPE idempotency_state;
 DROP TYPE membership_role;

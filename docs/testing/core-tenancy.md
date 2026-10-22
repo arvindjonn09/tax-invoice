@@ -20,7 +20,10 @@ erDiagram
 
 Create an identity, company and first owner membership in **one transaction**.
 The company's creator foreign key is `DEFERRABLE INITIALLY DEFERRED`; the first
-owner membership can name itself as creator. Committing without that membership
+active owner membership can name itself as creator; an insert/creator-change trigger
+rejects self-created non-owners, inactive bootstrap owners and additional self-created
+owners. Historical role/deactivation changes preserve creator identity; permission
+and last-owner rules remain service responsibilities. Committing without that membership
 fails. Global identities may have a nullable self-referencing creator for initial
 bootstrap or external identity-provider registration. Other creators are required.
 No auth service, invitations or account provisioning endpoint is introduced here.
@@ -92,3 +95,11 @@ production rollback command. Prisma's ledger is retained during this DDL proof;
 normal deploys remain forward-only as specified by ADR 0002. An actual rollback of
 production data requires a reviewed recovery/restore plan. Never run this fixture
 against a shared development or production database.
+
+## Future migration review
+
+Prisma cannot represent CHECK constraints, trigger definitions or deferred FK settings.
+Review every generated migration's SQL for accidental removal or rewriting of these
+invariants. Run the database integrity suite after every schema change, including
+bootstrap/self-creation, append-only audit and idempotency outcomes. Never assume a
+clean Prisma datamodel diff proves custom PostgreSQL constraints remain intact.
