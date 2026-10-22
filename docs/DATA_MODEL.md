@@ -23,3 +23,6 @@ Invoice 250000 cents; contractor 90000; employee 30000; materials 15000; travel 
 
 ## Required tests
 Partial/multiple payment allocations, retries and concurrency, zero/negative values and large numbers, void after receipt, refunds, credits, rate change historical preservation, incorrect tenant IDs, end-of-month reporting, filtering and sum reconciliation.
+
+## GST scope update (2026-10-22)
+GST is now INCLUDED in v1; read [Australian GST requirements](GST.md). Any previous text excluding GST/BAS is superseded for GST computation and draft BAS support only. BAS lodgement, superannuation, PAYG/STP and payroll processing remain excluded. Implement effective-dated GST registration, taxable/GST-free/input-taxed/out-of-scope codes, GST-inclusive/exclusive pricing, supplier credit eligibility, mixed lines, payment-basis attribution, tax invoice validation, adjustments, period locking and accountant export. Complete the GST tests before production use.
