@@ -12,7 +12,11 @@ export default defineConfig({
         test: {
           name: "unit",
           environment: "node",
-          include: ["tests/unit/**/*.test.ts", "apps/web/tests/**/*.test.ts"],
+          include: [
+            "tests/unit/**/*.test.ts",
+            "apps/web/tests/**/*.test.ts",
+            "packages/*/test/**/*.test.ts",
+          ],
         },
       },
       {
@@ -30,6 +34,13 @@ export default defineConfig({
       include: ["packages/domain/src/**/*.ts"],
       reporter: ["text", "json-summary", "lcov", "html"],
       reportsDirectory: "coverage/domain",
+      // The shared GST/profit core (#17) must stay fully covered.
+      thresholds: {
+        lines: 100,
+        branches: 100,
+        functions: 100,
+        statements: 100,
+      },
     },
   },
 });
