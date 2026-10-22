@@ -1,13 +1,22 @@
-# tax-invoice
+# tax-invoice (JobFlow)
 Build Plan: Custom Job Management & Accounting Application
+
+> **Source of truth.** This README is the original build plan. The detailed, current specification lives in
+> [`docs/`](docs/) — [REQUIREMENTS](docs/REQUIREMENTS.md), [GST](docs/GST.md), [DATA_MODEL](docs/DATA_MODEL.md),
+> [ARCHITECTURE](docs/ARCHITECTURE.md), [SECURITY](docs/SECURITY.md), [UI_DESIGN](docs/UI_DESIGN.md) and the
+> [IMPLEMENTATION_PLAN](docs/IMPLEMENTATION_PLAN.md). AI agents follow [`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md).
+> Work is tracked in [GitHub Issues](https://github.com/arvindjonn09/tax-invoice/issues) under milestones M0–M5.
 
 We will build a web application similar to the core job-tracking features of MYOB Business Pro, but tailored to your contracting business.
 
 The application will track every dollar received, spent, owed and earned on each job, whether the work is completed by your employees or an external subcontractor.
 
-We will not build GST calculation, BAS reporting, superannuation calculation, STP payroll reporting or tax lodgement.
+**Scope (updated 2026-10-22):**
 
-Important: Removing these features from the application does not remove any GST, superannuation, payroll or recordkeeping obligations your Australian business may have. This application will initially be an operational and financial tracking system, not a replacement for compliant accounting and payroll software.
+- **Included in v1:** Australian GST calculation (taxable, GST-free, input-taxed and out-of-scope lines), compliant tax invoices, creditable GST on supplier bills and expenses, and **draft** GST/BAS summaries (G1, 1A, 1B) with accountant export. See [docs/GST.md](docs/GST.md).
+- **Excluded:** BAS lodgement with the ATO, superannuation calculation, PAYG withholding, STP payroll reporting, payroll processing, and bank-payment initiation.
+
+Important: GST/BAS output is a draft for review by your accountant or registered tax agent before lodgement. Excluding payroll and superannuation features from the application does not remove any superannuation, payroll or recordkeeping obligations your Australian business may have.
 
 1. Application modules
 
@@ -140,7 +149,7 @@ Every financial record must have a unique ID, company ID, currency, timestamp, c
 
 Profit calculation
 
-Assume a job has:
+Assume a job has (all amounts **GST-exclusive**; see the GST-registered variant in [docs/GST.md](docs/GST.md#combined-gst-and-profit-acceptance-fixture)):
 
 Description	Amount
 Customer invoice	$2,500
@@ -165,6 +174,8 @@ But the application must separately track:
 
 Do not calculate profit from money received alone or count a subcontractor bill again when it is paid. Those are two different financial events.
 
+Recoverable GST is never business revenue, profit or expense: GST collected on sales is owed to the ATO, and creditable GST on purchases is claimed back. Profit uses GST-exclusive amounts; only **non-creditable** GST forms part of a job cost.
+
 5. Screens to develop
 
 Dashboard
@@ -185,8 +196,8 @@ Illustrative interface references. The application should use its own original d
 
 Role	Permissions
 Owner	Complete access to all business and financial records
-Admin/Manager	Create jobs, assign technicians, approve costs and view profits
-Accountant	View invoices, expenses, financial reports and payments
+Manager	Create jobs, assign technicians, approve costs and view profits
+Accountant (bookkeeper)	View and record invoices, expenses, payments, financial reports and draft GST/BAS summaries
 Employee	View assigned jobs, submit hours, receipts and completion evidence
 Subcontractor	View only their offers/jobs, submit invoices and completion evidence
 
@@ -246,8 +257,11 @@ BUSINESS MODEL
   received, amounts spent, and amounts still outstanding.
 - Support 1-5 employees initially.
 - Design for future growth.
+IN SCOPE (GST — see docs/GST.md)
+- Australian GST on invoice/bill lines, tax invoices,
+  creditable GST, draft GST/BAS summaries (not lodged).
 OUT OF SCOPE
-- GST calculations, BAS reporting or tax lodgement.
+- BAS lodgement or other tax lodgement.
 - Superannuation calculations.
 - PAYG withholding, STP submissions or payroll runs.
 - Bank payment initiation.
@@ -263,7 +277,7 @@ TECHNOLOGY
 - Vitest and Playwright
 - S3-compatible private document storage abstraction
 BUSINESS REQUIREMENTS
-1. Secure login, company owner, admin, accountant,
+1. Secure login, company owner, manager, accountant,
    employee and subcontractor roles.
 2. Customers:
    - Create/edit/archive
@@ -330,6 +344,9 @@ FINANCIAL RULES
 - Use idempotency keys for payment creation.
 - Separate invoice issue date from payment date.
 - Preserve historical rate and price snapshots.
+- Profit uses GST-exclusive amounts; recoverable GST
+  is never revenue, profit or expense. Only
+  non-creditable GST is part of job cost.
 SECURITY
 - Secure password storage/session handling
 - Server-side role and object-level authorisation
@@ -378,6 +395,9 @@ QUALITY GATES
 - Never deploy demo credentials to production.
 - Do not declare a feature complete without tests.
 CRITICAL ACCEPTANCE TEST
+(Amounts are GST-exclusive / company not GST
+registered. The GST-registered variant is in
+docs/GST.md and must also pass.)
 Create a customer job priced at $2,500.
 Assign a subcontractor for $900.
 Record employee labour costing $300.
@@ -407,4 +427,6 @@ Because the application will store financial information and employee work recor
 
 Use a local development environment and a separate staging deployment with demonstration records before processing actual customer or employee information.
 
-My recommendation is to build Customers → Jobs → Contractor Assignments → Costs → Invoices → Payments → Profit Reports in that order. Once these modules work correctly, you will have the core of the MYOB-style system you need, without getting tangled in GST and payroll functionality.
+Demonstration records are stored in the database like real records but flagged as demo data, and the interface shows a persistent **"Demo Data"** indicator whenever they are present so they cannot be mistaken for real business records. Demo seeding is refused in production.
+
+My recommendation is to build Customers → Jobs → Contractor Assignments → Costs → Invoices → Payments → Profit Reports in that order, with GST treatment built into costs, bills and invoices as they are created (not added afterwards). Payroll and superannuation remain out of scope. The milestone plan is in [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).

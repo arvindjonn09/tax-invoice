@@ -43,14 +43,15 @@ Reusable AppShell, SidebarNav, PageHeader, Breadcrumbs, KPIStat, DataTable, Filt
 ## Responsiveness and accessibility
 Review at 360, 390, 768, 1024 and 1440px; WCAG 2.2 AA target. Keyboard access, screen reader labels, visible focus, 44px touch targets where practical, contrast-tested colours, reduced-motion support. Never convey status through colour only.
 
-## Implementation order for Codex
+## Implementation order (all coding agents)
+UI work follows the backend milestones in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md); screens never get ahead of the modules that supply their data.
 1. Inspect current repository and docs/REQUIREMENTS.md, docs/GST.md and AGENTS.md. Inventory existing UI before making changes.
-2. Create initial design tokens, themes, typography, navigation and reusable shell without breaking existing business logic.
-3. Build a polished **Dashboard** with realistic synthetic values and clearly labelled financial/GST semantics.
-4. Build the **Invoice list and GST-aware invoice builder** with accessible forms, line items and totals, and printable/PDF preview.
-5. Run usability, contrast, keyboard and mobile viewport checks; seek review of these two screens before scaling.
-6. Roll design system out to jobs, customers, contractors, employees, expenses, payments and reports.
-7. Keep actual calculations server-side; no fake business transactions implied by visual-only demos.
+2. **M0:** create design tokens, themes, typography, navigation and the reusable app shell, including the persistent "Demo Data" indicator.
+3. **M0:** build **design previews** of the Dashboard and the GST-aware Invoice builder — visual only, behind a clearly labelled "Design preview — not real data" banner, using static fixture values, with no financial logic, no persistence and no controls that pretend to succeed.
+4. Run usability, contrast, keyboard and mobile viewport checks on the two previews; get the owner's review before scaling the design system.
+5. **M1–M3:** roll the design system out to customers, jobs, employees, contractors, expenses, quotes, bills, invoices and payments as each backend module lands. The real invoice builder ships in M3.
+6. **M4:** replace the dashboard preview with the real dashboard, reading server-side figures (demo records shown with the "Demo Data" indicator).
+7. Keep actual calculations server-side; demo data is database-backed synthetic data, never visual-only fake transactions.
 8. Add component, visual regression (screenshots) and end-to-end Playwright tests, including permissions and GST summaries.
 
 ## Quality gates

@@ -1,0 +1,19 @@
+name: Research spike
+description: A question to answer before building (R&D / domain research)
+labels: ["type:spike", "agent:research-dev", "status:ready"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question & the decision it unblocks
+    validations:
+      required: true
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Evaluation criteria / constraints
+  - type: input
+    id: timebox
+    attributes:
+      label: Time-box
+      placeholder: e.g. half a day
