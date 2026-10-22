@@ -13,3 +13,4 @@ jobs:
         with:
           python-version: '3.12'
       - run: python scripts/check-design-contrast.py
+      - run: python scripts/check-design-links.py
