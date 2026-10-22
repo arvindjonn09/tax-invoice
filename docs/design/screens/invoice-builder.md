@@ -1,6 +1,6 @@
 # Invoice builder screen specification
 
-Issue #22 · owner review pending. Uses the [design system](../design-system.md), [GST rules](../../GST.md), [financial definitions](../../DATA_MODEL.md) and [UI brief](../../UI_DESIGN.md). See [owner review sheet](../review-22.md). This is a layout and behaviour contract; it implements no invoice functionality.
+Issue #22 · owner layouts approved with changes on 22 October 2026; requested changes incorporated, supervisor review pending. Uses the [design system](../design-system.md), [GST rules](../../GST.md), [financial definitions](../../DATA_MODEL.md) and [UI brief](../../UI_DESIGN.md). See [owner review sheet](../review-22.md). This is a layout and behaviour contract; it implements no invoice functionality.
 
 ## Milestone and access boundary
 
@@ -20,20 +20,22 @@ M3 #47/#48/#49 provides the real builder only after customer, job, settings and 
 │              ├─────────────────────────────────┬───────────────────────┤
 │              │ Customer [Sample Customer A]    │ Totals · AUD          │
 │              │ Job [Sample Job 001]            │ Subtotal ex GST       │
+│              │ Customer reference / PO number │                       │
+│              │ Service location (site address) │                       │
 │              │ Issue date / Payment due date   │ GST                   │
 │              │ Supplier identity (settings)    │ Total incl GST        │
 │              │ Recipient identity (customer)   │                       │
 │              ├─────────────────────────────────┤ Required before issue │
 │              │ Prices entered: (•) ex GST      │ validation summary    │
 │              │                 ( ) incl GST    │                       │
-│              │ Description / Qty / Unit price │ Snapshot on issue     │
+│              │ Description / Qty / Unit / Price │ Snapshot on issue     │
 │              │ GST treatment / ex / GST / incl│                       │
 │              │ [Add line]                      │                       │
 │              │ Notes / payment instructions    │                       │
 └──────────────┴─────────────────────────────────┴───────────────────────┘
 ```
 
-The content area uses 2:1 columns at 1024px+, capped at 1440px. At 768px stack totals below line editor; at 360/390px use full-width fieldsets “Line 1” etc. Each line retains every tax amount; no hidden mandatory field. Actions wrap below the h1; the main action is Review and issue. Sticky totals are allowed only with enough vertical space and no obscured keyboard focus. At 400% zoom remove sticky behaviour. Use native inputs and selects where possible.
+The content area uses 2:1 columns at 1024px+, capped at 1440px. At 768px stack totals below line editor; at 360/390px use full-width fieldsets “Line 1” etc. Each line retains every tax amount; no hidden mandatory field. Actions wrap below the h1; the main action is Review and issue. Sticky totals are allowed only with enough vertical space and no obscured keyboard focus. On phones (360/390px), include a compact mobile sticky total bar: “Total incl GST $X · View breakdown”. Use the current confirmed total and an in-page link to the full subtotal/GST/total breakdown; the bar supplements that breakdown. In M0 show a static total and a working in-page specimen anchor only, with no calculation or financial action. Reserve bottom space including the device safe area so the bar cannot cover content, focused controls or validation messages; keep the link target clear of sticky elements and provide a visible focus state and a 44px touch target. Hide the bar when the on-screen keyboard or available viewport would obscure fields/focus. Remove sticky behaviour at 400% zoom (the total remains in normal flow). Empty/loading/unconfirmed totals show “Total unavailable” instead of a fabricated $0.00; stale totals are explicitly labelled and cannot enable issue. Use native inputs and selects where possible.
 
 Components: AppShell, Breadcrumbs, PageHeader, FormField, InvoiceLineEditor, TaxCodeSelect, MoneyDisplay, ErrorState and ConfirmDialog; Drawer/dialog for PDF preview. One h1 reflects server-established registration state: “Tax Invoice” for a registered taxable-supply specimen, “Invoice” for an unregistered specimen. A separate Draft status explains that no issued invoice exists. Do not promise an invoice number before server issue; say “Assigned on issue”. Settings supply legal identity, ABN and effective registration context; no editable identity override in the builder.
 
@@ -43,11 +45,14 @@ Components: AppShell, Breadcrumbs, PageHeader, FormField, InvoiceLineEditor, Tax
 |---|---|---|
 | Customer | “Customer (required)” | “Select a customer.” Block issue; server checks company/customer and recipient identity requirements. No real data in previews. |
 | Job | “Job” with requirement supplied by domain workflow | “Select an authorised job for this customer.” Reject mismatched/foreign IDs server-side. |
+| Customer reference / PO number | “Customer reference / PO number (optional)” | Preserve entered reference as plain text with a server-defined length limit. When filled, include the labelled value on invoice detail and the PDF, and snapshot it at issue; omit the empty field from the document. |
+| Service location | “Service location (site address) (optional)” | Select an authorised service location belonging to this customer/job; reject foreign or mismatched IDs server-side. When filled, include the labelled site address on invoice detail and the PDF, and snapshot it at issue. Display as safe text; omit when empty. |
 | Issue date | “Issue date (Australia/Sydney)” | “Enter a valid issue date.” Server checks effective GST state and locked period; registration transition shows a specific review requirement. |
 | Due date | “Payment due date” | “Enter a valid payment due date.” If earlier than issue: “Due date must be on or after issue date.” |
 | Supplier/recipient | Read-only summary with permitted link to settings/customer | “Complete required supplier details before issue.” / “Complete required recipient details before issue.” Link to the missing field's owning module, preserving draft. Statutory thresholds come from #16, not UI constants. |
 | Description | “Description (required)” | “Enter a description for line N.” Text wraps and has a server-defined maximum reflected in help. |
 | Quantity | “Quantity (required)” | “Enter a quantity greater than zero for line N.” Decimal precision and bounds follow domain rules; no scientific notation or silent coercion. |
+| Unit | “Unit (optional)” next to Quantity; examples “hrs”, “each”, “m” | Preserve a short, server-validated unit label as plain text. Include it beside quantity on the invoice/PDF and snapshot it at issue. A unit label does not change quantity, price or GST calculations; do not silently convert units. |
 | Unit price | “Unit price (ex GST)” or “Unit price (incl GST)” | “Enter a valid AUD amount with at most two decimal places for line N.” Zero is allowed if domain rules allow; negative sale lines require the explicit correction workflow. Bounds checked server-side. |
 | GST treatment | “GST treatment (required)” with explanations | “Select a valid GST treatment for line N.” Four distinct domain codes retained even for zero rates; registration rules restrict taxable treatment. |
 | Notes/instructions | “Notes” / “Payment instructions” | Server-defined length limit and safe text rendering. Never log payment details or copy real bank details into fixtures. |
@@ -56,7 +61,7 @@ Real validation runs on blur and submit; authoritative issue validation runs on 
 
 Use one explicit radio group “Prices entered” with “Ex GST” and “Incl GST”. Changing mode changes the representation of the same price using the authoritative domain rounding policy; it must not silently change the commercial total. The real implementation shows the recalculated line breakdown and requests confirmation if a domain-supported conversion must change a saved price by a cent. Never relabel unchanged numeric input as a new basis. Show pending recalculation and disable issue until the latest server result matches the draft. M0 offers separate static specimens, not a working toggle.
 
-Each line displays description, quantity, entered unit price, tax code, amount ex GST, GST and amount incl GST. Totals always show Subtotal (ex GST), GST, Total (incl GST), with AUD visible. Mixed-tax treatment is visible per line, not a blanket “Includes 10% GST”. Tax-code help distinguishes GST-free, input taxed and out of scope. Supplier-credit eligibility is not part of a sales invoice builder and must not be inferred here.
+Each line displays description, quantity, unit (when supplied), entered unit price, tax code, amount ex GST, GST and amount incl GST. Totals always show Subtotal (ex GST), GST, Total (incl GST), with AUD visible. Mixed-tax treatment is visible per line, not a blanket “Includes 10% GST”. Tax-code help distinguishes GST-free, input taxed and out of scope. Supplier-credit eligibility is not part of a sales invoice builder and must not be inferred here.
 
 ## Static specimens for owner review
 
@@ -98,6 +103,6 @@ Issued preview/detail displays locked icon + “Issued — read only”, actor/t
 
 ## Keyboard, accessibility and verification
 
-Reading/tab order: breadcrumb → actions → customer/job/date fields → supplier/recipient summaries → entry-mode group → line fields/actions → notes → totals → issue review. At narrow widths totals follow lines in DOM as well as visually. Radio/select keyboard behaviour stays native; line rows are not a spreadsheet widget. Describe errors/help with `aria-describedby`, mark invalid fields only after validation, announce one submission result, and prevent background focus in dialogs. All statuses include words/icons, all amounts have basis, all targets are at least 44px, and focus must be visible in both themes/forced colours.
+Reading/tab order: breadcrumb → actions → customer/job/reference/location/date fields → supplier/recipient summaries → entry-mode group → line fields/actions → notes → totals → issue review. At narrow widths totals follow lines in DOM as well as visually. Radio/select keyboard behaviour stays native; line rows are not a spreadsheet widget. Describe errors/help with `aria-describedby`, mark invalid fields only after validation, announce one submission result, and prevent background focus in dialogs. All statuses include words/icons, all amounts have basis, all targets are at least 44px, and focus must be visible in both themes/forced colours.
 
-#23 verifies static success/loading/empty/error specimens, full line breakdown in both modes, 360/390/768/1024/1440px, keyboard, screen reader, 200% text, 400% zoom and reduced motion. M3 tests real mixed-code calculation with the same GST/profit fixtures, registration-date titles, server validation, stale recalculation, authorised PDF access, issue retries and snapshot immutability. This specification does not claim those application tests have run. Owner review remains pending.
+#23 verifies static success/loading/empty/error specimens, reference/location fields and quantity/unit layout, the mobile total bar and View breakdown focus/anchor behaviour (including keyboard and 400% zoom fallback), full line breakdown in both modes, 360/390/768/1024/1440px, keyboard, screen reader, 200% text, 400% zoom and reduced motion. M3 tests real mixed-code calculation with the same GST/profit fixtures, registration-date titles, server validation, stale recalculation, authorised PDF access, issue retries and snapshot immutability. This specification does not claim those application tests have run. The owner approved these layouts with the requested changes recorded in the review sheet; supervisor review of this update is pending. Rendered #23 previews still require their own owner review.

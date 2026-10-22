@@ -1,6 +1,6 @@
 # Dashboard screen specification
 
-Issue #22 · owner review pending. Uses the [design system](../design-system.md), [financial definitions](../../DATA_MODEL.md) and [UI brief](../../UI_DESIGN.md). This specifies the M0 design preview and the later M4 production screen; it implements neither. See the [owner review sheet](../review-22.md).
+Issue #22 · owner layouts approved with changes on 22 October 2026; requested changes incorporated, supervisor review pending. Uses the [design system](../design-system.md), [financial definitions](../../DATA_MODEL.md) and [UI brief](../../UI_DESIGN.md). This specifies the M0 design preview and the later M4 production screen; it implements neither. See the [owner review sheet](../review-22.md).
 
 ## Purpose and access
 
@@ -24,7 +24,7 @@ In M0 use `/design-preview/dashboard` (or an explicitly named preview route sele
 │              │                    │                 │ Margin 42%     │
 │              ├────────────────────┼─────────────────┼────────────────┤
 │              │ Received incl GST  │ Paid incl GST   │ Net cash       │
-│              │ $1,000.00          │ $400.00         │ $600.00        │
+│              │ $1,000.00          │ $665.00         │ $335.00        │
 │              ├────────────────────┴─────────────────┴────────────────┤
 │              │ Customer outstanding       Supplier outstanding      │
 │              │ $1,750.00 incl GST         $590.00 incl GST           │
@@ -38,7 +38,12 @@ In M0 use `/design-preview/dashboard` (or an explicitly named preview route sele
 * Incurred cost: ex GST + non-creditable GST. Profit: invoiced basis.
 ```
 
-All fixture names are synthetic, e.g. “Sample Customer A” and “Sample Job 001”; no ABNs, addresses or bank details. Static preview date text says “Sample period” and “Sample values”; do not imply the data was refreshed. Dollar values above are the registered combined fixture from [GST.md](../../GST.md#combined-gst-and-profit-acceptance-fixture). Received and paid are independent cash events, never added to incurred cost. Net cash is receipts less payments and labelled “Cash movement, not profit”. In production these sections have distinct periods: activity metrics for the selected period; outstanding balances “As at [end date]”; overdue uses the same date and excludes settled/void balances.
+All fixture names are synthetic, e.g. “Sample Customer A” and “Sample Job 001”; no ABNs, addresses or bank details. Static preview date text says “Sample period” and “Sample values”; do not imply the data was refreshed. Dollar values above are the registered combined fixture from [GST.md](../../GST.md#combined-gst-and-profit-acceptance-fixture). Received and paid are independent cash events, never added to incurred cost. Net cash is receipts less payments and labelled “Cash movement, not profit”. The registered sample includes $400.00 paid against the $990.00 subcontractor bill, $165.00 materials paid at purchase and $100.00 travel paid at purchase: Paid incl GST $665.00; receipts $1,000.00 less payments $665.00 = Net cash $335.00; Supplier outstanding $590.00 relates only to the remaining subcontractor bill. These settlement assumptions do not change incurred cost or profit. Show both footnotes immediately under the cash cards:
+
+- “Sample assumption: materials and travel paid at purchase. In JobFlow each expense records whether it was paid now or put on account.”
+- “Employee labour is an internal cost; wages are not tracked as payments.” Payroll is out of scope; the $300.00 internal labour cost is excluded from this cash sample and supplier outstanding.
+
+In production these sections have distinct periods: activity metrics for the selected period; outstanding balances “As at [end date]”; overdue uses the same date and excludes settled/void balances.
 
 Component composition: AppShell → PageHeader → FilterBar/DateRangePicker → KPIStat groups → DataTable recent jobs → draft summary. Heading sequence: Dashboard h1; Profit and costs, Cash movement, Outstanding balances, Recent jobs, Draft BAS/GST summary h2. Each metric has a basis and period. Do not show an unlabeled aggregate “Revenue”. Gross margin uses invoiced revenue; zero revenue shows N/A.
 
@@ -71,4 +76,4 @@ Tab order follows displayed reading order: skip link, navigation, period control
 
 ## Verification handoff
 
-#23 must render labelled static specimens of loading/empty/error/success for owner comparison, plus registered and unregistered financial labels; no data logic. M4 #57 implements production states and permissions. QA verifies 360, 390, 768, 1024 and 1440px in both themes, keyboard, screen reader, 200% text and 400% zoom. M3/M4 E2E proves the two-click overdue route, updated/settled invoice behaviour and employee/subcontractor data absence. Owner review is still pending in the review sheet.
+#23 must render labelled static specimens of loading/empty/error/success for owner comparison, plus registered and unregistered financial labels; no data logic. M4 #57 implements production states and permissions. QA verifies 360, 390, 768, 1024 and 1440px in both themes, keyboard, screen reader, 200% text and 400% zoom. M3/M4 E2E proves the two-click overdue route, updated/settled invoice behaviour and employee/subcontractor data absence. The owner approved the layouts with these changes in the review sheet; the updated specification awaits supervisor review. Rendered #23 previews require a separate owner review.
