@@ -33,6 +33,9 @@ for (const width of [360, 390, 768, 1024, 1440]) {
       page.on("pageerror", (error) => errors.push(error.message));
       const response = await page.goto("/");
       expect(response?.status()).toBe(200);
+      await page
+        .getByLabel("Appearance", { exact: true })
+        .selectOption(colorScheme);
       await expect(page.getByRole("main")).toBeVisible();
       await expect(
         page.getByText("This is the application scaffold.", { exact: false }),
