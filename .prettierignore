@@ -1,0 +1,10 @@
+pnpm-lock.yaml
+.next/
+node_modules/
+AGENTS.md
+CLAUDE.md
+plan.md
+docs/
+.claude/
+README.md
+.github/pull_request_template.md

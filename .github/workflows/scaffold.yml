@@ -1,0 +1,82 @@
+name: Scaffold checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+  issues: read
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan complete Git history for secrets
+        run: |
+          curl --fail --silent --show-error --location https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz' | sha256sum --check
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks git . --redact --no-banner --log-opts=--all
+  static-analysis:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: github/codeql-action/init@793b778da9c9275a0f276522b27cb5fc14bba279 # v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@793b778da9c9275a0f276522b27cb5fc14bba279 # v4
+        with:
+          output: codeql-results
+      - name: Reject static-analysis findings
+        run: node scripts/check-sarif.mjs codeql-results
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm test
+      - run: pnpm test:integration
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-report-${{ github.event_name }}
+          path: playwright-report/
+          retention-days: 14
+      - name: Check audit exception review deadline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module -e 'if (new Date() >= new Date("2026-11-21T00:00:00+11:00")) throw new Error("Audit exception requires owner review: GHSA-vfj7-8cjw-p6xm")'
+          issue_state=$(gh api repos/arvindjonn09/tax-invoice/issues/10 --jq .state)
+          if [ "$issue_state" != "open" ]; then
+            echo "Audit exception requires review because issue #10 has landed"
+            exit 1
+          fi
+      - name: Audit production dependencies without exceptions
+        run: pnpm audit:prod
+      - name: Audit all dependencies with approved exception
+        run: pnpm audit --audit-level high

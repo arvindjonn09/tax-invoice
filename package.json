@@ -1,0 +1,38 @@
+{
+  "name": "jobflow",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @jobflow/web dev",
+    "build": "pnpm --filter @jobflow/web build",
+    "typecheck": "node scripts/check-strict.mjs && tsc --noEmit && pnpm -r typecheck",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "playwright test",
+    "audit:prod": "node scripts/audit-production.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "16.4.2",
+    "prettier": "^3.6.2",
+    "typescript": "5.9.3",
+    "vitest": "5.0.5",
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^22.19.0"
+  },
+  "type": "module",
+  "pnpm": {
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ]
+    }
+  }
+}
