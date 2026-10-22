@@ -73,7 +73,8 @@ async function main() {
             "exec",
             "vitest",
             "run",
-            "tests/integration",
+            "--project",
+            "integration",
             ...process.argv.slice(2),
           ],
           {
