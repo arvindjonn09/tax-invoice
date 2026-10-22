@@ -14,3 +14,20 @@
 - Removal: upgrade the affected tooling when patched, delete ignoreGhsas and this exception's CI deadline gate, and verify both the full and exception-free production audits pass. Keep this record updated with the resolution.
 
 This exception applies only to the stated development path. The production audit must fail if the same advisory reaches production dependencies.
+
+## #10 re-review — 22 October 2026
+
+Rechecked the npm registry and the [GitHub advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm):
+`braces` remains at 3.0.3; affected versions are <=3.0.3 and no patched release is
+listed. The current `eslint-config-next` / `@next/eslint-plugin-next` release is
+16.4.2 and still requires fast-glob 3.3.1, so a supported toolchain update does not
+remove the vulnerable path. Full audit still reports exactly this ignored high
+finding; the production audit remains exception-free and clean. The #10 negative
+audit fixture independently verifies that an unrelated high vulnerability is rejected.
+
+**No renewal or expiry extension is approved or applied by #10's implementation.**
+The existing November 21 / issue-10-closure guard remains blocking. Before #10
+merges, the owner must choose a remediation or explicitly approve a revised exception
+condition. The concrete narrow renewal option is: retain only this dev-tool GHSA
+until 21 November 2026 Australia/Sydney, remove only the issue-10-closure condition,
+and leave the production audit exception-free. This is a proposal, not authorization.

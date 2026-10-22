@@ -1,3 +1,5 @@
+[![Quality and security checks](https://github.com/arvindjonn09/tax-invoice/actions/workflows/scaffold.yml/badge.svg?branch=main)](https://github.com/arvindjonn09/tax-invoice/actions/workflows/scaffold.yml)
+
 # tax-invoice (JobFlow)
 Build Plan: Custom Job Management & Accounting Application
 
