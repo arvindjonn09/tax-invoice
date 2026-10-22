@@ -80,8 +80,8 @@ identified; they are not claims that the ATO prescribes JobFlow's accounting mod
   supplier identity/ABN, issue date, reason, adjustment effect and sufficient original supply
   identification, plus recipient identity/ABN where the original total meets R4. Locked periods
   require accountant-directed adjustment or correction, not silent mutation. [S5, S6]
-- **R10 — profit:** JobFlow's management gross profit is invoiced revenue excluding sales GST minus
-  incurred exclusive costs plus non-creditable GST. Creditable GST is an asset, sales GST a
+- **R10 — profit:** JobFlow's management gross profit = invoiced revenue excluding sales GST −
+  (incurred GST-exclusive costs + non-creditable GST). Total incurred cost includes the non-creditable GST. Creditable GST is an asset, sales GST a
   liability. Payments settle balances and never create a second cost or alter gross profit.
   This product definition is consistent with the GST separation in ATO guidance; it is not an
   income-tax deductibility or statutory financial-reporting determination. [S3, S4, S9]
