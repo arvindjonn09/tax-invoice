@@ -10,3 +10,5 @@ README.md
 .github/pull_request_template.md
 
 packages/database/src/generated/
+
+coverage/

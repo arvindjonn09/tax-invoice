@@ -489,3 +489,11 @@ Prisma uses forward migrations, not automatic down migrations. Stop services wit
 to preserve volumes. `docker compose down --volumes` deletes **all local Compose database and MinIO data**;
 use it only for disposable environments. Initial test-database creation runs only on a fresh volume.
 There is no demo seed until its own milestone issue; demo rules and production refusal remain required.
+
+## Test projects and isolation
+
+See [testing strategy](docs/testing/strategy.md) for named Vitest projects, per-test
+transaction rollback, deterministic synthetic factories and browser evidence.
+`pnpm test:coverage` writes domain-only reports to ignored `coverage/domain/`.
+The reserved domain package currently has zero executable statements; a 0/0 report
+is not GST/profit coverage. Feature acceptance tests arrive with their modules.
