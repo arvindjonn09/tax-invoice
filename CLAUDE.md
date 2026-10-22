@@ -68,7 +68,7 @@ and fills in the commands below.
 ```
 issue (status:ready) → owner agent claims → branch → code + tests → PR (Closes #n)
   → CI green → qa-engineer + code-reviewer (+ security-engineer for auth/money/files/PII)
-  → owner (user) merges → issue closes → orchestrator marks dependants status:ready
+  → Claude supervisor review "Ready to merge" → merge (AGENTS.md merge policy) → issue closes → orchestrator marks dependants status:ready
 ```
 
 ### Labels (`scripts/setup-labels.sh`)
@@ -95,8 +95,9 @@ issue (status:ready) → owner agent claims → branch → code + tests → PR (
 6. **Hand-off:** finish with an issue comment — done / left / next agent. Blocked → `status:blocked` + reason.
 7. **Stay in lane:** work for another agent goes into an issue labelled for that agent.
 8. **Evidence over claims:** report actual command output; say what wasn't run.
-9. **Never** commit secrets, real customer/employee data, real ABNs or `.env` files; never force-push `main`. Don't
-   merge PRs or close issues unless the user says so.
+9. **Never** commit secrets, real customer/employee data, real ABNs or `.env` files; never force-push `main`. Merge
+   only under the **merge policy in `AGENTS.md`** (green CI + a "Ready to merge" Claude supervisor review of the exact
+   head commit, dependency order, merge commit). Close issues only through merged PRs.
 
 ## Project docs layout
 - `docs/*.md` — specification (above)

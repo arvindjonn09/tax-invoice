@@ -67,6 +67,19 @@ TypeScript strict type-check, lint, unit + integration tests (incl. authorisatio
 audit, secret scan, static analysis) pass in CI before merge. Write tests and migrations alongside each change. Do not
 claim a feature complete until tests run. Report known limitations. Keep docs and the milestone checklist updated.
 
+## Merge policy (owner decision, 22 October 2026)
+A coding agent (e.g. Codex) may merge a PR **only when all of these are true**:
+1. Every CI check on the PR's **current head commit** has passed.
+2. A comment headed **"🔎 Claude supervisor review (<sha7>)"** exists for that **exact head commit** and its verdict
+   says **"Ready to merge"**. Any new commit needs a new review. No review, or any Blocking finding, means no merge.
+3. Every PR/issue it depends on is already merged, and the PR targets `main`. Merge in dependency order; if a stacked
+   PR's base branch was merged, retarget it to `main` first and wait for CI and review again.
+4. It uses a **merge commit** (not squash or rebase) and doesn't bypass checks, force-push or use admin overrides.
+
+After merging: confirm the linked issue closed, and continue with the next unblocked issue.
+These still need the **owner**: branch-protection changes (#10), design review of the previews (#22, #23), audit or
+security exceptions, accountant sign-off (#67), and anything that deploys, costs money or touches production.
+
 ## Financial fixture (GST-exclusive / not registered)
 250000 invoice cents; costs 90000+30000+15000+10000 = 145000 cents; 105000 profit, 42% margin. Receipt 100000 → 150000
 owing. Contractor payment 40000 against 90000 bill → 50000 owing. Payments must not change gross profit.
