@@ -36,7 +36,7 @@ and fills in the commands below.
 | Type-check | `pnpm typecheck` |
 | Lint | `pnpm lint` (format: `pnpm format:check`) |
 | Unit / integration tests | `pnpm test` / `pnpm test:integration` |
-| E2E tests | `pnpm exec playwright install chromium` then `pnpm test:e2e` |
+| E2E tests | `pnpm exec playwright install --with-deps chromium` then `pnpm test:e2e` (disposable migrated database) |
 | DB generate / migrate / test reset | `pnpm db:generate` / `pnpm db:migrate` / `RESET_TEST_DATABASE=yes pnpm db:test:reset` (local test only) |
 | Demo seed (local only) | `DEMO_SEED=yes DEMO_PASSWORD=<12+ chars> pnpm db:seed:demo` (refused in production) |
 | Production build / start | `pnpm build` / `pnpm --filter @jobflow/web start` |

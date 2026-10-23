@@ -99,6 +99,20 @@ export function createAuth(settings: AuthSettings) {
       session: {
         create: {
           before: async (session) => {
+            // Accounts whose company access was deactivated cannot establish
+            // new sessions. Never-member accounts can sign in to accept an invite.
+            const memberships = await db.membership.findMany({
+              where: { userId: session.userId },
+              select: { isActive: true },
+            });
+            if (
+              memberships.length > 0 &&
+              !memberships.some((m) => m.isActive)
+            ) {
+              throw new APIError("FORBIDDEN", {
+                message: "Account access is inactive",
+              });
+            }
             if (!production) return;
             const user = await db.user.findUnique({
               where: { id: session.userId },
