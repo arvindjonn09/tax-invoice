@@ -452,3 +452,41 @@ describe("access", () => {
     ).toBe("draft");
   });
 });
+
+describe("audit integrity", () => {
+  it("audits concurrent edits as a real before→after chain and skips no-ops", async () => {
+    const id = (await newJob({ title: "Chain 0" })).body.id;
+    await Promise.all(
+      ["Chain 1", "Chain 2", "Chain 3"].map((title) =>
+        r().update(call("manager", "PATCH", { title }), one(id)),
+      ),
+    );
+    const events = await db.auditEvent.findMany({
+      where: { companyId, targetId: id, action: "job.updated" },
+    });
+    const changes = events.map(
+      (event) =>
+        (
+          event.metadata as {
+            changes: { title: { before: string; after: string } };
+          }
+        ).changes.title,
+    );
+    expect(changes).toHaveLength(3);
+    const befores = changes.map((c) => c.before);
+    expect(new Set(befores).size).toBe(3);
+    for (const before of befores)
+      expect(["Chain 0", ...changes.map((c) => c.after)]).toContain(before);
+
+    const current = (await db.job.findUniqueOrThrow({ where: { id } })).title;
+    expect(
+      (await r().update(call("manager", "PATCH", { title: current }), one(id)))
+        .status,
+    ).toBe(200);
+    expect(
+      await db.auditEvent.count({
+        where: { companyId, targetId: id, action: "job.updated" },
+      }),
+    ).toBe(3);
+  });
+});

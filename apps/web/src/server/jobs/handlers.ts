@@ -23,6 +23,7 @@ import { withAudit } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { toDay } from "../company/gst";
+import { lockRow } from "../db/locks";
 import {
   defined,
   optionalText,
@@ -205,6 +206,10 @@ async function nextNumber(
   return value;
 }
 
+function jobResponse(actor: Actor, job: Job): Response {
+  return privateJson(visibleFields(actor, view(job), JOB_FIELDS));
+}
+
 export function jobHandlers(db: () => PrismaClient) {
   const list: PolicyHandler<unknown> = async ({ actor, request }) => {
     const params = new URL(request.url).searchParams;
@@ -321,7 +326,12 @@ export function jobHandlers(db: () => PrismaClient) {
     });
   };
 
-  /** Details only; status moves go through `changeStatus`. */
+  /**
+   * Details only; status moves go through `changeStatus`. The job is locked
+   * and re-read inside the audited transaction, so the editability check and
+   * the audit "before" both see the row this update really replaces. Only
+   * changed fields are written; a no-op records nothing.
+   */
   const update: PolicyHandler<JobContext> = async ({
     actor,
     request,
@@ -329,42 +339,53 @@ export function jobHandlers(db: () => PrismaClient) {
   }) => {
     const parsed = UpdateJob.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
-    const before = await ownJob(db(), actor, (await context.params).id);
-    if (!isJobEditable(before.status))
-      return fail(409, `A ${before.status} job can't be edited`);
+    const owned = await ownJob(db(), actor, (await context.params).id);
     const { dueOn, ...rest } = defined(parsed.data);
     if (rest.locationId !== undefined) {
       const problem = await siteProblem(
         db(),
         actor.companyId,
-        before.customerId,
+        owned.customerId,
         rest.locationId,
         { requireActiveCustomer: false },
       );
       if (problem) return fail(400, problem[1], problem[0]);
     }
-    const data = {
+    const data: Partial<Job> = {
       ...rest,
       ...(dueOn !== undefined
         ? { dueOn: dueOn ? new Date(`${dueOn}T00:00:00Z`) : null }
         : {}),
     };
-    const keys = Object.keys(data) as (keyof Job)[];
-    const job = await withAudit(db(), async (tx, audit) => {
-      const updated = await tx.job.update({ where: { id: before.id }, data });
-      const pick = (record: Job) =>
-        Object.fromEntries(keys.map((key) => [key, record[key]]));
-      await audit({
-        companyId: actor.companyId,
-        actorUserId: actor.userId,
-        action: "job.updated",
-        target: { type: "job", id: before.id },
-        before: pick(before),
-        after: pick(updated),
+    return inTransaction(async () => {
+      const job = await withAudit(db(), async (tx, audit) => {
+        const before = await lockedJob(tx, owned.id);
+        if (!isJobEditable(before.status))
+          throw new Refusal(
+            fail(409, `A ${before.status} job can't be edited`),
+          );
+        const changed = (Object.keys(data) as (keyof Job)[]).filter(
+          (key) => !same(before[key], data[key]),
+        );
+        if (changed.length === 0) throw new Refusal(jobResponse(actor, before));
+        const updated = await tx.job.update({
+          where: { id: owned.id },
+          data: Object.fromEntries(changed.map((key) => [key, data[key]])),
+        });
+        const pick = (record: Job) =>
+          Object.fromEntries(changed.map((key) => [key, record[key]]));
+        await audit({
+          companyId: actor.companyId,
+          actorUserId: actor.userId,
+          action: "job.updated",
+          target: { type: "job", id: owned.id },
+          before: pick(before),
+          after: pick(updated),
+        });
+        return updated;
       });
-      return updated;
+      return jobResponse(actor, job);
     });
-    return privateJson(visibleFields(actor, view(job), JOB_FIELDS));
   };
 
   /**
@@ -426,38 +447,44 @@ export function jobHandlers(db: () => PrismaClient) {
   }) => {
     const parsed = CreateVisit.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
-    const job = await ownJob(db(), actor, (await context.params).id);
-    if (!isJobEditable(job.status))
-      return fail(409, `A ${job.status} job can't get new visits`);
+    const owned = await ownJob(db(), actor, (await context.params).id);
     const data = defined(parsed.data);
     const startsAt = new Date(data.startsAt);
     const endsAt = data.endsAt ? new Date(data.endsAt) : null;
     if (endsAt && endsAt <= startsAt)
       return fail(400, "The visit must end after it starts", "endsAt");
-    const visit = await withAudit(db(), async (tx, audit) => {
-      const created = await tx.jobVisit.create({
-        data: {
+    return inTransaction(async () => {
+      const visit = await withAudit(db(), async (tx, audit) => {
+        const job = await lockedJob(tx, owned.id);
+        if (!isJobEditable(job.status))
+          throw new Refusal(
+            fail(409, `A ${job.status} job can't get new visits`),
+          );
+        const created = await tx.jobVisit.create({
+          data: {
+            companyId: actor.companyId,
+            jobId: job.id,
+            startsAt,
+            endsAt,
+            ...(data.status ? { status: data.status } : {}),
+            notes: data.notes ?? null,
+            createdBy: actor.userId,
+          },
+        });
+        await audit({
           companyId: actor.companyId,
-          jobId: job.id,
-          startsAt,
-          endsAt,
-          ...(data.status ? { status: data.status } : {}),
-          notes: data.notes ?? null,
-          createdBy: actor.userId,
-        },
+          actorUserId: actor.userId,
+          action: "job_visit.created",
+          target: { type: "job_visit", id: created.id },
+          after: { jobId: job.id, startsAt, endsAt, status: created.status },
+        });
+        return created;
       });
-      await audit({
-        companyId: actor.companyId,
-        actorUserId: actor.userId,
-        action: "job_visit.created",
-        target: { type: "job_visit", id: created.id },
-        after: { jobId: job.id, startsAt, endsAt, status: created.status },
-      });
-      return created;
+      return privateJson(visitView(visit), { status: 201 });
     });
-    return privateJson(visitView(visit), { status: 201 });
   };
 
+  /** Reschedule, complete or cancel a visit; read and written under the job lock. */
   const updateVisit: PolicyHandler<VisitContext> = async ({
     actor,
     request,
@@ -466,56 +493,94 @@ export function jobHandlers(db: () => PrismaClient) {
     const parsed = UpdateVisit.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
     const { id, visitId } = await context.params;
-    const job = await ownJob(db(), actor, id);
+    const owned = await ownJob(db(), actor, id);
     const safe = uuidOrNull(visitId);
-    const before = requireSameCompany(
-      actor,
-      safe
-        ? await db().jobVisit.findFirst({ where: { id: safe, jobId: job.id } })
-        : null,
-    );
     const data = defined(parsed.data);
-    const startsAt = data.startsAt ? new Date(data.startsAt) : before.startsAt;
-    const endsAt =
-      data.endsAt === undefined
-        ? before.endsAt
-        : data.endsAt
-          ? new Date(data.endsAt)
-          : null;
-    if (endsAt && endsAt <= startsAt)
-      return fail(400, "The visit must end after it starts", "endsAt");
-    const visit = await withAudit(db(), async (tx, audit) => {
-      const updated = await tx.jobVisit.update({
-        where: { id: before.id },
-        data: {
-          startsAt,
-          endsAt,
-          ...(data.status ? { status: data.status } : {}),
-          ...(data.notes !== undefined ? { notes: data.notes } : {}),
-        },
+    return inTransaction(async () => {
+      const visit = await withAudit(db(), async (tx, audit) => {
+        await lockedJob(tx, owned.id);
+        const before = requireSameCompany(
+          actor,
+          safe
+            ? await tx.jobVisit.findFirst({
+                where: { id: safe, jobId: owned.id },
+              })
+            : null,
+        );
+        const next = {
+          startsAt: data.startsAt ? new Date(data.startsAt) : before.startsAt,
+          endsAt:
+            data.endsAt === undefined
+              ? before.endsAt
+              : data.endsAt
+                ? new Date(data.endsAt)
+                : null,
+          status: data.status ?? before.status,
+          notes: data.notes === undefined ? before.notes : data.notes,
+        };
+        if (next.endsAt && next.endsAt <= next.startsAt)
+          throw new Refusal(
+            fail(400, "The visit must end after it starts", "endsAt"),
+          );
+        const changed = (Object.keys(next) as (keyof typeof next)[]).filter(
+          (key) => !same(before[key], next[key]),
+        );
+        if (changed.length === 0)
+          throw new Refusal(privateJson(visitView(before)));
+        const updated = await tx.jobVisit.update({
+          where: { id: before.id },
+          data: Object.fromEntries(changed.map((key) => [key, next[key]])),
+        });
+        await audit({
+          companyId: actor.companyId,
+          actorUserId: actor.userId,
+          action: "job_visit.updated",
+          target: { type: "job_visit", id: before.id },
+          before: Object.fromEntries(changed.map((key) => [key, before[key]])),
+          after: Object.fromEntries(changed.map((key) => [key, updated[key]])),
+        });
+        return updated;
       });
-      await audit({
-        companyId: actor.companyId,
-        actorUserId: actor.userId,
-        action: "job_visit.updated",
-        target: { type: "job_visit", id: before.id },
-        before: {
-          startsAt: before.startsAt,
-          endsAt: before.endsAt,
-          status: before.status,
-        },
-        after: {
-          startsAt: updated.startsAt,
-          endsAt: updated.endsAt,
-          status: updated.status,
-        },
-      });
-      return updated;
+      return privateJson(visitView(visit));
     });
-    return privateJson(visitView(visit));
   };
 
   return { list, read, create, update, changeStatus, addVisit, updateVisit };
 }
 
 class StatusRaceError extends Error {}
+
+/** Ends a transaction early with a ready response (nothing is written). */
+export class Refusal extends Error {
+  constructor(readonly response: Response) {
+    super("refused");
+  }
+}
+
+/** Run a handler body whose transaction may end in a Refusal. */
+export async function inTransaction(
+  body: () => Promise<Response>,
+): Promise<Response> {
+  try {
+    return await body();
+  } catch (error) {
+    if (error instanceof Refusal) return error.response;
+    throw error;
+  }
+}
+
+/** Lock the job row for this transaction and return its current state. */
+export async function lockedJob(
+  tx: Prisma.TransactionClient,
+  id: string,
+): Promise<Job> {
+  await lockRow(tx, "jobs", id);
+  return tx.job.findUniqueOrThrow({ where: { id } });
+}
+
+/** Value equality for Prisma scalars (Dates, bigints, strings, null). */
+function same(a: unknown, b: unknown): boolean {
+  if (a instanceof Date && b instanceof Date)
+    return a.getTime() === b.getTime();
+  return a === b;
+}
