@@ -203,6 +203,8 @@ model Membership {
   jobsCreated        Job[]
   jobEventsCreated   JobStatusEvent[]
   jobVisitsCreated   JobVisit[]
+  assignmentsCreated Assignment[]             @relation("AssignmentCreator")
+  assignmentsEnded   Assignment[]             @relation("AssignmentEnder")
   documentsCreated   Document[]
   contractorsCreated Contractor[]             @relation("ContractorCreator")
   contractorRecords  Contractor[]             @relation("ContractorUser")
@@ -258,19 +260,20 @@ model IdempotencyKey {
 /// An employee who can be assigned to jobs (#30). No payroll data.
 /// Optionally linked to a user account of the same company.
 model Employee {
-  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId String      @map("company_id") @db.Uuid
-  userId    String?     @map("user_id") @db.Uuid
-  name      String      @db.VarChar(200)
-  email     String?     @db.VarChar(320)
-  phone     String?     @db.VarChar(30)
-  isActive  Boolean     @default(true) @map("is_active")
-  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy String      @map("created_by") @db.Uuid
-  company   Company     @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  user      Membership? @relation("EmployeeUser", fields: [companyId, userId], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  creator   Membership  @relation("EmployeeCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String       @map("company_id") @db.Uuid
+  userId      String?      @map("user_id") @db.Uuid
+  name        String       @db.VarChar(200)
+  email       String?      @db.VarChar(320)
+  phone       String?      @db.VarChar(30)
+  isActive    Boolean      @default(true) @map("is_active")
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy   String       @map("created_by") @db.Uuid
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user        Membership?  @relation("EmployeeUser", fields: [companyId, userId], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership   @relation("EmployeeCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  assignments Assignment[]
 
   @@unique([companyId, id])
   @@unique([companyId, userId])
@@ -414,6 +417,7 @@ model Job {
   creator                   Membership        @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   statusEvents              JobStatusEvent[]
   visits                    JobVisit[]
+  assignments               Assignment[]
   contractorOffers          ContractorOffer[]
 
   @@unique([companyId, number])
@@ -445,20 +449,22 @@ model JobStatusEvent {
 }
 
 model JobVisit {
-  id        String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId String         @map("company_id") @db.Uuid
-  jobId     String         @map("job_id") @db.Uuid
-  startsAt  DateTime       @map("starts_at") @db.Timestamptz(3)
-  endsAt    DateTime?      @map("ends_at") @db.Timestamptz(3)
-  status    JobVisitStatus @default(scheduled)
-  notes     String?        @db.VarChar(1000)
-  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy String         @map("created_by") @db.Uuid
-  job       Job            @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  creator   Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String         @map("company_id") @db.Uuid
+  jobId       String         @map("job_id") @db.Uuid
+  startsAt    DateTime       @map("starts_at") @db.Timestamptz(3)
+  endsAt      DateTime?      @map("ends_at") @db.Timestamptz(3)
+  status      JobVisitStatus @default(scheduled)
+  notes       String?        @db.VarChar(1000)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy   String         @map("created_by") @db.Uuid
+  job         Job            @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  assignments Assignment[]
 
   @@unique([companyId, id])
+  @@unique([companyId, jobId, id])
   @@index([companyId, jobId, startsAt])
   @@index([companyId, createdBy])
   @@map("job_visits")
@@ -482,6 +488,32 @@ model UserInvitation {
   @@index([companyId, createdAt, id])
   @@index([companyId, createdBy])
   @@map("user_invitations")
+}
+
+/// An employee assigned to a whole job (visitId null) or one of its visits
+/// (#32). Ended, never deleted. Partial unique indexes (migration) allow one
+/// live assignment per employee per job/visit.
+model Assignment {
+  id         String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId  String      @map("company_id") @db.Uuid
+  jobId      String      @map("job_id") @db.Uuid
+  employeeId String      @map("employee_id") @db.Uuid
+  visitId    String?     @map("visit_id") @db.Uuid
+  assignedAt DateTime    @default(now()) @map("assigned_at") @db.Timestamptz(3)
+  endedAt    DateTime?   @map("ended_at") @db.Timestamptz(3)
+  endedBy    String?     @map("ended_by") @db.Uuid
+  createdBy  String      @map("created_by") @db.Uuid
+  job        Job         @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  employee   Employee    @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  visit      JobVisit?   @relation(fields: [companyId, jobId, visitId], references: [companyId, jobId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator    Membership  @relation("AssignmentCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  ender      Membership? @relation("AssignmentEnder", fields: [companyId, endedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@index([companyId, employeeId, endedAt])
+  @@index([companyId, jobId])
+  @@index([companyId, createdBy])
+  @@map("assignments")
 }
 
 enum DocumentKind {
