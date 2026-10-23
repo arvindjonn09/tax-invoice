@@ -36,6 +36,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [x] Private document storage with signed URLs — #34: app-mediated upload with content sniffing, random keys, 5-minute HMAC download links after authz
 - [ ] Contractors, offers, approvals and acceptance history; restricted contractor portal
 - [ ] Employee timesheets with cost-rate snapshots
+  - #38 schema + API: append-only effective-dated employee cost rates; timesheets per job/visit by live-assigned employees (re-checked under job→employee locks); approval snapshots the rate on the work date and the cost once; decided timesheets frozen, reversal corrections; rates/costs only with employee.cost_rate.read; screens remain #39
 - [ ] Expenses with GST code, creditable portion, receipts and approvals
 - [ ] Work evidence and completion approval
 

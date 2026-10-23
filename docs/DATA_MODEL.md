@@ -46,3 +46,12 @@ be promoted until restored. A partial unique SQL index on `(company_id, customer
 where `is_primary AND archived_at IS NULL` also rejects competing active primaries
 from direct database writes. The additive migration refuses inconsistent existing data
 rather than silently repairing it; its test-only rollback removes only that index.
+
+## Employee cost rates and timesheets (#38)
+
+- `employee_rate_history`: an internal hourly cost (integer cents, $0–$1m) per employee from an `effective_from` date. It's **append-only** (trigger), with one rate per start date; a correction is a new start date. There's no payroll, super or PAYG: this is a management cost rate only.
+- `timesheets`: minutes (1–1440) on a work date for a job, optionally one of its visits (composite FK, so the visit belongs to that job). Only an employee **live-assigned** to the job (or, for a visit-only assignment, to that visit) can submit, and never for a cancelled visit or a future date. Eligibility is re-checked inside the write transaction after taking #32's locks (job, then employee).
+- **Approval** snapshots the rate in effect on the work date (`rate_id`, `hourly_cost_cents`) and `cost_cents` = round(minutes × rate / 60) **once**. A rate added later, even backdated, never changes an approved timesheet. With no rate on the work date, approval is refused (409) rather than guessed. Labour carries no GST, so it enters job cost as an internal cost.
+- **Never counted twice:** a decided timesheet is frozen by a trigger (no edits, no deletes); a correction is an approved reversal with negated minutes and cost at the same snapshotted rate (unique per timesheet). Job labour is the sum of `cost_cents` over approved rows.
+- Visibility: employees see their own timesheets without rate or cost. The office list needs `timesheet.approve`; rates and costs additionally need `employee.cost_rate.read` (owner, manager).
+

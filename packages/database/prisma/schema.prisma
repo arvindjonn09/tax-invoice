@@ -206,7 +206,10 @@ model Membership {
   assignmentsEnded   Assignment[]             @relation("AssignmentEnder")
   documentsCreated   Document[]
 
-  invitationsCreated UserInvitation[]
+  invitationsCreated  UserInvitation[]
+  ratesCreated        EmployeeRate[]   @relation("EmployeeRateCreator")
+  timesheetsSubmitted Timesheet[]      @relation("TimesheetSubmitter")
+  timesheetsDecided   Timesheet[]      @relation("TimesheetDecider")
 
   @@unique([companyId, userId])
   @@index([userId])
@@ -254,20 +257,22 @@ model IdempotencyKey {
 /// An employee who can be assigned to jobs (#30). No payroll data.
 /// Optionally linked to a user account of the same company.
 model Employee {
-  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId String      @map("company_id") @db.Uuid
-  userId    String?     @map("user_id") @db.Uuid
-  name      String      @db.VarChar(200)
-  email     String?     @db.VarChar(320)
-  phone     String?     @db.VarChar(30)
-  isActive  Boolean     @default(true) @map("is_active")
-  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy String      @map("created_by") @db.Uuid
-  company   Company     @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  user      Membership? @relation("EmployeeUser", fields: [companyId, userId], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  creator   Membership  @relation("EmployeeCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String         @map("company_id") @db.Uuid
+  userId      String?        @map("user_id") @db.Uuid
+  name        String         @db.VarChar(200)
+  email       String?        @db.VarChar(320)
+  phone       String?        @db.VarChar(30)
+  isActive    Boolean        @default(true) @map("is_active")
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy   String         @map("created_by") @db.Uuid
+  company     Company        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user        Membership?    @relation("EmployeeUser", fields: [companyId, userId], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership     @relation("EmployeeCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   assignments Assignment[]
+  rates       EmployeeRate[]
+  timesheets  Timesheet[]
 
   @@unique([companyId, id])
   @@unique([companyId, userId])
@@ -392,26 +397,27 @@ enum JobVisitStatus {
 
 /// The core work order (#31). Price is GST-exclusive integer cents.
 model Job {
-  id                         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId                  String           @map("company_id") @db.Uuid
-  number                     Int
-  reference                  String           @db.VarChar(30)
-  customerId                 String           @map("customer_id") @db.Uuid
-  locationId                 String?          @map("location_id") @db.Uuid
-  title                      String           @db.VarChar(200)
-  description                String?          @db.VarChar(4000)
-  status                     JobStatus        @default(draft)
-  agreedPriceExclusiveCents  BigInt?          @map("agreed_price_exclusive_cents")
-  dueOn                      DateTime?        @map("due_on") @db.Date
-  createdAt                  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt                  DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy                  String           @map("created_by") @db.Uuid
-  customer                   Customer         @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  location                   Location?        @relation(fields: [companyId, customerId, locationId], references: [companyId, customerId, id], onDelete: NoAction, onUpdate: NoAction)
-  creator                    Membership       @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  statusEvents               JobStatusEvent[]
-  visits                     JobVisit[]
-  assignments                Assignment[]
+  id                        String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId                 String           @map("company_id") @db.Uuid
+  number                    Int
+  reference                 String           @db.VarChar(30)
+  customerId                String           @map("customer_id") @db.Uuid
+  locationId                String?          @map("location_id") @db.Uuid
+  title                     String           @db.VarChar(200)
+  description               String?          @db.VarChar(4000)
+  status                    JobStatus        @default(draft)
+  agreedPriceExclusiveCents BigInt?          @map("agreed_price_exclusive_cents")
+  dueOn                     DateTime?        @map("due_on") @db.Date
+  createdAt                 DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy                 String           @map("created_by") @db.Uuid
+  customer                  Customer         @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  location                  Location?        @relation(fields: [companyId, customerId, locationId], references: [companyId, customerId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator                   Membership       @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  statusEvents              JobStatusEvent[]
+  visits                    JobVisit[]
+  assignments               Assignment[]
+  timesheets                Timesheet[]
 
   @@unique([companyId, number])
   @@unique([companyId, id])
@@ -442,19 +448,20 @@ model JobStatusEvent {
 }
 
 model JobVisit {
-  id        String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId String         @map("company_id") @db.Uuid
-  jobId     String         @map("job_id") @db.Uuid
-  startsAt  DateTime       @map("starts_at") @db.Timestamptz(3)
-  endsAt    DateTime?      @map("ends_at") @db.Timestamptz(3)
-  status    JobVisitStatus @default(scheduled)
-  notes     String?        @db.VarChar(1000)
-  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy String         @map("created_by") @db.Uuid
-  job       Job            @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  creator   Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String         @map("company_id") @db.Uuid
+  jobId       String         @map("job_id") @db.Uuid
+  startsAt    DateTime       @map("starts_at") @db.Timestamptz(3)
+  endsAt      DateTime?      @map("ends_at") @db.Timestamptz(3)
+  status      JobVisitStatus @default(scheduled)
+  notes       String?        @db.VarChar(1000)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy   String         @map("created_by") @db.Uuid
+  job         Job            @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   assignments Assignment[]
+  timesheets  Timesheet[]
 
   @@unique([companyId, id])
   @@unique([companyId, jobId, id])
@@ -537,4 +544,74 @@ model Document {
   @@unique([companyId, id])
   @@index([companyId, createdBy])
   @@map("documents")
+}
+
+enum TimesheetStatus {
+  submitted
+  approved
+  rejected
+
+  @@map("timesheet_status")
+}
+
+/// Effective-dated internal cost rate (#38). Append-only (SQL trigger).
+model EmployeeRate {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId       String      @map("company_id") @db.Uuid
+  employeeId      String      @map("employee_id") @db.Uuid
+  effectiveFrom   DateTime    @map("effective_from") @db.Date
+  hourlyCostCents BigInt      @map("hourly_cost_cents")
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy       String      @map("created_by") @db.Uuid
+  employee        Employee    @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator         Membership  @relation("EmployeeRateCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  timesheets      Timesheet[]
+
+  @@unique([companyId, id])
+  @@unique([companyId, employeeId, effectiveFrom], map: "employee_rate_history_employee_from_key")
+  @@index([companyId, createdBy])
+  @@map("employee_rate_history")
+}
+
+/// Time on a job or visit (#38). Cost is incurred once, on approval, from the
+/// snapshot; a SQL trigger freezes decided timesheets and a correction is an
+/// approved reversal (reversesId) with negated minutes and cost.
+model Timesheet {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId       String          @map("company_id") @db.Uuid
+  employeeId      String          @map("employee_id") @db.Uuid
+  jobId           String          @map("job_id") @db.Uuid
+  visitId         String?         @map("visit_id") @db.Uuid
+  workDate        DateTime        @map("work_date") @db.Date
+  minutes         Int
+  note            String?         @db.VarChar(500)
+  status          TimesheetStatus @default(submitted)
+  decisionNote    String?         @map("decision_note") @db.VarChar(500)
+  decidedAt       DateTime?       @map("decided_at") @db.Timestamptz(3)
+  decidedBy       String?         @map("decided_by") @db.Uuid
+  rateId          String?         @map("rate_id") @db.Uuid
+  hourlyCostCents BigInt?         @map("hourly_cost_cents")
+  costCents       BigInt?         @map("cost_cents")
+  reversesId      String?         @map("reverses_id") @db.Uuid
+  submittedBy     String          @map("submitted_by") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  employee        Employee        @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  job             Job             @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  visit           JobVisit?       @relation(fields: [companyId, jobId, visitId], references: [companyId, jobId, id], onDelete: NoAction, onUpdate: NoAction)
+  rate            EmployeeRate?   @relation(fields: [companyId, rateId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  reverses        Timesheet?      @relation("TimesheetReversal", fields: [companyId, reversesId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  reversedBy      Timesheet?      @relation("TimesheetReversal")
+  submitter       Membership      @relation("TimesheetSubmitter", fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  decider         Membership?     @relation("TimesheetDecider", fields: [companyId, decidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@unique([companyId, reversesId])
+  @@index([companyId, jobId])
+  @@index([companyId, employeeId, workDate])
+  @@index([companyId, status])
+  @@index([companyId, submittedBy])
+  @@index([companyId, decidedBy])
+  @@index([companyId, rateId])
+  @@map("timesheets")
 }

@@ -10,3 +10,4 @@ export * from "./bas";
 export * from "./abn";
 export * from "./registration";
 export * from "./jobs";
+export * from "./labour";
