@@ -16,8 +16,9 @@ export type AuthSettings = {
   db: PrismaClient;
   /** At least 32 random characters; never committed (BETTER_AUTH_SECRET). */
   secret: string;
-  /** Public origin of the app, e.g. https://jobflow.example.com (BETTER_AUTH_URL). */
+  /** Public origin of the app, e.g. https://jobflow.example.com (BETTER_AUTH_URL). HTTPS ⇒ Secure cookies. */
   baseURL: string;
+  /** The real production environment: refuses demo accounts, forces Secure cookies. */
   production: boolean;
 };
 
@@ -34,6 +35,9 @@ export function createAuth(settings: AuthSettings) {
     throw new Error("BETTER_AUTH_SECRET must be at least 32 characters");
   }
   const { db, production } = settings;
+  // Secure cookies whenever the app is served over HTTPS, and always in production.
+  const secureCookies =
+    production || new URL(settings.baseURL).protocol === "https:";
   return betterAuth({
     appName: "JobFlow",
     secret: settings.secret,
@@ -82,11 +86,11 @@ export function createAuth(settings: AuthSettings) {
       disableOriginCheck: false,
       disableCSRFCheck: false,
       cookiePrefix: "jobflow",
-      useSecureCookies: production,
+      useSecureCookies: secureCookies,
       defaultCookieAttributes: {
         httpOnly: true,
         sameSite: "lax",
-        secure: production,
+        secure: secureCookies,
         path: "/",
       },
       database: { generateId: "uuid" },

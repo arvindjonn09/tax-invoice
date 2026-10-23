@@ -344,3 +344,27 @@ it("refuses a secret shorter than 32 characters", () => {
     createAuth({ db, secret: "too-short", baseURL: ORIGIN, production: false }),
   ).toThrow("at least 32");
 });
+
+it("uses Secure cookies for an HTTPS origin even outside production", async () => {
+  const https = createAuth({
+    db,
+    secret: SECRET,
+    baseURL: "https://jobflow.invalid",
+    production: false,
+  });
+  const response = await https.handler(
+    new Request("https://jobflow.invalid/api/auth/sign-in/email", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://jobflow.invalid",
+        "x-forwarded-for": nextIp(),
+      },
+      body: JSON.stringify({ email: emails.owner, password: PASSWORD }),
+    }),
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.getSetCookie().join()).toMatch(
+    /__Secure-jobflow\.session_token=.*; Secure/i,
+  );
+});
