@@ -196,6 +196,14 @@ export function customerHandlers(db: () => PrismaClient) {
     const { page, take, skip } = parsePage(params);
     const status = STATUS.parse(params.get("status") ?? undefined);
     const q = params.get("q")?.trim().slice(0, 100);
+    const sort = z
+      .enum(["name", "suburb", "createdAt"])
+      .catch("name")
+      .parse(params.get("sort"));
+    const direction = z
+      .enum(["asc", "desc"])
+      .catch("asc")
+      .parse(params.get("direction"));
     const filter: Prisma.CustomerWhereInput = {
       ...(status === "all"
         ? {}
@@ -215,7 +223,7 @@ export function customerHandlers(db: () => PrismaClient) {
     const [rows, total] = await Promise.all([
       db().customer.findMany({
         where,
-        orderBy: [{ name: "asc" }, { id: "asc" }],
+        orderBy: [{ [sort]: direction }, { id: "asc" }],
         take,
         skip,
       }),
