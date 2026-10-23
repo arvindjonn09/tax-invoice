@@ -57,6 +57,8 @@ describe("policy matrix", () => {
   it("matches the documented role summary", () => {
     expect(can("manager", "job.assign")).toBe(true);
     expect(can("manager", "expense.approve")).toBe(true);
+    expect(can("manager", "expense.submit_own")).toBe(true);
+    expect(can("accountant", "expense.submit_own")).toBe(false);
     expect(can("manager", "invoice.issue")).toBe(false);
     expect(can("manager", "gst_settings.update")).toBe(false);
     expect(can("accountant", "invoice.issue")).toBe(true);
