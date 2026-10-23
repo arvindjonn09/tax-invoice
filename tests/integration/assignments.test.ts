@@ -561,3 +561,33 @@ it("rechecks employee deactivation after a stale assignment preflight", async ()
     await db.assignment.count({ where: { employeeId: employee.id } }),
   ).toBe(0);
 });
+
+it("commits one assignment and audit when concurrent duplicate requests race", async () => {
+  const template = await db.job.findUniqueOrThrow({
+    where: { id: unassignedJob },
+  });
+  const job = await db.job.create({
+    data: {
+      companyId,
+      customerId: template.customerId,
+      createdBy: userIds.owner,
+      number: 91,
+      reference: "JOB-91",
+      title: "Concurrent assignment fixture",
+      status: "approved",
+    },
+  });
+  const results = await Promise.all([
+    assign(job.id, { employeeId: workerEmployee }),
+    assign(job.id, { employeeId: workerEmployee }),
+  ]);
+  expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
+  expect(
+    await db.assignment.count({ where: { jobId: job.id, endedAt: null } }),
+  ).toBe(1);
+  expect(
+    await db.auditEvent.count({
+      where: { targetId: job.id, action: "job.assigned" },
+    }),
+  ).toBe(1);
+});

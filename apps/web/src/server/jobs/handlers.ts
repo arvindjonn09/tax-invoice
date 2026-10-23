@@ -33,8 +33,8 @@ import {
 } from "../http/fields";
 import { parsePage } from "../http/guards";
 
-// #31. Reads: job.read_all (office). Assigned-only reads for employees and
-// subcontractors arrive with assignments (#32). Writes: job.write (owner,
+// #31. Reads: job.read_all (office). Employee assigned-only reads use
+// my-jobs (#32); the subcontractor portal is #37. Writes: job.write (owner,
 // manager). The agreed price is only returned with job.price.read.
 
 type JobView = Omit<Job, "agreedPriceExclusiveCents" | "dueOn"> & {
