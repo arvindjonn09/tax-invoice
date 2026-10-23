@@ -114,7 +114,11 @@ CREATE UNIQUE INDEX "expenses_company_id_id_key" ON "expenses"("company_id", "id
 -- One receipt per expense, one reversal per expense.
 CREATE UNIQUE INDEX "expenses_company_id_receipt_document_id_key" ON "expenses"("company_id", "receipt_document_id");
 CREATE UNIQUE INDEX "expenses_company_id_reverses_id_key" ON "expenses"("company_id", "reverses_id");
-CREATE UNIQUE INDEX "expenses_company_id_corrects_id_key" ON "expenses"("company_id", "corrects_id");
+-- One live correction per original; rejected corrections stay as history and
+-- a new one may follow.
+CREATE UNIQUE INDEX "expenses_live_correction_key" ON "expenses"("company_id", "corrects_id")
+  WHERE "corrects_id" IS NOT NULL AND "status" <> 'rejected';
+CREATE INDEX "expenses_company_id_corrects_id_idx" ON "expenses"("company_id", "corrects_id");
 CREATE INDEX "expenses_company_id_job_id_idx" ON "expenses"("company_id", "job_id");
 CREATE INDEX "expenses_company_id_status_purchased_on_idx" ON "expenses"("company_id", "status", "purchased_on");
 CREATE INDEX "expenses_company_id_submitted_by_idx" ON "expenses"("company_id", "submitted_by");

@@ -997,6 +997,50 @@ describe("corrections reuse the original settlement (Codex #117 review, P1)", ()
     expect((await correct(refunded.id)).response.status).toBe(409);
   });
 
+  it("a rejected correction stays as history and a new one can follow: reject → resubmit → approve", async () => {
+    const original = await approved();
+    await reverseCostOnly(original.id);
+    const first = (await correct(original.id)).body;
+    expect(
+      (await decide(first.id, "reject", "manager", { note: "Wrong supplier" }))
+        .status,
+    ).toBe(200);
+    // The rejected correction no longer blocks a retry.
+    const invoice = await receipt("manager", "tax_invoice");
+    const second = await correct(original.id, {
+      receiptDocumentId: invoice.id,
+    });
+    expect(second.response.status).toBe(201);
+    // But only one live correction at a time.
+    expect((await correct(original.id)).response.status).toBe(409);
+    expect(
+      (
+        await decide(second.body.id, "approve", "manager", {
+          evidenceVerified: true,
+        })
+      ).status,
+    ).toBe(200);
+    // History: both corrections exist; exactly one is live.
+    const corrections = await db.expense.findMany({
+      where: { correctsId: original.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(corrections.map((row) => row.status)).toEqual([
+      "rejected",
+      "approved",
+    ]);
+    expect(await chainTotals(original.id)).toEqual({
+      cost: 15000n,
+      creditableGst: 1500n,
+      cashPaid: 16500n, // still one payment
+      supplierOutstanding: 0n,
+    });
+    const view = await (
+      await r().read(call("manager", "GET"), one(original.id))
+    ).json();
+    expect(view.correctedById).toBe(second.body.id);
+  });
+
   it("only the office can correct, and corrections can't be edited", async () => {
     const original = await approved();
     await reverseCostOnly(original.id);

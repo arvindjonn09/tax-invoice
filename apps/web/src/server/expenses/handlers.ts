@@ -167,7 +167,7 @@ function ownView(row: Expense) {
 
 type OfficeRow = Expense & {
   reversedBy: { id: string } | null;
-  correctedBy: { id: string } | null;
+  corrections: { id: string; status: string }[];
 };
 
 /** Office view: adds who submitted/decided and the approval snapshot. */
@@ -178,7 +178,8 @@ function officeView(row: OfficeRow) {
     decidedBy: row.decidedBy,
     reversedById: row.reversedBy?.id ?? null,
     correctsId: row.correctsId,
-    correctedById: row.correctedBy?.id ?? null,
+    correctedById:
+      row.corrections.find((c) => c.status !== "rejected")?.id ?? null,
     approval:
       row.jobCostCents === null
         ? null
@@ -195,7 +196,7 @@ function officeView(row: OfficeRow) {
 
 const OFFICE_INCLUDE = {
   reversedBy: { select: { id: true } },
-  correctedBy: { select: { id: true } },
+  corrections: { select: { id: true, status: true } },
 } as const;
 
 type Draft = {
@@ -328,7 +329,13 @@ async function correctionOf(
     actor,
     await tx.expense.findUnique({
       where: { id: originalId },
-      include: { reversedBy: true, correctedBy: { select: { id: true } } },
+      include: {
+        reversedBy: true,
+        corrections: {
+          where: { status: { not: "rejected" } },
+          select: { id: true },
+        },
+      },
     }),
   );
   if (
@@ -339,7 +346,8 @@ async function correctionOf(
     throw new Refusal(
       fail(409, "Only an approved, original expense can be corrected", field),
     );
-  if (original.correctedBy)
+  // A rejected correction is history; only a live one blocks a new attempt.
+  if (original.corrections.length > 0)
     throw new Refusal(fail(409, ALREADY_CORRECTED, field));
   if (!original.reversedBy || original.reversedBy.settlement !== null)
     throw new Refusal(
@@ -548,7 +556,7 @@ export function expenseHandlers(db: () => PrismaClient) {
     } catch (error) {
       if (isUniqueViolation(error, "receipt_document_id"))
         return fail(400, RECEIPT_TAKEN, "receiptDocumentId");
-      if (isUniqueViolation(error, "corrects_id"))
+      if (isUniqueViolation(error, "live_correction"))
         return fail(409, ALREADY_CORRECTED, "correctsExpenseId");
       throw error;
     }

@@ -756,14 +756,16 @@ model Expense {
   reverses              Expense?           @relation("ExpenseReversal", fields: [companyId, reversesId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
   reversedBy            Expense?           @relation("ExpenseReversal")
   corrects              Expense?           @relation("ExpenseCorrection", fields: [companyId, correctsId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  correctedBy           Expense?           @relation("ExpenseCorrection")
+  /// Corrections of this expense: at most one live (submitted/approved);
+  /// rejected ones are kept (partial unique index in the migration).
+  corrections           Expense[]          @relation("ExpenseCorrection")
   submitter             Membership         @relation("ExpenseSubmitter", fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   decider               Membership?        @relation("ExpenseDecider", fields: [companyId, decidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([companyId, id])
   @@unique([companyId, receiptDocumentId])
   @@unique([companyId, reversesId])
-  @@unique([companyId, correctsId])
+  @@index([companyId, correctsId])
   @@index([companyId, jobId])
   @@index([companyId, status, purchasedOn])
   @@index([companyId, submittedBy])
