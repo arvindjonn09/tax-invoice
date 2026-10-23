@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
 
-it("reverses tenancy, auth, company GST, employee and customer DDL (newest first) on an empty disposable database and reapplies it", async () => {
+it("reverses tenancy, auth, company GST, employee, customer and job DDL (newest first) on an empty disposable database and reapplies it", async () => {
   const base = new URL(process.env.TEST_DATABASE_URL ?? "");
   base.pathname = "/jobflow_test";
   const source = `
@@ -28,6 +28,7 @@ await withIsolatedDatabase(async env => {
     // Roll back newest first: later migrations depend on users/companies.
     await run('rollbacks/20261023090000_documents.sql');
     await run('rollbacks/20261023080000_user_invitations.sql');
+    await run('rollbacks/20261023060000_jobs.sql');
     await run('rollbacks/20261023050000_customers.sql');
     await run('rollbacks/20261023040000_employees.sql');
     await run('rollbacks/20261023020000_company_gst.sql');
@@ -42,6 +43,7 @@ await withIsolatedDatabase(async env => {
     await run('migrations/20261023020000_company_gst/migration.sql');
     await run('migrations/20261023040000_employees/migration.sql');
     await run('migrations/20261023050000_customers/migration.sql');
+    await run('migrations/20261023060000_jobs/migration.sql');
     await run('migrations/20261023080000_user_invitations/migration.sql');
     await run('migrations/20261023090000_documents/migration.sql');
     await check(true);
