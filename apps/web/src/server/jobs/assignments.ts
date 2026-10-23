@@ -1,16 +1,14 @@
 import { type Actor, requireSameCompany } from "@jobflow/authz";
 import { isJobEditable } from "@jobflow/domain";
 import { z } from "zod";
-import type {
-  Assignment,
-  PrismaClient,
-} from "../../../../../packages/database/src/generated/prisma/client";
+import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import { withAudit } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { lockRow } from "../db/locks";
 import { uuidOrNull } from "../http/fields";
 import { Refusal, inTransaction, lockedJob } from "./handlers";
+import { assignmentView } from "./views";
 
 // #32. Managers (job.assign: owner, manager) assign employees to a job or to
 // one of its visits. Unassigning ends the assignment; history is kept.
@@ -25,19 +23,6 @@ const Assign = z.object({
   visitId: z.uuid().nullable().optional(),
 });
 const End = z.object({ ended: z.literal(true) });
-
-export function assignmentView(
-  row: Assignment & { employee: { name: string } },
-) {
-  return {
-    id: row.id,
-    employeeId: row.employeeId,
-    employeeName: row.employee.name,
-    visitId: row.visitId,
-    assignedAt: row.assignedAt,
-    endedAt: row.endedAt,
-  };
-}
 
 const fail = (status: 400 | 409, error: string, field?: string) =>
   privateJson(
@@ -92,6 +77,20 @@ export function assignmentHandlers(db: () => PrismaClient) {
             throw new Refusal(
               fail(409, `A ${current.status} job can't be assigned`),
             );
+          if (visitId) {
+            const visit = await tx.jobVisit.findFirst({
+              where: { id: visitId, jobId: job.id, companyId: actor.companyId },
+              select: { status: true },
+            });
+            if (!visit)
+              throw new Refusal(
+                fail(400, "Choose one of this job's visits", "visitId"),
+              );
+            if (visit.status === "cancelled")
+              throw new Refusal(
+                fail(409, "A cancelled visit can't be assigned", "visitId"),
+              );
+          }
           // Deactivation uses the same employee row lock. Recheck after taking
           // it so a stale preflight read cannot assign an inactive employee.
           await lockRow(tx, "employees", employeeId);
@@ -115,7 +114,7 @@ export function assignmentHandlers(db: () => PrismaClient) {
               visitId,
               createdBy: actor.userId,
             },
-            include: { employee: { select: { name: true } } },
+            include: { employee: { select: { name: true, isActive: true } } },
           });
           await audit({
             companyId: actor.companyId,
@@ -162,7 +161,7 @@ export function assignmentHandlers(db: () => PrismaClient) {
         const updated = await tx.assignment.update({
           where: { id: before.id },
           data: { endedAt: new Date(), endedBy: actor.userId },
-          include: { employee: { select: { name: true } } },
+          include: { employee: { select: { name: true, isActive: true } } },
         });
         await audit({
           companyId: actor.companyId,

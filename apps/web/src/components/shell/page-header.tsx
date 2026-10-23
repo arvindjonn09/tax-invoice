@@ -47,8 +47,10 @@ export function PageHeader({
     <header className="space-y-2">
       {breadcrumbs ? <Breadcrumbs items={breadcrumbs} /> : null}
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="space-y-2">
-          <h1 className="text-[28px] leading-9 font-semibold">{title}</h1>
+        <div className="min-w-0 flex-1 space-y-2">
+          <h1 className="text-[28px] leading-9 font-semibold [overflow-wrap:anywhere]">
+            {title}
+          </h1>
           {description ? (
             <p className="text-muted-foreground">{description}</p>
           ) : null}

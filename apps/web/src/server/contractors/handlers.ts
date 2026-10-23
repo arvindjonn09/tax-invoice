@@ -192,22 +192,37 @@ const money = (value: bigint) => value.toString();
 const hoursText = (hundredths: number | null) =>
   hundredths === null ? null : (hundredths / 100).toFixed(2);
 
-/** Terms and GST amounts both the office and the contractor may see. */
-function termsView(offer: ContractorOffer, contractor: Contractor) {
-  const result = priced(offer, contractor);
-  const line = "line" in result ? result.line : null;
+/**
+ * Terms and GST amounts both the office and the contractor may see. An
+ * accepted offer shows its acceptance snapshot, never a recalculation from
+ * the contractor's current details; an open one is priced live.
+ */
+function termsView(offer: OfficeOffer) {
+  const accepted = offer.acceptance;
+  const result = accepted ? null : priced(offer, offer.contractor);
+  const line = result && "line" in result ? result.line : null;
+  const amounts = accepted
+    ? {
+        exclusiveCents: money(accepted.exclusiveCents),
+        gstCents: money(accepted.gstCents),
+        inclusiveCents: money(accepted.inclusiveCents),
+      }
+    : {
+        exclusiveCents: line ? money(line.exclusive) : null,
+        gstCents: line ? money(line.gst) : null,
+        inclusiveCents: line ? money(line.inclusive) : null,
+      };
+  const terms = accepted ?? offer;
   return {
     id: offer.id,
     jobId: offer.jobId,
     contractorId: offer.contractorId,
     scope: offer.scope,
-    rateType: offer.rateType,
-    rateExclusiveCents: money(offer.rateExclusiveCents),
-    estimatedHours: hoursText(offer.estimatedHoursHundredths),
-    taxCode: offer.taxCode,
-    exclusiveCents: line ? money(line.exclusive) : null,
-    gstCents: line ? money(line.gst) : null,
-    inclusiveCents: line ? money(line.inclusive) : null,
+    rateType: terms.rateType,
+    rateExclusiveCents: money(terms.rateExclusiveCents),
+    estimatedHours: hoursText(terms.estimatedHoursHundredths),
+    taxCode: terms.taxCode,
+    ...amounts,
     status: offer.status,
     responseNote: offer.responseNote,
     respondedAt: offer.respondedAt,
@@ -237,7 +252,7 @@ type OfficeOffer = ContractorOffer & {
 /** Office view: adds the contractor's name and the committed cost. */
 function officeOfferView(offer: OfficeOffer) {
   return {
-    ...termsView(offer, offer.contractor),
+    ...termsView(offer),
     contractorName: offer.contractor.name,
     respondedBy: offer.respondedBy,
     acceptance: offer.acceptance
@@ -260,7 +275,7 @@ type OwnOffer = OfficeOffer & {
  */
 function ownOfferView(offer: OwnOffer) {
   return {
-    ...termsView(offer, offer.contractor),
+    ...termsView(offer),
     job: {
       reference: offer.job.reference,
       title: offer.job.title,
@@ -314,6 +329,16 @@ async function linkedContractor(db: PrismaClient, actor: Actor) {
   });
   if (!contractor) throw notFound();
   return contractor;
+}
+
+/**
+ * Lock order everywhere: contractor, then offer, then job. Contractor edits
+ * (link, archive, GST registration) take the same contractor lock, so every
+ * check below sees the contractor as it is when the write commits.
+ */
+async function lockedContractor(tx: Prisma.TransactionClient, id: string) {
+  await lockRow(tx, "contractors", id);
+  return tx.contractor.findUniqueOrThrow({ where: { id } });
 }
 
 async function lockedOffer(tx: Prisma.TransactionClient, id: string) {
@@ -547,6 +572,17 @@ export function contractorHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const offer = await withAudit(db(), async (tx, audit) => {
+          // Re-check the preflight under the contractor lock.
+          const current = await lockedContractor(tx, contractor.id);
+          if (current.archivedAt)
+            throw new Refusal(
+              fail(400, "Choose an active contractor", "contractorId"),
+            );
+          const recheck = priced(terms, current);
+          if ("problem" in recheck)
+            throw new Refusal(
+              fail(400, recheck.problem[1], recheck.problem[0]),
+            );
           const job = await lockedJob(tx, owned.id);
           if (!isJobEditable(job.status))
             throw new Refusal(
@@ -604,6 +640,7 @@ export function contractorHandlers(db: () => PrismaClient) {
     const { status, note, estimatedHours, ...rest } = defined(parsed.data);
     return inTransaction(async () => {
       const offer = await withAudit(db(), async (tx, audit) => {
+        await lockedContractor(tx, owned.contractorId);
         const before = await lockedOffer(tx, owned.id);
         if (before.status !== "offered")
           throw new Refusal(
@@ -727,6 +764,10 @@ export function contractorHandlers(db: () => PrismaClient) {
     const { decision, note } = parsed.data;
     return inTransaction(async () => {
       const offer = await withAudit(db(), async (tx, audit) => {
+        // The office may have unlinked or relinked this contractor since the
+        // preflight: answer only if the caller is still its login.
+        const current = await lockedContractor(tx, contractor.id);
+        if (current.userId !== actor.userId) throw notFound();
         const before = await lockedOffer(tx, owned.id);
         if (before.status !== "offered")
           throw new Refusal(
