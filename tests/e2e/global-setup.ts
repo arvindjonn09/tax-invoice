@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { createDatabaseClient } from "../../packages/database/src/index";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
+import { isolatedTestConnection } from "../helpers/test-environment";
 import { E2E_ACCOUNTS_ENV, type E2eAccounts } from "./accounts";
 
 const ROLES = [
@@ -12,15 +13,18 @@ const ROLES = [
 ] as const;
 
 /**
- * Signed-in browser tests need real accounts. With a migrated DATABASE_URL
- * (CI, or a developer's local database) this creates one synthetic company
- * and one user per role, with fresh emails and a random password per run, so
- * reruns never collide and nothing secret is committed. Without a database,
- * signed-in specs skip.
+ * Signed-in browser tests need real accounts. Inside the disposable database
+ * that `pnpm test:e2e` creates (and drops afterwards), this adds one synthetic
+ * company and one user per role with a random password per run; nothing
+ * secret is committed and nothing is left behind. It refuses any database
+ * that isn't that isolated loopback test database (never production or dev).
+ * Without one, signed-in specs skip.
  */
 export default async function globalSetup() {
-  const url = process.env.DATABASE_URL;
-  if (!url) return;
+  if (!process.env.JOBFLOW_ISOLATED_TEST_DATABASE) return;
+  // Throws unless DATABASE_URL is the run's isolated jobflow_test_<uuid> on
+  // loopback, outside production.
+  const url = isolatedTestConnection();
   const run = randomUUID().slice(0, 8);
   const password = randomBytes(18).toString("base64url");
   const db = createDatabaseClient(url);

@@ -61,6 +61,14 @@ export function GstSettingsPanel({
     text: string;
   } | null>(null);
   const confirmHeading = useRef<HTMLHeadingElement>(null);
+  // Controlled from the saved value, so Cancel shows what is really stored.
+  // (The page keys this panel by the saved value, so a save resets it.)
+  const [basChoice, setBasChoice] = useState(settings.basPeriod);
+
+  function cancel() {
+    setPending(null);
+    setBasChoice(settings.basPeriod);
+  }
 
   useEffect(() => {
     if (pending) confirmHeading.current?.focus();
@@ -79,6 +87,7 @@ export function GstSettingsPanel({
     } else {
       setErrors(result.fields);
       setMessage({ kind: "error", text: result.message });
+      setBasChoice(settings.basPeriod);
     }
   }
 
@@ -125,9 +134,7 @@ export function GstSettingsPanel({
 
   function onBasPeriod(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const basPeriod = String(
-      new FormData(event.currentTarget).get("basPeriod"),
-    );
+    const basPeriod = basChoice;
     review({
       summary: `Report GST ${basPeriod === "monthly" ? "monthly" : "quarterly"} on your BAS.`,
       url: "/api/company/gst",
@@ -173,7 +180,7 @@ export function GstSettingsPanel({
             <Button
               type="button"
               variant="outline"
-              onClick={() => setPending(null)}
+              onClick={cancel}
               disabled={busy}
             >
               Cancel
@@ -306,7 +313,10 @@ export function GstSettingsPanel({
           {(control) => (
             <select
               name="basPeriod"
-              defaultValue={settings.basPeriod}
+              value={basChoice}
+              onChange={(event) =>
+                setBasChoice(event.target.value as GstSettings["basPeriod"])
+              }
               disabled={!editable}
               {...control}
             >

@@ -100,6 +100,10 @@ test("accountant adds a GST period after confirming, and an overlap is refused",
   await expect(
     page.getByRole("region", { name: "Confirm this tax setting" }),
   ).toHaveCount(0);
+  // The control shows the saved value again, and Review re-proposes nothing new.
+  await expect(page.getByLabel("BAS reporting period")).toHaveValue(
+    "quarterly",
+  );
 
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);

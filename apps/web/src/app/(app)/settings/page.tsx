@@ -90,6 +90,7 @@ export default async function SettingsPage() {
               GST
             </h2>
             <GstSettingsPanel
+              key={gst.basPeriod}
               settings={gst}
               editable={can(actor.role, "gst_settings.update")}
             />
