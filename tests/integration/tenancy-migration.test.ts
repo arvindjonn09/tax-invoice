@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
 
-it("reverses tenancy DDL on an empty disposable database and reapplies it", async () => {
+it("reverses tenancy and auth DDL (newest first) on an empty disposable database and reapplies it", async () => {
   const base = new URL(process.env.TEST_DATABASE_URL ?? "");
   base.pathname = "/jobflow_test";
   const source = `
@@ -18,11 +18,22 @@ await withIsolatedDatabase(async env => {
       const { rows } = await client.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('companies','users','memberships','audit_events','idempotency_keys')");
       if (rows.length !== (present ? 5 : 0)) throw new Error('Unexpected tenancy tables');
     };
+    const checkAuth = async present => {
+      const { rows } = await client.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('auth_sessions','auth_accounts','auth_verifications','auth_rate_limits')");
+      if (rows.length !== (present ? 4 : 0)) throw new Error('Unexpected auth tables');
+    };
+    const run = file => readFile('packages/database/prisma/' + file, 'utf8').then(sql => client.query(sql));
     await check(true);
-    await client.query(await readFile('packages/database/prisma/rollbacks/20261023000000_core_tenancy.sql', 'utf8'));
+    await checkAuth(true);
+    // Roll back newest first: auth depends on users/companies.
+    await run('rollbacks/20261023010000_auth.sql');
+    await checkAuth(false);
+    await run('rollbacks/20261023000000_core_tenancy.sql');
     await check(false);
-    await client.query(await readFile('packages/database/prisma/migrations/20261023000000_core_tenancy/migration.sql', 'utf8'));
+    await run('migrations/20261023000000_core_tenancy/migration.sql');
+    await run('migrations/20261023010000_auth/migration.sql');
     await check(true);
+    await checkAuth(true);
     const { rows } = await client.query("SELECT tgname FROM pg_trigger WHERE tgname = 'audit_events_append_only'");
     if (rows.length !== 1) throw new Error('Missing audit guard');
     console.log('tenancy forward/down/forward passed');

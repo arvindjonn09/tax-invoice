@@ -25,18 +25,88 @@ enum IdempotencyState {
 }
 
 model User {
-  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email        String       @unique @db.VarChar(320)
-  name         String?      @db.VarChar(200)
-  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy    String?      @map("created_by") @db.Uuid
-  creator      User?        @relation("UserCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  createdUsers User[]       @relation("UserCreator")
-  memberships  Membership[]
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String        @unique @db.VarChar(320)
+  name          String?       @db.VarChar(200)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy     String?       @map("created_by") @db.Uuid
+  creator       User?         @relation("UserCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdUsers  User[]        @relation("UserCreator")
+  memberships   Membership[]
+  // Better Auth (#13): identity fields and credential/session records.
+  emailVerified Boolean       @default(false) @map("email_verified")
+  image         String?       @db.VarChar(2048)
+  sessions      AuthSession[]
+  accounts      AuthAccount[]
 
   @@index([createdBy])
   @@map("users")
+}
+
+/// Server-side login session (#13). The token is the opaque cookie value; revoke by deleting the row.
+model AuthSession {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token           String   @unique @db.VarChar(255)
+  expiresAt       DateTime @map("expires_at") @db.Timestamptz(3)
+  ipAddress       String?  @map("ip_address") @db.VarChar(64)
+  userAgent       String?  @map("user_agent") @db.VarChar(512)
+  userId          String   @map("user_id") @db.Uuid
+  /// Company the session acts in; must match an active membership (checked on every request).
+  activeCompanyId String?  @map("active_company_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeCompany   Company? @relation(fields: [activeCompanyId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+/// Credential (password hash) or future external-provider link for a user (#13).
+model AuthAccount {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId             String    @map("account_id") @db.VarChar(255)
+  providerId            String    @map("provider_id") @db.VarChar(64)
+  userId                String    @map("user_id") @db.Uuid
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  idToken               String?   @map("id_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at") @db.Timestamptz(3)
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at") @db.Timestamptz(3)
+  scope                 String?   @db.VarChar(1024)
+  password              String?   @db.VarChar(512)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("auth_accounts")
+}
+
+/// Short-lived verification tokens (password reset, email verification) (#13).
+model AuthVerification {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  identifier String   @db.VarChar(255)
+  value      String   @db.VarChar(1024)
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([identifier])
+  @@map("auth_verifications")
+}
+
+/// Login/request throttling counters shared by every app instance (#13).
+model AuthRateLimit {
+  id          String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key         String @unique @db.VarChar(255)
+  count       Int
+  lastRequest BigInt @map("last_request")
+
+  @@map("auth_rate_limits")
 }
 
 model Company {
@@ -51,6 +121,7 @@ model Company {
   memberships     Membership[]     @relation("CompanyMemberships")
   auditEvents     AuditEvent[]
   idempotencyKeys IdempotencyKey[]
+  authSessions    AuthSession[]
 
   @@map("companies")
 }
