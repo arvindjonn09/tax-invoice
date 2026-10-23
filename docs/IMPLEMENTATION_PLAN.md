@@ -33,6 +33,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 ## M2 Contractors, timesheets and job expenses
 - [ ] Private document storage with signed URLs
 - [ ] Contractors, offers, approvals and acceptance history; restricted contractor portal
+  - #35 schema + API: contractors (ABN, GST flag, optional subcontractor login), fixed/hourly offers in GST-exclusive cents with a tax code, accept/decline with immutable acceptance snapshots and committed cost recorded once; portal screens remain #37
 - [ ] Employee timesheets with cost-rate snapshots
 - [ ] Expenses with GST code, creditable portion, receipts and approvals
 - [ ] Work evidence and completion approval

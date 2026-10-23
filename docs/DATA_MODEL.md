@@ -35,3 +35,11 @@ Partial/multiple payment allocations, retries and concurrency, zero/negative val
 The #12 tenancy models, constraints, index rationale, ER diagram and migration
 verification are documented in [core tenancy](testing/core-tenancy.md). Business
 tables listed above remain planned until their milestone implementation.
+
+## Contractor offers and committed cost (#35)
+
+- `contractors`: company-scoped, archived not deleted. `gst_registered` requires an ABN (CHECK). An optional link to an active **subcontractor** login of the same company is unique per company.
+- `contractor_offers`: fixed price or hourly rate (`rate_exclusive_cents`, GST-exclusive) plus estimated hours in hundredths for hourly offers, and a `tax_code`. Only one open-or-accepted offer is allowed per contractor per job (partial unique index). A trigger refuses deletes, any change once the offer is accepted, declined or withdrawn, and any change to its terms when it is closed.
+- `contractor_acceptances`: append-only, one per offer, with a composite FK to the offer's own job and contractor. Accepting snapshots the rate, hours, tax code, GST rate, exclusive/GST/inclusive amounts, both parties' GST registration, and **`committed_cost_cents`** = exclusive + non-creditable GST (creditable GST is never cost). The company's registration is read for the Sydney business date of acceptance.
+- Committed cost is recorded once, at acceptance. Bills linked to an acceptance (supplier bills, M3) reduce the outstanding commitment and enter incurred cost, so the same work is never counted twice. `jobCostExposure` in `@jobflow/domain` computes it, and the combined fixture is asserted in `packages/domain/test/contractors.test.ts`: 90000 committed, then billed, gives cost 145000 and profit 105000, not 235000. Profit uses incurred cost only.
+- Subcontractors see only offers to their own linked record, with the job's reference, title, status and due date, never the job price, committed cost or other contractors' rates.
