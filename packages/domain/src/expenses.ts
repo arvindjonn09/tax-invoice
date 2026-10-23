@@ -136,8 +136,9 @@ export function expenseTotals(rows: readonly ApprovedExpense[]): ExpenseTotals {
 export function percentToBasisPoints(percent: string): bigint {
   const match = /^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(percent);
   if (!match) throw new RangeError(`Invalid percentage "${percent}"`);
-  const value =
-    BigInt(match[1] ?? "0") * 100n + BigInt((match[2] ?? "").padEnd(2, "0"));
+  // Group 1 always matches; group 2 (the decimals) is optional.
+  const [, whole, decimals = ""] = match;
+  const value = BigInt(`${whole}`) * 100n + BigInt(decimals.padEnd(2, "0"));
   if (value > 10_000n) throw new RangeError("Percentage must be 0–100");
   return value;
 }
