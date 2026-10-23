@@ -1,7 +1,7 @@
 // Seed synthetic demo data into the LOCAL database:
 //   DEMO_SEED=yes pnpm db:seed:demo
-// Optional DEMO_PASSWORD (12+ characters); otherwise a random one is printed.
-import { randomBytes } from "node:crypto";
+//   DEMO_PASSWORD=<12+ characters, never committed> is required for new users.
+// The password is never logged.
 import { createDatabaseClient } from "../../packages/database/src/index";
 import {
   DEMO_USERS,
@@ -14,17 +14,18 @@ loadLocalEnvironment();
 try {
   assertDemoSeedAllowed(process.env);
   const url = requireDatabaseUrl(process.env.DATABASE_URL);
-  const password =
-    process.env.DEMO_PASSWORD ?? randomBytes(12).toString("base64url");
+  const password = process.env.DEMO_PASSWORD;
+  if (!password) {
+    throw new Error(
+      "Set DEMO_PASSWORD (12+ characters) to the password for the demo users.",
+    );
+  }
   const db = createDatabaseClient(url.toString());
   try {
     const result = await seedDemo(db, { password, env: process.env });
     console.log(
       `Demo data ready (${result.createdUsers} users, ${result.createdMemberships} memberships created${result.createdCompany ? ", company created" : ""}).`,
     );
-    if (result.createdUsers > 0 && !process.env.DEMO_PASSWORD) {
-      console.log(`Local demo password for new users: ${password}`);
-    }
     console.log(
       `Sign in as: ${DEMO_USERS.map((user) => user.email).join(", ")}`,
     );
