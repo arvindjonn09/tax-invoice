@@ -61,6 +61,9 @@ CREATE TABLE "expenses" (
     "job_cost_cents" BIGINT,
     -- A reversal points at the approved expense it cancels (at most one).
     "reverses_id" UUID,
+    -- A correction replaces a cost-only-reversed expense and reuses its
+    -- original settlement (no new payment or payable). At most one.
+    "corrects_id" UUID,
     "submitted_by" UUID NOT NULL,
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -82,8 +85,9 @@ CREATE TABLE "expenses" (
     CONSTRAINT "expenses_settlement" CHECK (
       ("settlement" = 'paid_at_purchase' AND "paid_on" IS NOT NULL AND "payment_method" IS NOT NULL)
       OR ("settlement" = 'on_account' AND "paid_on" IS NULL AND "payment_method" IS NULL)
-      OR ("settlement" IS NULL AND "reverses_id" IS NOT NULL AND "paid_on" IS NULL AND "payment_method" IS NULL)
+      OR ("settlement" IS NULL AND ("reverses_id" IS NOT NULL OR "corrects_id" IS NOT NULL) AND "paid_on" IS NULL AND "payment_method" IS NULL)
     ),
+    CONSTRAINT "expenses_reversal_or_correction" CHECK ("reverses_id" IS NULL OR "corrects_id" IS NULL),
     CONSTRAINT "expenses_decision" CHECK (
       ("status" = 'submitted') = ("decided_at" IS NULL)
       AND ("decided_at" IS NULL) = ("decided_by" IS NULL)
@@ -110,6 +114,7 @@ CREATE UNIQUE INDEX "expenses_company_id_id_key" ON "expenses"("company_id", "id
 -- One receipt per expense, one reversal per expense.
 CREATE UNIQUE INDEX "expenses_company_id_receipt_document_id_key" ON "expenses"("company_id", "receipt_document_id");
 CREATE UNIQUE INDEX "expenses_company_id_reverses_id_key" ON "expenses"("company_id", "reverses_id");
+CREATE UNIQUE INDEX "expenses_company_id_corrects_id_key" ON "expenses"("company_id", "corrects_id");
 CREATE INDEX "expenses_company_id_job_id_idx" ON "expenses"("company_id", "job_id");
 CREATE INDEX "expenses_company_id_status_purchased_on_idx" ON "expenses"("company_id", "status", "purchased_on");
 CREATE INDEX "expenses_company_id_submitted_by_idx" ON "expenses"("company_id", "submitted_by");
@@ -119,6 +124,7 @@ CREATE INDEX "expenses_company_id_decided_by_idx" ON "expenses"("company_id", "d
 ALTER TABLE "expenses" ADD CONSTRAINT "expenses_company_id_fkey" FOREIGN KEY ("company_id") REFERENCES "companies"("id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "expenses" ADD CONSTRAINT "expenses_company_id_job_id_fkey" FOREIGN KEY ("company_id", "job_id") REFERENCES "jobs"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "expenses" ADD CONSTRAINT "expenses_company_id_receipt_document_id_fkey" FOREIGN KEY ("company_id", "receipt_document_id") REFERENCES "documents"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "expenses" ADD CONSTRAINT "expenses_company_id_corrects_id_fkey" FOREIGN KEY ("company_id", "corrects_id") REFERENCES "expenses"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "expenses" ADD CONSTRAINT "expenses_company_id_reverses_id_fkey" FOREIGN KEY ("company_id", "reverses_id") REFERENCES "expenses"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "expenses" ADD CONSTRAINT "expenses_company_id_submitted_by_fkey" FOREIGN KEY ("company_id", "submitted_by") REFERENCES "memberships"("company_id", "user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "expenses" ADD CONSTRAINT "expenses_company_id_decided_by_fkey" FOREIGN KEY ("company_id", "decided_by") REFERENCES "memberships"("company_id", "user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -138,14 +144,16 @@ BEGIN
   END IF;
   IF NEW.status <> 'submitted' AND (
     NEW.job_id, NEW.category, NEW.description, NEW.supplier_name, NEW.purchased_on,
-    NEW.price_entry, NEW.entered_amount_cents, NEW.tax_code, NEW.exclusive_cents,
-    NEW.gst_cents, NEW.inclusive_cents, NEW.creditable_basis_points,
-    NEW.receipt_document_id, NEW.settlement, NEW.paid_on, NEW.payment_method
+    NEW.price_entry, NEW.entered_amount_cents, NEW.tax_code, NEW.gst_rate_basis_points,
+    NEW.exclusive_cents, NEW.gst_cents, NEW.inclusive_cents, NEW.creditable_basis_points,
+    NEW.receipt_document_id, NEW.settlement, NEW.paid_on, NEW.payment_method,
+    NEW.reverses_id, NEW.corrects_id
   ) IS DISTINCT FROM (
     OLD.job_id, OLD.category, OLD.description, OLD.supplier_name, OLD.purchased_on,
-    OLD.price_entry, OLD.entered_amount_cents, OLD.tax_code, OLD.exclusive_cents,
-    OLD.gst_cents, OLD.inclusive_cents, OLD.creditable_basis_points,
-    OLD.receipt_document_id, OLD.settlement, OLD.paid_on, OLD.payment_method
+    OLD.price_entry, OLD.entered_amount_cents, OLD.tax_code, OLD.gst_rate_basis_points,
+    OLD.exclusive_cents, OLD.gst_cents, OLD.inclusive_cents, OLD.creditable_basis_points,
+    OLD.receipt_document_id, OLD.settlement, OLD.paid_on, OLD.payment_method,
+    OLD.reverses_id, OLD.corrects_id
   ) THEN
     RAISE EXCEPTION 'deciding an expense can''t change it' USING ERRCODE = '55000';
   END IF;

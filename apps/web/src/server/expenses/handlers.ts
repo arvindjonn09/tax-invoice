@@ -80,14 +80,25 @@ const expenseFields = {
   paidOn: day.nullable(),
   paymentMethod: z.enum(["card", "cash", "bank_transfer", "other"]).nullable(),
 };
-const CreateExpense = z.object(expenseFields).partial().required({
-  category: true,
-  description: true,
-  purchasedOn: true,
-  priceEntry: true,
-  amountCents: true,
-  taxCode: true,
-});
+const CreateExpense = z
+  .object({
+    ...expenseFields,
+    /**
+     * Correct an approved expense whose cost-only reversal is approved: the
+     * replacement reuses the original's settlement (its single payment or
+     * payable) instead of recording a new one.
+     */
+    correctsExpenseId: z.uuid(),
+  })
+  .partial()
+  .required({
+    category: true,
+    description: true,
+    purchasedOn: true,
+    priceEntry: true,
+    amountCents: true,
+    taxCode: true,
+  });
 const UpdateExpense = z
   .object(expenseFields)
   .partial()
@@ -154,7 +165,10 @@ function ownView(row: Expense) {
   };
 }
 
-type OfficeRow = Expense & { reversedBy: { id: string } | null };
+type OfficeRow = Expense & {
+  reversedBy: { id: string } | null;
+  correctedBy: { id: string } | null;
+};
 
 /** Office view: adds who submitted/decided and the approval snapshot. */
 function officeView(row: OfficeRow) {
@@ -163,6 +177,8 @@ function officeView(row: OfficeRow) {
     submittedBy: row.submittedBy,
     decidedBy: row.decidedBy,
     reversedById: row.reversedBy?.id ?? null,
+    correctsId: row.correctsId,
+    correctedById: row.correctedBy?.id ?? null,
     approval:
       row.jobCostCents === null
         ? null
@@ -177,7 +193,10 @@ function officeView(row: OfficeRow) {
   };
 }
 
-const OFFICE_INCLUDE = { reversedBy: { select: { id: true } } } as const;
+const OFFICE_INCLUDE = {
+  reversedBy: { select: { id: true } },
+  correctedBy: { select: { id: true } },
+} as const;
 
 type Draft = {
   jobId: string | null;
@@ -279,6 +298,72 @@ async function checkDraft(
 }
 
 const RECEIPT_TAKEN = "That receipt is already attached to another expense";
+const ALREADY_CORRECTED = "That expense already has a correction";
+
+/**
+ * A correction replaces an approved expense whose cost-only reversal is
+ * approved, reusing the original's settlement: the one real payment (or
+ * supplier balance) stays the only one. It must keep the paid GST-inclusive
+ * total — a different total means money moved, which is recorded as a
+ * refund/credit on the reversal or as a separate expense. Office only.
+ */
+async function correctionOf(
+  tx: Prisma.TransactionClient,
+  actor: Actor,
+  originalId: string,
+  checked: Prisma.ExpenseUncheckedUpdateInput,
+): Promise<{
+  correctsId: string;
+  settlement: null;
+  paidOn: null;
+  paymentMethod: null;
+}> {
+  const field = "correctsExpenseId";
+  if (!can(actor.role, "expense.read_all"))
+    throw new Refusal(
+      fail(400, "Only the office can correct an expense", field),
+    );
+  await lockRow(tx, "expenses", originalId);
+  const original = requireSameCompany(
+    actor,
+    await tx.expense.findUnique({
+      where: { id: originalId },
+      include: { reversedBy: true, correctedBy: { select: { id: true } } },
+    }),
+  );
+  if (
+    original.status !== "approved" ||
+    original.reversesId ||
+    original.correctsId
+  )
+    throw new Refusal(
+      fail(409, "Only an approved, original expense can be corrected", field),
+    );
+  if (original.correctedBy)
+    throw new Refusal(fail(409, ALREADY_CORRECTED, field));
+  if (!original.reversedBy || original.reversedBy.settlement !== null)
+    throw new Refusal(
+      fail(
+        409,
+        "Reverse the expense's cost first (without a refund or credit), then correct it",
+        field,
+      ),
+    );
+  if (checked.inclusiveCents !== original.inclusiveCents)
+    throw new Refusal(
+      fail(
+        400,
+        "A correction keeps the amount actually paid. Record a refund or a separate expense for any difference.",
+        "amountCents",
+      ),
+    );
+  return {
+    correctsId: original.id,
+    settlement: null,
+    paidOn: null,
+    paymentMethod: null,
+  };
+}
 
 /**
  * Take the locks that assignment and deactivation writes take (#32: job,
@@ -423,9 +508,13 @@ export function expenseHandlers(db: () => PrismaClient) {
           });
           if (Array.isArray(checked))
             throw new Refusal(fail(400, checked[1], checked[0]));
+          const correction = data.correctsExpenseId
+            ? await correctionOf(tx, actor, data.correctsExpenseId, checked)
+            : {};
           const created = await tx.expense.create({
             data: {
               ...(checked as Prisma.ExpenseUncheckedCreateInput),
+              ...correction,
               companyId: actor.companyId,
               category: data.category,
               description: data.description,
@@ -446,6 +535,7 @@ export function expenseHandlers(db: () => PrismaClient) {
               exclusiveCents: created.exclusiveCents,
               gstCents: created.gstCents,
               settlement: created.settlement,
+              correctsId: created.correctsId,
             },
           });
           return created;
@@ -458,6 +548,8 @@ export function expenseHandlers(db: () => PrismaClient) {
     } catch (error) {
       if (isUniqueViolation(error, "receipt_document_id"))
         return fail(400, RECEIPT_TAKEN, "receiptDocumentId");
+      if (isUniqueViolation(error, "corrects_id"))
+        return fail(409, ALREADY_CORRECTED, "correctsExpenseId");
       throw error;
     }
   };
@@ -486,6 +578,13 @@ export function expenseHandlers(db: () => PrismaClient) {
               fail(
                 409,
                 `An ${before.status} expense can't be changed. Ask the office to reverse it.`,
+              ),
+            );
+          if (before.correctsId)
+            throw new Refusal(
+              fail(
+                409,
+                "A correction can't be edited. Reject it and submit a new correction.",
               ),
             );
           const settlement = data.settlement ?? before.settlement;

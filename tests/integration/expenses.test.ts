@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { expenseTotals } from "../../packages/domain/src/index";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
 import { createAuth } from "../../apps/web/src/server/auth/config";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
@@ -887,5 +888,149 @@ describe("eligibility is rechecked under the shared locks (Codex #117 review)", 
         },
       }),
     ).toBe(0);
+  });
+});
+
+describe("corrections reuse the original settlement (Codex #117 review, P1)", () => {
+  /** Domain totals over an original, its reversal and its correction. */
+  async function chainTotals(originalId: string) {
+    const rows = await db.expense.findMany({
+      where: {
+        status: "approved",
+        OR: [
+          { id: originalId },
+          { reversesId: originalId },
+          { correctsId: originalId },
+        ],
+      },
+    });
+    return expenseTotals(
+      rows.map((row) => ({
+        settlement: row.settlement,
+        inclusive: row.inclusiveCents,
+        jobCost: row.jobCostCents ?? 0n,
+        creditableGst: row.creditableGstCents ?? 0n,
+      })),
+    );
+  }
+  const reverseCostOnly = (id: string) =>
+    r().reverse(
+      call("manager", "POST", { note: "Missing tax invoice" }),
+      one(id),
+    );
+  const correct = (id: string, body: Record<string, unknown> = {}) =>
+    submit({ correctsExpenseId: id, ...body });
+
+  it("paid original → cost-only reversal → correction → approval: one $165 payment, corrected cost/GST", async () => {
+    // Approved without verified evidence: GST not creditable, cost $165.
+    const original = await approved();
+    expect(original.approval.jobCostCents).toBe("16500");
+    expect((await reverseCostOnly(original.id)).status).toBe(201);
+    // The tax invoice turns up: correct with verified evidence.
+    const invoice = await receipt("manager", "tax_invoice");
+    const { response, body } = await correct(original.id, {
+      receiptDocumentId: invoice.id,
+    });
+    expect(response.status).toBe(201);
+    expect(body).toMatchObject({
+      correctsId: original.id,
+      settlement: null,
+      paidOn: null,
+      paymentMethod: null,
+    });
+    expect(
+      (await decide(body.id, "approve", "manager", { evidenceVerified: true }))
+        .status,
+    ).toBe(200);
+    expect(await chainTotals(original.id)).toEqual({
+      cost: 15000n, // 16500 - 16500 + 15000
+      creditableGst: 1500n,
+      cashPaid: 16500n, // the one real payment, never doubled
+      supplierOutstanding: 0n, // no invented payable
+    });
+  });
+
+  it("on-account original → reversal → correction: one $165 supplier balance, no payment", async () => {
+    const original = await approved({
+      settlement: "on_account",
+      paymentMethod: null,
+    });
+    await reverseCostOnly(original.id);
+    const invoice = await receipt("manager", "tax_invoice");
+    const { body } = await correct(original.id, {
+      receiptDocumentId: invoice.id,
+      settlement: "on_account",
+      paymentMethod: null,
+    });
+    await decide(body.id, "approve", "manager", { evidenceVerified: true });
+    expect(await chainTotals(original.id)).toEqual({
+      cost: 15000n,
+      creditableGst: 1500n,
+      cashPaid: 0n,
+      supplierOutstanding: 16500n,
+    });
+  });
+
+  it("refuses corrections that would invent or lose money, or double up", async () => {
+    const original = await approved();
+    // Not reversed yet.
+    expect((await correct(original.id)).response.status).toBe(409);
+    await reverseCostOnly(original.id);
+    // A different paid total is a refund or a separate expense, not a correction.
+    expect(
+      (await correct(original.id, { amountCents: "14000" })).response.status,
+    ).toBe(400);
+    // One correction per original.
+    expect((await correct(original.id)).response.status).toBe(201);
+    expect((await correct(original.id)).response.status).toBe(409);
+
+    // A refunded original isn't corrected through this path.
+    const refunded = await approved();
+    await r().reverse(
+      call("manager", "POST", {
+        note: "Returned",
+        settlement: "refund",
+        refundedOn: "2026-07-03",
+      }),
+      one(refunded.id),
+    );
+    expect((await correct(refunded.id)).response.status).toBe(409);
+  });
+
+  it("only the office can correct, and corrections can't be edited", async () => {
+    const original = await approved();
+    await reverseCostOnly(original.id);
+    const { body } = await correct(original.id);
+    const edit = await r().update(
+      call("manager", "PATCH", { description: "changed" }),
+      one(body.id),
+    );
+    expect(edit.status).toBe(409);
+    const byWorker = await r().create(
+      call("employee", "POST", {
+        jobId: assignedJobId,
+        ...MATERIALS,
+        correctsExpenseId: original.id,
+      }),
+      undefined,
+    );
+    expect(byWorker.status).toBe(400);
+  });
+});
+
+describe("decision guard freezes the GST-rate snapshot (Codex #117 review, P2)", () => {
+  it("refuses a decision that also changes the rate snapshot", async () => {
+    const { body } = await submit();
+    await expect(
+      db.expense.update({
+        where: { id: body.id },
+        data: {
+          status: "rejected",
+          decidedAt: new Date(),
+          decidedBy: userIds.manager,
+          gstRateBasisPoints: 0,
+        },
+      }),
+    ).rejects.toThrow(/deciding an expense can't change it/);
   });
 });

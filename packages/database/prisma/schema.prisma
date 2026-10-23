@@ -745,6 +745,8 @@ model Expense {
   nonCreditableGstCents BigInt?            @map("non_creditable_gst_cents")
   jobCostCents          BigInt?            @map("job_cost_cents")
   reversesId            String?            @map("reverses_id") @db.Uuid
+  /// A correction of a cost-only-reversed expense; reuses its settlement.
+  correctsId            String?            @map("corrects_id") @db.Uuid
   submittedBy           String             @map("submitted_by") @db.Uuid
   createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -753,12 +755,15 @@ model Expense {
   receipt               Document?          @relation(fields: [companyId, receiptDocumentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
   reverses              Expense?           @relation("ExpenseReversal", fields: [companyId, reversesId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
   reversedBy            Expense?           @relation("ExpenseReversal")
+  corrects              Expense?           @relation("ExpenseCorrection", fields: [companyId, correctsId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  correctedBy           Expense?           @relation("ExpenseCorrection")
   submitter             Membership         @relation("ExpenseSubmitter", fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   decider               Membership?        @relation("ExpenseDecider", fields: [companyId, decidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([companyId, id])
   @@unique([companyId, receiptDocumentId])
   @@unique([companyId, reversesId])
+  @@unique([companyId, correctsId])
   @@index([companyId, jobId])
   @@index([companyId, status, purchasedOn])
   @@index([companyId, submittedBy])
