@@ -24,6 +24,7 @@ import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { toDay } from "../company/gst";
 import { lockRow } from "../db/locks";
+import { nextNumber } from "../db/numbering";
 import { assignmentView } from "./views";
 import { jobSearch, jobOrder } from "./search";
 import {
@@ -191,23 +192,6 @@ async function siteProblem(
   return location
     ? null
     : ["locationId", "Choose one of this customer's sites"];
-}
-
-/** Next per-company number, atomically (row lock until commit). */
-async function nextNumber(
-  tx: Prisma.TransactionClient,
-  companyId: string,
-  kind: "job",
-): Promise<number> {
-  const rows = await tx.$queryRaw<{ last_value: number }[]>`
-    INSERT INTO number_sequences (company_id, kind, last_value)
-    VALUES (${companyId}::uuid, ${kind}, 1)
-    ON CONFLICT (company_id, kind)
-    DO UPDATE SET last_value = number_sequences.last_value + 1
-    RETURNING last_value`;
-  const value = rows[0]?.last_value;
-  if (!value) throw new Error("Numbering failed");
-  return value;
 }
 
 function jobResponse(actor: Actor, job: Job): Response {
