@@ -562,3 +562,36 @@ describe("review fixes (#111)", () => {
     ]);
   });
 });
+
+it("sorts and pages office jobs using only allowlisted fields", async () => {
+  const first = await newJob({
+    title: "Ordering fixture A",
+    dueOn: "2026-12-01",
+  });
+  const second = await newJob({
+    title: "Ordering fixture B",
+    dueOn: "2026-11-01",
+  });
+  const query = async (params: string) =>
+    (
+      await r().list(
+        call("owner", "GET", undefined, `?q=Ordering%20fixture&${params}`),
+        undefined,
+      )
+    ).json();
+  expect(
+    (await query("sort=title&direction=asc")).jobs.map(
+      (row: { id: string }) => row.id,
+    ),
+  ).toEqual([first.body.id, second.body.id]);
+  expect(
+    (await query("sort=dueOn&direction=asc&pageSize=1")).jobs.map(
+      (row: { id: string }) => row.id,
+    ),
+  ).toEqual([second.body.id]);
+  expect(
+    (await query("sort=companyId&direction=unsafe")).jobs.map(
+      (row: { id: string }) => row.id,
+    ),
+  ).toEqual([second.body.id, first.body.id]);
+});

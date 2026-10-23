@@ -6,6 +6,7 @@ import type {
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { toDay } from "../company/gst";
 import { uuidOrNull } from "../http/fields";
+import { jobSearch, jobOrder } from "./search";
 import { parsePage } from "../http/guards";
 
 // #32. What an employee sees of their own work (job.read_assigned). Built
@@ -27,7 +28,7 @@ function liveAssignment(actor: Actor): Prisma.AssignmentWhereInput {
 }
 
 /** Live assignments of the actor's own active employee record. */
-function assignedTo(actor: Actor): Prisma.JobWhereInput {
+export function assignedTo(actor: Actor): Prisma.JobWhereInput {
   return {
     companyId: actor.companyId,
     assignments: { some: liveAssignment(actor) },
@@ -72,16 +73,16 @@ const DETAIL = {
 export function myJobHandlers(db: () => PrismaClient) {
   const list: PolicyHandler<unknown> = async ({ actor, request }) => {
     if (actor.role !== "employee") throw forbidden();
-    const { page, take, skip } = parsePage(new URL(request.url).searchParams);
-    const where = assignedTo(actor);
+    const params = new URL(request.url).searchParams;
+    const { page, take, skip } = parsePage(params);
+    const where: Prisma.JobWhereInput = {
+      AND: [assignedTo(actor), jobSearch(params)],
+    };
     const [rows, total] = await Promise.all([
       db().job.findMany({
         where,
         select: SUMMARY,
-        orderBy: [
-          { dueOn: { sort: "asc", nulls: "last" } },
-          { number: "desc" },
-        ],
+        orderBy: jobOrder(params),
         take,
         skip,
       }),

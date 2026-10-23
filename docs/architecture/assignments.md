@@ -25,4 +25,4 @@ jobs `060000`; later invitation/document/customer-primary migrations remain inta
 The rollback removes assignments before the jobs/employee tables are rolled back.
 Integration tests cover roles, tenants, response shapes, active employee eligibility,
 visit scope, duplicate assignments, terminal jobs, deactivation and concurrent ends.
-Screens are delivered separately in #33. No timesheets, rates or payroll are added.
+The shared search/sort parameters and office inactive-employee indicator are documented with [screens #33](../testing/job-screens.md). Cancelled visits reject new assignments. Screens are delivered separately in #33. No timesheets, rates or payroll are added.

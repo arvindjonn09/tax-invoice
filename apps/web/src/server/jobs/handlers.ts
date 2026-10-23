@@ -24,7 +24,8 @@ import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { toDay } from "../company/gst";
 import { lockRow } from "../db/locks";
-import { assignmentView } from "./assignments";
+import { assignmentView } from "./views";
+import { jobSearch, jobOrder } from "./search";
 import {
   defined,
   optionalText,
@@ -69,7 +70,9 @@ function view(job: Job): JobView {
   };
 }
 
-function eventView(event: JobStatusEvent) {
+function eventView(
+  event: JobStatusEvent & { creator: { user: { name: string | null } } },
+) {
   return {
     id: event.id,
     fromStatus: event.fromStatus,
@@ -77,6 +80,7 @@ function eventView(event: JobStatusEvent) {
     note: event.note,
     createdAt: event.createdAt,
     createdBy: event.createdBy,
+    actorName: event.creator.user.name ?? "Team member",
   };
 }
 
@@ -135,8 +139,6 @@ const UpdateVisit = z
   .object(visitFields)
   .partial()
   .refine((value) => Object.keys(value).length > 0, "Nothing to update");
-
-const STATUS_FILTER = z.enum(JOB_STATUSES).optional().catch(undefined);
 
 type JobContext = { params: Promise<{ id: string }> };
 type VisitContext = { params: Promise<{ id: string; visitId: string }> };
@@ -216,26 +218,16 @@ export function jobHandlers(db: () => PrismaClient) {
   const list: PolicyHandler<unknown> = async ({ actor, request }) => {
     const params = new URL(request.url).searchParams;
     const { page, take, skip } = parsePage(params);
-    const status = STATUS_FILTER.parse(params.get("status") ?? undefined);
     const customerId = uuidOrNull(params.get("customerId") ?? "");
-    const q = params.get("q")?.trim().slice(0, 100);
     const filter: Prisma.JobWhereInput = {
-      ...(status ? { status } : {}),
+      ...jobSearch(params),
       ...(customerId ? { customerId } : {}),
-      ...(q
-        ? {
-            OR: [
-              { title: { contains: q, mode: "insensitive" } },
-              { reference: { contains: q, mode: "insensitive" } },
-            ],
-          }
-        : {}),
     };
     const where: Prisma.JobWhereInput = companyScope(actor, filter);
     const [rows, total] = await Promise.all([
       db().job.findMany({
         where,
-        orderBy: [{ number: "desc" }],
+        orderBy: jobOrder(params),
         take,
         skip,
       }),
@@ -257,6 +249,7 @@ export function jobHandlers(db: () => PrismaClient) {
         where: { companyId: actor.companyId, jobId: job.id },
         // Insertion order (monotonic sequence), not same-millisecond timestamps.
         orderBy: [{ seq: "asc" }],
+        include: { creator: { select: { user: { select: { name: true } } } } },
       }),
       db().jobVisit.findMany({
         where: { companyId: actor.companyId, jobId: job.id },
@@ -264,7 +257,7 @@ export function jobHandlers(db: () => PrismaClient) {
       }),
       db().assignment.findMany({
         where: { companyId: actor.companyId, jobId: job.id },
-        include: { employee: { select: { name: true } } },
+        include: { employee: { select: { name: true, isActive: true } } },
         orderBy: [{ assignedAt: "asc" }],
       }),
     ]);
