@@ -8,6 +8,8 @@ const APP = join(import.meta.dirname, "../../apps/web/src/app");
 const METHODS = "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS";
 
 const PUBLIC_ROUTES: Record<string, string> = {
+  "api/invitations/accept/route.ts":
+    "One-use invitation token authorizes acceptance; explicit origin/body/rate guards, existing-account identity check and transactionally scoped role grant",
   "api/health/route.ts": "liveness probe; returns no data",
   "api/auth/[...all]/route.ts":
     "Better Auth endpoints: sign-in/out and session; they enforce their own origin checks and throttling",
