@@ -368,3 +368,107 @@ describe("employee records", () => {
     expect(paged.employees).toHaveLength(1);
   });
 });
+
+describe("review fixes (#106)", () => {
+  it("clears email and phone when sent blank", async () => {
+    const created = await (
+      await routes().create(
+        call("owner", "POST", {
+          name: "Blank Sample",
+          email: "blank@jobflow.invalid",
+          phone: "0400 111 222",
+        }),
+        undefined,
+      )
+    ).json();
+    const cleared = await routes().update(
+      call("owner", "PATCH", { email: "", phone: "  " }),
+      params(created.id),
+    );
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toMatchObject({ email: null, phone: null });
+    expect(
+      (
+        await routes().create(
+          call("owner", "POST", { name: "Blank Phone", phone: "" }),
+          undefined,
+        )
+      ).status,
+    ).toBe(201);
+  });
+
+  it("records lifecycle events only for real transitions; no-op updates record nothing", async () => {
+    const id = (
+      await (
+        await routes().create(
+          call("owner", "POST", { name: "Retry Sample" }),
+          undefined,
+        )
+      ).json()
+    ).id;
+    const count = (action: string) =>
+      db.auditEvent.count({ where: { companyId, targetId: id, action } });
+    for (let i = 0; i < 3; i += 1)
+      expect(
+        (
+          await routes().update(
+            call("owner", "PATCH", { isActive: false }),
+            params(id),
+          )
+        ).status,
+      ).toBe(200);
+    expect(await count("employee.deactivated")).toBe(1);
+    await routes().update(
+      call("owner", "PATCH", { name: "Retry Sample" }),
+      params(id),
+    );
+    expect(await count("employee.updated")).toBe(0);
+  });
+
+  it("turns a concurrent duplicate user link into 400, not 500", async () => {
+    const results = await Promise.all(
+      ["Race One", "Race Two", "Race Three"].map((name) =>
+        routes().create(
+          call("owner", "POST", { name, userId: userIds.manager }),
+          undefined,
+        ),
+      ),
+    );
+    expect(results.map((r) => r.status).sort()).toEqual([201, 400, 400]);
+  });
+
+  it("audits concurrent edits as a consistent before→after chain", async () => {
+    const id = (
+      await (
+        await routes().create(
+          call("owner", "POST", { name: "Chain 0" }),
+          undefined,
+        )
+      ).json()
+    ).id;
+    await Promise.all(
+      ["Chain 1", "Chain 2", "Chain 3", "Chain 4"].map((name) =>
+        routes().update(call("manager", "PATCH", { name }), params(id)),
+      ),
+    );
+    const events = await db.auditEvent.findMany({
+      where: { companyId, targetId: id, action: "employee.updated" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const changes = events.map(
+      (event) =>
+        (
+          event.metadata as {
+            changes: { name: { before: string; after: string } };
+          }
+        ).changes.name,
+    );
+    expect(changes).toHaveLength(4);
+    // Each event's "before" is a value that really existed: the start value
+    // or another event's "after" — never a stale duplicate.
+    const befores = changes.map((c) => c.before).sort();
+    const valid = ["Chain 0", ...changes.map((c) => c.after)];
+    for (const before of befores) expect(valid).toContain(before);
+    expect(new Set(befores).size).toBe(4);
+  });
+});
