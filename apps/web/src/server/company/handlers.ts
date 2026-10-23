@@ -10,6 +10,7 @@ import type {
 } from "../../../../../packages/database/src/generated/prisma/client";
 import { withAudit } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
+import { HttpError, readJson } from "../http/guards";
 
 /** Positive allowlist of company fields returned to clients. */
 const COMPANY_FIELDS: FieldRules<Company> = {
@@ -32,7 +33,11 @@ export function companyHandlers(db: () => PrismaClient) {
 
   const rename: PolicyHandler<unknown> = async ({ actor, request }) => {
     const parsed = RenameCompany.safeParse(
-      await request.json().catch(() => null),
+      await readJson(request).catch((error: unknown) => {
+        // Oversized or non-JSON bodies keep their own status (413/415).
+        if (error instanceof HttpError && error.status !== 400) throw error;
+        return null;
+      }),
     );
     if (!parsed.success) {
       return privateJson(

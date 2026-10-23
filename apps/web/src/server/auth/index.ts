@@ -44,3 +44,12 @@ export function getAuth(): Auth {
   });
   return auth;
 }
+
+/**
+ * The app's own origin: the only one allowed to send mutations (#71).
+ * Unconfigured means none — every mutation is refused (fail closed).
+ */
+export function getTrustedOrigins(): string[] {
+  const url = process.env.BETTER_AUTH_URL;
+  return url ? [new URL(url).origin] : [];
+}
