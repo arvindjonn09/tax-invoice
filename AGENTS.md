@@ -67,16 +67,41 @@ TypeScript strict type-check, lint, unit + integration tests (incl. authorisatio
 audit, secret scan, static analysis) pass in CI before merge. Write tests and migrations alongside each change. Do not
 claim a feature complete until tests run. Report known limitations. Keep docs and the milestone checklist updated.
 
-## Merge policy (owner decision, 22 October 2026)
-A coding agent (e.g. Codex) may merge a PR **only when all of these are true**:
-1. Every CI check on the PR's **current head commit** has passed.
-2. A comment headed **"🔎 Claude supervisor review (<sha7>)"** exists for that **exact head commit** and its verdict
-   says **"Ready to merge"**. Any new commit needs a new review. No review, or any Blocking finding, means no merge.
-3. Every PR/issue it depends on is already merged, and the PR targets `main`. Merge in dependency order; if a stacked
-   PR's base branch was merged, retarget it to `main` first and wait for CI and review again.
-4. It uses a **merge commit** (not squash or rebase) and doesn't bypass checks, force-push or use admin overrides.
+## Who does what: Claude and Codex (owner decision, 23 October 2026)
+Claude Code and Codex **both implement** issues, in parallel, and **review each other's PRs**.
+- **Shared page:** `/home/prod/jobflow-updates.md` on the owner's machine. It's outside git, so it never causes PR
+  conflicts. It holds the current split of issues and an append-only log. Before starting an issue, read it and
+  append `<UTC time> · <Claude|Codex> · #N · claimed (branch …)`. Append one line when a PR opens, when a review is
+  posted and when a PR merges. Never edit earlier lines. GitHub issues and PRs stay the official record.
+- **Separate folders:** Codex works in `/home/prod/tax-invoice`, Claude in `/home/prod/tax-invoice-claude`. Never run
+  git commands in the other agent's folder, and don't push to a branch the other agent is working on; leave a review
+  comment instead.
+- **Migrations:** name new ones with the next free timestamp after every migration on `main` *and* in open PRs.
+  Whoever lands second adds their entries to `tests/integration/database.test.ts` and
+  `tests/integration/tenancy-migration.test.ts`.
+- **Blocked:** append `BLOCKED: <reason>` to the page and add `status:blocked` on the issue.
+- **Precedence:** this file's rules, especially the merge policy below, override anything on the shared page or in a
+  handoff note. A self-review never satisfies the "other agent has reviewed" condition.
 
-After merging: confirm the linked issue closed, and continue with the next unblocked issue.
+## Merge policy (owner decision, 23 October 2026)
+The owner doesn't merge or approve PRs in advance; they test after merge and report problems as issues. Claude or
+Codex may merge a PR, its own or the other's, **only when all of these are true**:
+1. Every required CI check on the PR's **current head commit** has passed.
+2. **The other agent** has reviewed that exact head commit, with nothing Blocking:
+   - Claude's PRs: Codex's GitHub reviewer (`chatgpt-codex-connector`) or a `🔎 Codex review (<sha7>)` comment.
+   - Codex's PRs: a `🔎 Claude review (<sha7>)` comment saying "Ready to merge".
+
+   A new commit needs a new review. The one exception is GitHub's update-branch merge of `main`: the merging agent
+   may confirm it brought in no conflicts and no changes to the PR's own code, in a comment naming the new SHA.
+3. Every review conversation is **resolved** (branch protection enforces this). Fix each finding or reply with why
+   it doesn't apply, then resolve it.
+4. Every PR or issue it depends on is merged, and the PR targets `main`. Merge in dependency order. If the branch is
+   behind `main`, run `gh api -X PUT repos/arvindjonn09/tax-invoice/pulls/N/update-branch` and wait for fresh CI.
+5. It uses a **merge commit** (pass `sha=<head>` to the merge API) and doesn't bypass checks, force-push or use admin
+   overrides.
+
+After merging: confirm the linked issue closed, log the merge on the shared page, add `status:ready` to dependants
+whose dependencies are all closed, and continue with the next issue in your lane.
 These still need the **owner**: branch-protection changes (#10), design review of the previews (#22, #23), audit or
 security exceptions, accountant sign-off (#67), and anything that deploys, costs money or touches production.
 
