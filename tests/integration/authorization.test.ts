@@ -145,7 +145,7 @@ describe("withPolicy", () => {
   });
 
   it("returns 403 when the role lacks the permission", async () => {
-    const response = await withPolicy("company.update", handlers.rename)(
+    const response = await withPolicy("company.update", handlers.update)(
       request("PATCH", cookies.employee, { name: "Sample Takeover" }),
       undefined,
     );
@@ -173,7 +173,7 @@ describe("withPolicy", () => {
 
 describe("company scope", () => {
   it("ignores a forged companyId: the owner can only rename their own company, with an audit event", async () => {
-    const response = await withPolicy("company.update", handlers.rename)(
+    const response = await withPolicy("company.update", handlers.update)(
       request("PATCH", cookies.owner, {
         name: "Sample Renamed Co",
         companyId: ids.companyB,
@@ -206,7 +206,7 @@ describe("company scope", () => {
       { name: "x".repeat(201) },
       "not json",
     ]) {
-      const response = await withPolicy("company.update", handlers.rename)(
+      const response = await withPolicy("company.update", handlers.update)(
         request("PATCH", cookies.owner, body),
         undefined,
       );
@@ -249,7 +249,7 @@ describe("request guards (#71)", () => {
         const req = request("PATCH", headers, { name: "Forged Rename" });
         if (origin) req.headers.set("origin", origin);
         else req.headers.delete("origin");
-        const response = await withPolicy("company.update", handlers.rename)(
+        const response = await withPolicy("company.update", handlers.update)(
           req,
           undefined,
         );
@@ -264,7 +264,7 @@ describe("request guards (#71)", () => {
   });
 
   it("refuses an oversized body with 413", async () => {
-    const response = await withPolicy("company.update", handlers.rename)(
+    const response = await withPolicy("company.update", handlers.update)(
       request("PATCH", cookies.owner, { name: "x".repeat(70_000) }),
       undefined,
     );
@@ -276,18 +276,18 @@ describe("request guards (#71)", () => {
     const restore = setLogSink((line) => lines.push(line));
     try {
       const response = await withPolicy("company.read", async () => {
-        throw new Error("db failed for owner@jobflow.invalid ABN 51824753556");
+        throw new Error("db failed for owner@jobflow.invalid ABN 12345678901");
       })(request("GET", cookies.owner), undefined);
       expect(response.status).toBe(500);
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       const body = await response.json();
       expect(Object.keys(body).sort()).toEqual(["error", "reference"]);
       expect(JSON.stringify(body)).not.toMatch(
-        /db failed|jobflow\.invalid|5182/,
+        /db failed|jobflow\.invalid|12345678901/,
       );
       expect(lines).toHaveLength(1);
       expect(lines[0]).toContain(body.reference);
-      expect(lines[0]).not.toMatch(/jobflow\.invalid|51824753556/);
+      expect(lines[0]).not.toMatch(/jobflow\.invalid|12345678901/);
     } finally {
       restore();
     }

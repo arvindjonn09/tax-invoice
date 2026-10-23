@@ -12,6 +12,7 @@
   "dependencies": {
     "@jobflow/authz": "workspace:^",
     "@jobflow/database": "workspace:^",
+    "@jobflow/domain": "workspace:^",
     "@radix-ui/react-slot": "1.5.0",
     "better-auth": "1.7.12",
     "class-variance-authority": "0.7.1",

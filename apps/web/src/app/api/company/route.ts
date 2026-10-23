@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 const handlers = companyHandlers(getDatabase);
 
-/** The active company of the signed-in member. */
+/** The active company of the signed-in member (details for owner/accountant). */
 export const GET = withPolicy("company.read", handlers.read);
-/** Rename the active company (owners only; audited). */
-export const PATCH = withPolicy("company.update", handlers.rename);
+/** Update the company profile: name, legal name, ABN, address, prefixes (owners; audited). */
+export const PATCH = withPolicy("company.update", handlers.update);
