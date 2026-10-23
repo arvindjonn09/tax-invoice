@@ -14,7 +14,7 @@ function Links({
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   return (
     <ul className="space-y-1">
       {items.map((item) => {

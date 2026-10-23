@@ -21,13 +21,26 @@ export function getDatabase(): PrismaClient {
   return database;
 }
 
+/**
+ * The real production environment. `next start` always sets NODE_ENV=production,
+ * so staging and previews declare themselves with APP_ENV (staging, preview,
+ * development); without APP_ENV a production build counts as production.
+ */
+export function isProductionEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  return env.APP_ENV
+    ? env.APP_ENV === "production"
+    : env.NODE_ENV === "production";
+}
+
 /** Lazily created so `next build` needs no secrets. */
 export function getAuth(): Auth {
   auth ??= createAuth({
     db: getDatabase(),
     secret: required("BETTER_AUTH_SECRET"),
     baseURL: required("BETTER_AUTH_URL"),
-    production: process.env.NODE_ENV === "production",
+    production: isProductionEnvironment(process.env),
   });
   return auth;
 }
