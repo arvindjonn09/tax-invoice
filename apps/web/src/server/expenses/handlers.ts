@@ -95,8 +95,19 @@ const UpdateExpense = z
 const Decide = z.object({
   decision: z.enum(["approve", "reject"]),
   note: optionalText(500).optional(),
+  /** The approver checked the attached document (R5/R6); never inferred. */
+  evidenceVerified: z.boolean().optional(),
 });
-const Reverse = z.object({ note: requiredText(500, "Say why it's reversed") });
+/**
+ * A reversal corrects cost and GST only. Cash or the supplier balance moves
+ * only when an actual refund or supplier credit is recorded with it.
+ */
+const Reverse = z.object({
+  note: requiredText(500, "Say why it's reversed"),
+  settlement: z.enum(["none", "refund", "supplier_credit"]).default("none"),
+  refundedOn: day.optional(),
+  paymentMethod: z.enum(["card", "cash", "bank_transfer", "other"]).optional(),
+});
 
 const STATUS = z
   .enum(["submitted", "approved", "rejected"])
@@ -157,6 +168,7 @@ function officeView(row: OfficeRow) {
         ? null
         : {
             companyGstRegistered: row.companyGstRegistered,
+            evidenceVerified: row.evidenceVerified,
             hasEvidence: row.hasEvidence,
             creditableGstCents: money(row.creditableGstCents),
             nonCreditableGstCents: money(row.nonCreditableGstCents),
@@ -268,6 +280,27 @@ async function checkDraft(
 
 const RECEIPT_TAKEN = "That receipt is already attached to another expense";
 
+/**
+ * Take the locks that assignment and deactivation writes take (#32: job,
+ * then employee) before re-checking a submitter's eligibility, so an
+ * assignment ending or an employee deactivating can't slip in between the
+ * check and the insert.
+ */
+async function lockEligibility(
+  tx: Prisma.TransactionClient,
+  actor: Actor,
+  jobId: string | null,
+) {
+  const job = jobId ? uuidOrNull(jobId) : null;
+  if (job) await lockRow(tx, "jobs", job);
+  if (can(actor.role, "expense.read_all")) return;
+  const employee = await tx.employee.findFirst({
+    where: { companyId: actor.companyId, userId: actor.userId },
+    select: { id: true },
+  });
+  if (employee) await lockRow(tx, "employees", employee.id);
+}
+
 async function lockedExpense(tx: Prisma.TransactionClient, id: string) {
   await lockRow(tx, "expenses", id);
   return tx.expense.findUniqueOrThrow({
@@ -370,52 +403,58 @@ export function expenseHandlers(db: () => PrismaClient) {
       where: { id: actor.companyId },
       select: { defaultExpenseSettlement: true },
     });
-    const checked = await checkDraft(db(), actor, {
-      jobId: data.jobId ?? null,
-      purchasedOn: data.purchasedOn,
-      priceEntry: data.priceEntry,
-      amountCents: data.amountCents,
-      taxCode: data.taxCode,
-      creditableBasisPoints: data.creditablePercent ?? 10_000,
-      receiptDocumentId: data.receiptDocumentId ?? null,
-      settlement: data.settlement ?? defaultExpenseSettlement,
-      paidOn: data.paidOn ?? null,
-      paymentMethod: data.paymentMethod ?? null,
-    });
-    if (Array.isArray(checked)) return fail(400, checked[1], checked[0]);
+    const jobId = data.jobId ?? null;
     try {
-      const row = await withAudit(db(), async (tx, audit) => {
-        const created = await tx.expense.create({
-          data: {
-            ...(checked as Prisma.ExpenseUncheckedCreateInput),
+      return await inTransaction(async () => {
+        const row = await withAudit(db(), async (tx, audit) => {
+          // Eligibility is checked under the locks, not on a stale preflight.
+          await lockEligibility(tx, actor, jobId);
+          const checked = await checkDraft(tx, actor, {
+            jobId,
+            purchasedOn: data.purchasedOn,
+            priceEntry: data.priceEntry,
+            amountCents: data.amountCents,
+            taxCode: data.taxCode,
+            creditableBasisPoints: data.creditablePercent ?? 10_000,
+            receiptDocumentId: data.receiptDocumentId ?? null,
+            settlement: data.settlement ?? defaultExpenseSettlement,
+            paidOn: data.paidOn ?? null,
+            paymentMethod: data.paymentMethod ?? null,
+          });
+          if (Array.isArray(checked))
+            throw new Refusal(fail(400, checked[1], checked[0]));
+          const created = await tx.expense.create({
+            data: {
+              ...(checked as Prisma.ExpenseUncheckedCreateInput),
+              companyId: actor.companyId,
+              category: data.category,
+              description: data.description,
+              supplierName: data.supplierName ?? null,
+              submittedBy: actor.userId,
+            },
+            include: OFFICE_INCLUDE,
+          });
+          await audit({
             companyId: actor.companyId,
-            category: data.category,
-            description: data.description,
-            supplierName: data.supplierName ?? null,
-            submittedBy: actor.userId,
-          },
-          include: OFFICE_INCLUDE,
+            actorUserId: actor.userId,
+            action: "expense.submitted",
+            target: { type: "expense", id: created.id },
+            after: {
+              jobId: created.jobId,
+              category: created.category,
+              taxCode: created.taxCode,
+              exclusiveCents: created.exclusiveCents,
+              gstCents: created.gstCents,
+              settlement: created.settlement,
+            },
+          });
+          return created;
         });
-        await audit({
-          companyId: actor.companyId,
-          actorUserId: actor.userId,
-          action: "expense.submitted",
-          target: { type: "expense", id: created.id },
-          after: {
-            jobId: created.jobId,
-            category: created.category,
-            taxCode: created.taxCode,
-            exclusiveCents: created.exclusiveCents,
-            gstCents: created.gstCents,
-            settlement: created.settlement,
-          },
-        });
-        return created;
+        return privateJson(
+          can(actor.role, "expense.read_all") ? officeView(row) : ownView(row),
+          { status: 201 },
+        );
       });
-      return privateJson(
-        can(actor.role, "expense.read_all") ? officeView(row) : ownView(row),
-        { status: 201 },
-      );
     } catch (error) {
       if (isUniqueViolation(error, "receipt_document_id"))
         return fail(400, RECEIPT_TAKEN, "receiptDocumentId");
@@ -451,11 +490,15 @@ export function expenseHandlers(db: () => PrismaClient) {
             );
           const settlement = data.settlement ?? before.settlement;
           const keepPayment = settlement === before.settlement;
+          const nextJobId =
+            data.jobId === undefined ? before.jobId : data.jobId;
+          await lockEligibility(tx, actor, nextJobId);
+          if (!settlement) throw new Error("Only reversals lack a settlement");
           const checked = await checkDraft(
             tx,
             actor,
             {
-              jobId: data.jobId === undefined ? before.jobId : data.jobId,
+              jobId: nextJobId,
               purchasedOn: data.purchasedOn ?? toDay(before.purchasedOn),
               priceEntry: data.priceEntry ?? before.priceEntry,
               amountCents: data.amountCents ?? before.enteredAmountCents,
@@ -540,13 +583,33 @@ export function expenseHandlers(db: () => PrismaClient) {
     const parsed = Decide.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
     const owned = await ownExpense(db(), actor, (await context.params).id);
-    const { decision, note } = parsed.data;
+    const { decision, note, evidenceVerified = false } = parsed.data;
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
         const before = await lockedExpense(tx, owned.id);
         if (before.status !== "submitted")
           throw new Refusal(
             fail(409, `This expense is already ${before.status}`),
+          );
+        const receipt = before.receiptDocumentId
+          ? await tx.document.findUniqueOrThrow({
+              where: { id: before.receiptDocumentId },
+              select: { kind: true },
+            })
+          : null;
+        const document =
+          receipt?.kind === "tax_invoice"
+            ? "tax_invoice"
+            : receipt
+              ? "receipt"
+              : null;
+        if (evidenceVerified && !document)
+          throw new Refusal(
+            fail(
+              400,
+              "Attach the receipt or tax invoice before verifying it",
+              "evidenceVerified",
+            ),
           );
         const decided = {
           decisionNote: note ?? null,
@@ -584,20 +647,23 @@ export function expenseHandlers(db: () => PrismaClient) {
           },
           {
             companyRegistered: company.registered,
-            receiptAttached: before.receiptDocumentId !== null,
+            document,
+            evidenceVerified,
             creditableBasisPoints: BigInt(before.creditableBasisPoints),
           },
         );
-        const hasEvidence = hasPurchaseEvidence(
-          before.inclusiveCents,
-          before.receiptDocumentId !== null,
-        );
+        const hasEvidence = hasPurchaseEvidence({
+          inclusive: before.inclusiveCents,
+          document,
+          verified: evidenceVerified,
+        });
         const updated = await tx.expense.update({
           where: { id: before.id },
           data: {
             status: "approved",
             ...decided,
             companyGstRegistered: company.registered,
+            evidenceVerified,
             hasEvidence,
             creditableGstCents: cost.creditableGst,
             nonCreditableGstCents: cost.nonCreditableGst,
@@ -613,6 +679,9 @@ export function expenseHandlers(db: () => PrismaClient) {
           before: { status: before.status },
           after: {
             status: updated.status,
+            evidenceDocument: document,
+            evidenceVerified,
+            hasEvidence,
             creditableGstCents: cost.creditableGst,
             jobCostCents: cost.jobCost,
           },
@@ -646,6 +715,32 @@ export function expenseHandlers(db: () => PrismaClient) {
             );
           if (original.reversedBy)
             throw new Refusal(fail(409, "This expense is already reversed"));
+          const { settlement: effect, refundedOn, paymentMethod } = parsed.data;
+          if (effect === "refund" && original.settlement !== "paid_at_purchase")
+            throw new Refusal(
+              fail(
+                400,
+                "Only an expense paid at purchase can be refunded",
+                "settlement",
+              ),
+            );
+          if (
+            effect === "supplier_credit" &&
+            original.settlement !== "on_account"
+          )
+            throw new Refusal(
+              fail(
+                400,
+                "Only an expense on account gets a supplier credit",
+                "settlement",
+              ),
+            );
+          if (effect === "refund" && !refundedOn)
+            throw new Refusal(fail(400, "Enter the refund date", "refundedOn"));
+          if (refundedOn && refundedOn > sydneyToday())
+            throw new Refusal(
+              fail(400, "The refund date can't be in the future", "refundedOn"),
+            );
           const negated = reverseExpense({
             exclusive: original.exclusiveCents,
             gst: original.gstCents,
@@ -671,18 +766,25 @@ export function expenseHandlers(db: () => PrismaClient) {
               gstCents: negated.gst,
               inclusiveCents: negated.inclusive,
               creditableBasisPoints: original.creditableBasisPoints,
-              settlement: original.settlement,
-              // A paid expense is refunded today; on account reduces the balance.
+              // Cost-only unless a refund or supplier credit is recorded.
+              settlement:
+                effect === "refund"
+                  ? "paid_at_purchase"
+                  : effect === "supplier_credit"
+                    ? "on_account"
+                    : null,
               paidOn:
-                original.settlement === "paid_at_purchase"
-                  ? fromDay(sydneyToday(now))
+                effect === "refund" && refundedOn ? fromDay(refundedOn) : null,
+              paymentMethod:
+                effect === "refund"
+                  ? (paymentMethod ?? original.paymentMethod)
                   : null,
-              paymentMethod: original.paymentMethod,
               status: "approved",
               decisionNote: parsed.data.note,
               decidedAt: now,
               decidedBy: actor.userId,
               companyGstRegistered: original.companyGstRegistered,
+              evidenceVerified: original.evidenceVerified,
               hasEvidence: original.hasEvidence,
               creditableGstCents: negated.creditableGst,
               nonCreditableGstCents: negated.nonCreditableGst,
@@ -697,7 +799,11 @@ export function expenseHandlers(db: () => PrismaClient) {
             actorUserId: actor.userId,
             action: "expense.reversed",
             target: { type: "expense", id: original.id },
-            after: { reversalId: created.id, jobCostCents: negated.jobCost },
+            after: {
+              reversalId: created.id,
+              jobCostCents: negated.jobCost,
+              settlementEffect: effect,
+            },
           });
           return created;
         });

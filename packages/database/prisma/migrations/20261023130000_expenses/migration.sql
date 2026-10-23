@@ -43,7 +43,8 @@ CREATE TABLE "expenses" (
     -- Business-use share of the GST that may be claimed (10000 = 100%).
     "creditable_basis_points" INTEGER NOT NULL DEFAULT 10000,
     "receipt_document_id" UUID,
-    "settlement" "expense_settlement" NOT NULL,
+    -- Null only for a cost-only reversal (no refund or supplier credit).
+    "settlement" "expense_settlement",
     "paid_on" DATE,
     "payment_method" "payment_method",
     "status" "expense_status" NOT NULL DEFAULT 'submitted',
@@ -52,6 +53,8 @@ CREATE TABLE "expenses" (
     "decided_by" UUID,
     -- Snapshot at approval; never recalculated.
     "company_gst_registered" BOOLEAN,
+    -- The approver verified the retained document (R5/R6); never inferred.
+    "evidence_verified" BOOLEAN,
     "has_evidence" BOOLEAN,
     "creditable_gst_cents" BIGINT,
     "non_creditable_gst_cents" BIGINT,
@@ -74,10 +77,12 @@ CREATE TABLE "expenses" (
         ELSE "entered_amount_cents" <= 0 AND "exclusive_cents" <= 0 AND "gst_cents" <= 0
       END
     ),
-    -- Paid at purchase records when and how, once; on account records neither.
+    -- Paid at purchase records when and how, once; on account records
+    -- neither. A reversal moves cash or the balance only when it says so.
     CONSTRAINT "expenses_settlement" CHECK (
       ("settlement" = 'paid_at_purchase' AND "paid_on" IS NOT NULL AND "payment_method" IS NOT NULL)
       OR ("settlement" = 'on_account' AND "paid_on" IS NULL AND "payment_method" IS NULL)
+      OR ("settlement" IS NULL AND "reverses_id" IS NOT NULL AND "paid_on" IS NULL AND "payment_method" IS NULL)
     ),
     CONSTRAINT "expenses_decision" CHECK (
       ("status" = 'submitted') = ("decided_at" IS NULL)
@@ -90,6 +95,7 @@ CREATE TABLE "expenses" (
       AND ("job_cost_cents" IS NULL) = ("non_creditable_gst_cents" IS NULL)
       AND ("job_cost_cents" IS NULL) = ("company_gst_registered" IS NULL)
       AND ("job_cost_cents" IS NULL) = ("has_evidence" IS NULL)
+      AND ("job_cost_cents" IS NULL) = ("evidence_verified" IS NULL)
       AND ("job_cost_cents" IS NULL OR (
         "creditable_gst_cents" + "non_creditable_gst_cents" = "gst_cents"
         AND "job_cost_cents" = "exclusive_cents" + "non_creditable_gst_cents"

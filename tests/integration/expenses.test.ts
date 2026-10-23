@@ -241,11 +241,18 @@ const decide = (
   id: string,
   decision: "approve" | "reject",
   who: Who = "manager",
-) => r().decide(call(who, "POST", { decision }), one(id));
+  extra: Record<string, unknown> = {},
+) => r().decide(call(who, "POST", { decision, ...extra }), one(id));
 
-async function approved(body: Record<string, unknown> = {}) {
+/** Submit and approve; the approver verifies the evidence when a document is attached. */
+async function approved(
+  body: Record<string, unknown> = {},
+  evidenceVerified = Boolean(body.receiptDocumentId),
+) {
   const { body: created } = await submit(body);
-  const response = await decide(created.id, "approve");
+  const response = await decide(created.id, "approve", "manager", {
+    evidenceVerified,
+  });
   expect(response.status).toBe(200);
   return response.json();
 }
@@ -423,13 +430,14 @@ describe("submitting", () => {
 
 describe("approval: cost incurred once", () => {
   it("issue fixture: $150 + $15 creditable → cost $150", async () => {
-    const document = await receipt("manager");
+    const document = await receipt("manager", "tax_invoice");
     const body = await approved({ receiptDocumentId: document.id });
     expect(body).toMatchObject({
       status: "approved",
       decidedAt: expect.any(String),
       approval: {
         companyGstRegistered: true,
+        evidenceVerified: true,
         hasEvidence: true,
         creditableGstCents: "1500",
         nonCreditableGstCents: "0",
@@ -453,8 +461,11 @@ describe("approval: cost incurred once", () => {
     });
   });
 
-  it("before GST registration nothing is claimable; low-value purchases need no receipt", async () => {
-    const early = await approved({ purchasedOn: "2019-12-31" });
+  it("before GST registration nothing is claimable; low-value needs retained evidence", async () => {
+    const early = await approved({
+      purchasedOn: "2019-12-31",
+      receiptDocumentId: (await receipt("manager", "tax_invoice")).id,
+    });
     expect(early.approval).toMatchObject({
       companyGstRegistered: false,
       jobCostCents: "16500",
@@ -462,15 +473,25 @@ describe("approval: cost incurred once", () => {
     const low = await approved({
       amountCents: "8250",
       priceEntry: "inclusive",
+      receiptDocumentId: (await receipt("manager")).id,
     });
     expect(low.approval).toMatchObject({
       hasEvidence: true,
       creditableGstCents: "750",
       jobCostCents: "7500",
     });
+    const lowWithout = await approved({
+      amountCents: "8250",
+      priceEntry: "inclusive",
+    });
+    expect(lowWithout.approval).toMatchObject({
+      hasEvidence: false,
+      creditableGstCents: "0",
+      jobCostCents: "8250",
+    });
     const share = await approved({
       creditablePercent: "60",
-      receiptDocumentId: (await receipt("manager")).id,
+      receiptDocumentId: (await receipt("manager", "tax_invoice")).id,
     });
     expect(share.approval).toMatchObject({
       creditableGstCents: "900",
@@ -505,6 +526,43 @@ describe("approval: cost incurred once", () => {
         },
       }),
     ).toBe(1);
+  });
+
+  it("evidence is verified, never inferred (Codex #117 review)", async () => {
+    // Above 8250: a generic receipt, even verified, is not a tax invoice.
+    const generic = await approved({
+      receiptDocumentId: (await receipt("manager", "receipt")).id,
+    });
+    expect(generic.approval).toMatchObject({
+      evidenceVerified: true,
+      hasEvidence: false,
+      jobCostCents: "16500",
+    });
+    // A tax invoice the approver didn't verify doesn't qualify either.
+    const unverified = await approved(
+      { receiptDocumentId: (await receipt("manager", "tax_invoice")).id },
+      false,
+    );
+    expect(unverified.approval).toMatchObject({
+      evidenceVerified: false,
+      hasEvidence: false,
+      jobCostCents: "16500",
+    });
+    // Verifying with nothing attached is refused, and nothing is approved.
+    const { body } = await submit();
+    const refused = await decide(body.id, "approve", "manager", {
+      evidenceVerified: true,
+    });
+    expect(refused.status).toBe(400);
+    expect(
+      (await db.expense.findUniqueOrThrow({ where: { id: body.id } })).status,
+    ).toBe("submitted");
+    const audit = await db.auditEvent.findFirstOrThrow({
+      where: { targetId: unverified.id, action: "expense.approved" },
+    });
+    expect(audit.metadata).toMatchObject({
+      changes: { evidenceVerified: { after: false } },
+    });
   });
 });
 
@@ -570,7 +628,7 @@ describe("approved expenses are final; corrections are reversals", () => {
   it("reverses an approved expense with its exact negated cents, once", async () => {
     const original = await approved({
       creditablePercent: "33.33",
-      receiptDocumentId: (await receipt("manager")).id,
+      receiptDocumentId: (await receipt("manager", "tax_invoice")).id,
     });
     const response = await r().reverse(
       call("manager", "POST", { note: "Wrong job" }),
@@ -585,6 +643,10 @@ describe("approved expenses are final; corrections are reversals", () => {
       gstCents: "-1500",
       inclusiveCents: "-16500",
       decisionNote: "Wrong job",
+      // A cost correction is not a refund.
+      settlement: null,
+      paidOn: null,
+      paymentMethod: null,
     });
     for (const key of [
       "creditableGstCents",
@@ -645,7 +707,7 @@ describe("settlement reconciles without double-counting", () => {
         createdBy: userIds.owner,
       },
     });
-    const doc = async () => (await receipt("manager")).id;
+    const doc = async () => (await receipt("manager", "tax_invoice")).id;
     const paid = await approved({
       jobId: job.id,
       receiptDocumentId: await doc(),
@@ -662,8 +724,12 @@ describe("settlement reconciles without double-counting", () => {
       paymentMethod: undefined,
       receiptDocumentId: await doc(),
     });
+    // An explicit supplier credit cancels the duplicate's balance.
     await r().reverse(
-      call("manager", "POST", { note: "Duplicate" }),
+      call("manager", "POST", {
+        note: "Duplicate",
+        settlement: "supplier_credit",
+      }),
       one(toReverse.id),
     );
     await submit({ jobId: job.id }); // pending: no cost, no cash, no balance
@@ -686,5 +752,140 @@ describe("settlement reconciles without double-counting", () => {
     });
     expect(cash + outstanding).toBe(sum((row) => row.inclusiveCents));
     expect(paid.approval.jobCostCents).toBe(onAccount.approval.jobCostCents);
+  });
+});
+
+describe("reversals move cash only when a refund is recorded (Codex #117 review)", () => {
+  const cashFor = async (id: string) => {
+    const rows = await db.expense.findMany({
+      where: { OR: [{ id }, { reversesId: id }] },
+    });
+    return rows.reduce(
+      (total, row) =>
+        total +
+        (row.settlement === "paid_at_purchase" ? row.inclusiveCents : 0n),
+      0n,
+    );
+  };
+
+  it("a correction without a refund leaves the payment as it was", async () => {
+    const paid = await approved();
+    const reversal = await r().reverse(
+      call("manager", "POST", { note: "Wrong category" }),
+      one(paid.id),
+    );
+    expect(reversal.status).toBe(201);
+    expect(await cashFor(paid.id)).toBe(16500n);
+  });
+
+  it("an actual refund needs its date and moves cash back", async () => {
+    const paid = await approved();
+    const missingDate = await r().reverse(
+      call("manager", "POST", { note: "Returned", settlement: "refund" }),
+      one(paid.id),
+    );
+    expect(missingDate.status).toBe(400);
+    const refunded = await r().reverse(
+      call("manager", "POST", {
+        note: "Returned",
+        settlement: "refund",
+        refundedOn: "2026-07-03",
+      }),
+      one(paid.id),
+    );
+    expect(await refunded.json()).toMatchObject({
+      settlement: "paid_at_purchase",
+      paidOn: "2026-07-03",
+      paymentMethod: "card",
+    });
+    expect(await cashFor(paid.id)).toBe(0n);
+  });
+
+  it("refunds only paid expenses and credits only on-account ones", async () => {
+    const onAccount = await approved({
+      settlement: "on_account",
+      paymentMethod: undefined,
+    });
+    expect(
+      (
+        await r().reverse(
+          call("manager", "POST", {
+            note: "x",
+            settlement: "refund",
+            refundedOn: "2026-07-03",
+          }),
+          one(onAccount.id),
+        )
+      ).status,
+    ).toBe(400);
+    const paid = await approved();
+    expect(
+      (
+        await r().reverse(
+          call("manager", "POST", { note: "x", settlement: "supplier_credit" }),
+          one(paid.id),
+        )
+      ).status,
+    ).toBe(400);
+  });
+});
+
+describe("eligibility is rechecked under the shared locks (Codex #117 review)", () => {
+  it("writes nothing when the assignment ends while the submission waits", async () => {
+    const employee = await db.employee.findFirstOrThrow({
+      where: { companyId, userId: userIds.employee },
+    });
+    const job = await db.job.create({
+      data: {
+        companyId,
+        customerId: (
+          await db.customer.findFirstOrThrow({ where: { companyId } })
+        ).id,
+        number: 77,
+        reference: "SJ-77",
+        title: "Race job",
+        createdBy: userIds.owner,
+      },
+    });
+    const assignment = await db.assignment.create({
+      data: {
+        companyId,
+        jobId: job.id,
+        employeeId: employee.id,
+        createdBy: userIds.owner,
+      },
+    });
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    let pending: Promise<Response> | undefined;
+    // An unassign that holds the job lock (as #32's end does) while the
+    // employee's submission arrives, then commits.
+    await db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT 1 FROM jobs WHERE id = ${job.id}::uuid FOR UPDATE`;
+      await tx.assignment.update({
+        where: { id: assignment.id },
+        data: { endedAt: new Date(), endedBy: userIds.owner },
+      });
+      locked();
+      pending = r().create(
+        call("employee", "POST", { jobId: job.id, ...MATERIALS }),
+        undefined,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    await holding;
+    const response = await pending!;
+    expect(response.status).toBe(400);
+    expect(await db.expense.count({ where: { jobId: job.id } })).toBe(0);
+    expect(
+      await db.auditEvent.count({
+        where: {
+          action: "expense.submitted",
+          metadata: { path: ["changes", "jobId", "after"], equals: job.id },
+        },
+      }),
+    ).toBe(0);
   });
 });

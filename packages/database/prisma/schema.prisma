@@ -715,45 +715,46 @@ enum ExpenseStatus {
 /// the snapshot columns; a SQL trigger freezes decided expenses and a
 /// correction is an approved reversal (reversesId) with negated cents.
 model Expense {
-  id                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId             String            @map("company_id") @db.Uuid
-  jobId                 String?           @map("job_id") @db.Uuid
+  id                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId             String             @map("company_id") @db.Uuid
+  jobId                 String?            @map("job_id") @db.Uuid
   category              ExpenseCategory
-  description           String            @db.VarChar(500)
-  supplierName          String?           @map("supplier_name") @db.VarChar(200)
-  purchasedOn           DateTime          @map("purchased_on") @db.Date
-  priceEntry            PriceEntry        @map("price_entry")
-  enteredAmountCents    BigInt            @map("entered_amount_cents")
-  taxCode               TaxCode           @map("tax_code")
-  gstRateBasisPoints    Int               @map("gst_rate_basis_points")
-  exclusiveCents        BigInt            @map("exclusive_cents")
-  gstCents              BigInt            @map("gst_cents")
-  inclusiveCents        BigInt            @map("inclusive_cents")
-  creditableBasisPoints Int               @default(10000) @map("creditable_basis_points")
-  receiptDocumentId     String?           @map("receipt_document_id") @db.Uuid
-  settlement            ExpenseSettlement
-  paidOn                DateTime?         @map("paid_on") @db.Date
-  paymentMethod         PaymentMethod?    @map("payment_method")
-  status                ExpenseStatus     @default(submitted)
-  decisionNote          String?           @map("decision_note") @db.VarChar(500)
-  decidedAt             DateTime?         @map("decided_at") @db.Timestamptz(3)
-  decidedBy             String?           @map("decided_by") @db.Uuid
-  companyGstRegistered  Boolean?          @map("company_gst_registered")
-  hasEvidence           Boolean?          @map("has_evidence")
-  creditableGstCents    BigInt?           @map("creditable_gst_cents")
-  nonCreditableGstCents BigInt?           @map("non_creditable_gst_cents")
-  jobCostCents          BigInt?           @map("job_cost_cents")
-  reversesId            String?           @map("reverses_id") @db.Uuid
-  submittedBy           String            @map("submitted_by") @db.Uuid
-  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt             DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  company               Company           @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  job                   Job?              @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  receipt               Document?         @relation(fields: [companyId, receiptDocumentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  reverses              Expense?          @relation("ExpenseReversal", fields: [companyId, reversesId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  reversedBy            Expense?          @relation("ExpenseReversal")
-  submitter             Membership        @relation("ExpenseSubmitter", fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  decider               Membership?       @relation("ExpenseDecider", fields: [companyId, decidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  description           String             @db.VarChar(500)
+  supplierName          String?            @map("supplier_name") @db.VarChar(200)
+  purchasedOn           DateTime           @map("purchased_on") @db.Date
+  priceEntry            PriceEntry         @map("price_entry")
+  enteredAmountCents    BigInt             @map("entered_amount_cents")
+  taxCode               TaxCode            @map("tax_code")
+  gstRateBasisPoints    Int                @map("gst_rate_basis_points")
+  exclusiveCents        BigInt             @map("exclusive_cents")
+  gstCents              BigInt             @map("gst_cents")
+  inclusiveCents        BigInt             @map("inclusive_cents")
+  creditableBasisPoints Int                @default(10000) @map("creditable_basis_points")
+  receiptDocumentId     String?            @map("receipt_document_id") @db.Uuid
+  settlement            ExpenseSettlement?
+  paidOn                DateTime?          @map("paid_on") @db.Date
+  paymentMethod         PaymentMethod?     @map("payment_method")
+  status                ExpenseStatus      @default(submitted)
+  decisionNote          String?            @map("decision_note") @db.VarChar(500)
+  decidedAt             DateTime?          @map("decided_at") @db.Timestamptz(3)
+  decidedBy             String?            @map("decided_by") @db.Uuid
+  companyGstRegistered  Boolean?           @map("company_gst_registered")
+  evidenceVerified      Boolean?           @map("evidence_verified")
+  hasEvidence           Boolean?           @map("has_evidence")
+  creditableGstCents    BigInt?            @map("creditable_gst_cents")
+  nonCreditableGstCents BigInt?            @map("non_creditable_gst_cents")
+  jobCostCents          BigInt?            @map("job_cost_cents")
+  reversesId            String?            @map("reverses_id") @db.Uuid
+  submittedBy           String             @map("submitted_by") @db.Uuid
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  company               Company            @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  job                   Job?               @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  receipt               Document?          @relation(fields: [companyId, receiptDocumentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  reverses              Expense?           @relation("ExpenseReversal", fields: [companyId, reversesId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  reversedBy            Expense?           @relation("ExpenseReversal")
+  submitter             Membership         @relation("ExpenseSubmitter", fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  decider               Membership?        @relation("ExpenseDecider", fields: [companyId, decidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([companyId, id])
   @@unique([companyId, receiptDocumentId])

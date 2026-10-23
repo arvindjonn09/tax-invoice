@@ -24,7 +24,8 @@ const materials = (priceEntry: "exclusive" | "inclusive" = "exclusive") =>
 
 const registered = {
   companyRegistered: true,
-  receiptAttached: true,
+  document: "tax_invoice" as const,
+  evidenceVerified: true,
   creditableBasisPoints: 10_000n,
 };
 
@@ -45,7 +46,9 @@ describe("issue fixtures: materials $150 + $15 GST", () => {
     for (const input of [
       { ...registered, companyRegistered: false },
       { ...registered, creditableBasisPoints: 0n },
-      { ...registered, receiptAttached: false },
+      { ...registered, document: null },
+      { ...registered, evidenceVerified: false },
+      { ...registered, document: "receipt" as const },
     ]) {
       expect(expenseCost(materials(), input).jobCost).toBe(16500n);
     }
@@ -68,23 +71,42 @@ describe("issue fixtures: materials $150 + $15 GST", () => {
   });
 });
 
-describe("evidence (R5)", () => {
-  it("needs a receipt above 8250 cents incl. GST; 8250 itself is low-value", () => {
+describe("evidence (R5, R6): verified qualifying documents only", () => {
+  it("above 8250 incl. GST: only a verified tax invoice qualifies", () => {
     expect(LOW_VALUE_PURCHASE_CENTS).toBe(8250n);
-    expect(hasPurchaseEvidence(8250n, false)).toBe(true);
-    expect(hasPurchaseEvidence(8251n, false)).toBe(false);
-    expect(hasPurchaseEvidence(8251n, true)).toBe(true);
-    const low = expenseLine({
+    const above = { inclusive: 8251n, verified: true };
+    expect(hasPurchaseEvidence({ ...above, document: "tax_invoice" })).toBe(
+      true,
+    );
+    expect(hasPurchaseEvidence({ ...above, document: "receipt" })).toBe(false);
+    expect(hasPurchaseEvidence({ ...above, document: null })).toBe(false);
+    expect(
+      hasPurchaseEvidence({
+        ...above,
+        document: "tax_invoice",
+        verified: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("at or below 8250: retained alternative evidence (a receipt) qualifies, nothing does not", () => {
+    const low = { inclusive: 8250n, verified: true };
+    expect(hasPurchaseEvidence({ ...low, document: "receipt" })).toBe(true);
+    expect(hasPurchaseEvidence({ ...low, document: null })).toBe(false);
+    expect(
+      hasPurchaseEvidence({ ...low, document: "receipt", verified: false }),
+    ).toBe(false);
+    const line = expenseLine({
       amount: 8250n,
       priceEntry: "inclusive",
       taxCode: "TAXABLE_10",
     });
     expect(
-      expenseCost(low, { ...registered, receiptAttached: false }),
-    ).toMatchObject({
-      gst: 750n,
-      creditableGst: 750n,
-      jobCost: 7500n,
+      expenseCost(line, { ...registered, document: "receipt" }),
+    ).toMatchObject({ gst: 750n, creditableGst: 750n, jobCost: 7500n });
+    expect(expenseCost(line, { ...registered, document: null })).toMatchObject({
+      creditableGst: 0n,
+      jobCost: 8250n,
     });
   });
 });
@@ -169,25 +191,47 @@ describe("settlement: neither option double-counts, cash and outstanding reconci
     });
   });
 
-  it("mixed with a reversal: cash + outstanding = GST-inclusive total", () => {
+  it("a cost-only reversal moves no cash and no supplier balance", () => {
     const paid = approved("paid_at_purchase");
-    const reversed = approved("on_account");
+    const correction = {
+      settlement: null,
+      inclusive: -paid.inclusive,
+      jobCost: -paid.jobCost,
+      creditableGst: -paid.creditableGst,
+    };
+    expect(expenseTotals([paid, correction])).toEqual({
+      cost: 0n,
+      creditableGst: 0n,
+      cashPaid: 16500n,
+      supplierOutstanding: 0n,
+    });
+    // Resubmitted correctly: cost once, still one payment, no invented refund.
+    expect(
+      expenseTotals([paid, correction, approved("paid_at_purchase")]),
+    ).toMatchObject({ cost: 15000n, cashPaid: 33000n });
+  });
+
+  it("an explicit refund or supplier credit moves cash or the balance", () => {
+    const paid = approved("paid_at_purchase");
+    const onAccount = approved("on_account");
+    const negate = (row: typeof paid) => ({
+      ...row,
+      inclusive: -row.inclusive,
+      jobCost: -row.jobCost,
+      creditableGst: -row.creditableGst,
+    });
     const rows = [
       paid,
+      negate(paid),
+      onAccount,
+      negate(onAccount),
       approved("on_account"),
-      reversed,
-      {
-        settlement: "on_account" as const,
-        inclusive: -reversed.inclusive,
-        jobCost: -reversed.jobCost,
-        creditableGst: -reversed.creditableGst,
-      },
     ];
     const totals = expenseTotals(rows);
     expect(totals).toEqual({
-      cost: 30000n,
-      creditableGst: 3000n,
-      cashPaid: 16500n,
+      cost: 15000n,
+      creditableGst: 1500n,
+      cashPaid: 0n,
       supplierOutstanding: 16500n,
     });
     expect(totals.cashPaid + totals.supplierOutstanding).toBe(
@@ -232,7 +276,7 @@ describe("combined fixture: materials and travel as approved expenses", () => {
   it("non-creditable materials: cost 146500, profit 103500", () => {
     const materialsCost = expenseCost(materials(), {
       ...registered,
-      receiptAttached: false,
+      document: null,
     }).jobCost;
     const result = jobProfit({
       revenueExclusive: sale,

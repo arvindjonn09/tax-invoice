@@ -50,12 +50,26 @@ export function expenseLine(input: {
   });
 }
 
-/** Evidence for an input tax credit: a receipt on file, or a low-value purchase. */
-export function hasPurchaseEvidence(
-  inclusive: Cents,
-  receiptAttached: boolean,
-): boolean {
-  return receiptAttached || inclusive <= LOW_VALUE_PURCHASE_CENTS;
+/** The kind of retained document attached to an expense, if any. */
+export type EvidenceDocument = "tax_invoice" | "receipt" | null;
+
+/**
+ * Qualifying evidence for an input tax credit (R5, R6), never inferred from
+ * an attachment or an amount alone: the approver must have verified the
+ * retained document. Above 8250 cents incl. GST that document must be a tax
+ * invoice; at or below it, retained alternative evidence (a receipt) is
+ * enough. No document, no evidence.
+ */
+export function hasPurchaseEvidence(input: {
+  inclusive: Cents;
+  document: EvidenceDocument;
+  verified: boolean;
+}): boolean {
+  if (!input.verified || input.document === null) return false;
+  return (
+    input.document === "tax_invoice" ||
+    input.inclusive <= LOW_VALUE_PURCHASE_CENTS
+  );
 }
 
 /**
@@ -67,7 +81,8 @@ export function expenseCost(
   line: GstLine,
   input: {
     companyRegistered: boolean;
-    receiptAttached: boolean;
+    document: EvidenceDocument;
+    evidenceVerified: boolean;
     creditableBasisPoints: bigint;
   },
 ): Purchase {
@@ -77,7 +92,11 @@ export function expenseCost(
     exclusive: line.exclusive,
     gst: line.gst,
     buyerRegistered: input.companyRegistered,
-    hasEvidence: hasPurchaseEvidence(line.inclusive, input.receiptAttached),
+    hasEvidence: hasPurchaseEvidence({
+      inclusive: line.inclusive,
+      document: input.document,
+      verified: input.evidenceVerified,
+    }),
     creditableFraction: {
       numerator: input.creditableBasisPoints,
       denominator: 10_000n,
@@ -98,7 +117,11 @@ export function reverseExpense(original: Purchase): Purchase {
 }
 
 export type ApprovedExpense = {
-  settlement: Settlement;
+  /**
+   * How cash or the supplier balance moved. Null for a cost-only reversal:
+   * correcting cost never implies a refund (only an explicit one does).
+   */
+  settlement: Settlement | null;
   /** Snapshot at approval; negative for a reversal. */
   inclusive: Cents;
   jobCost: Cents;
@@ -110,16 +133,17 @@ export type ExpenseTotals = {
   cost: Cents;
   /** Input tax credits (1B); an asset, never cost. */
   creditableGst: Cents;
-  /** Cash paid at purchase (refunds of reversed paid expenses net off). */
+  /** Cash paid at purchase, net of explicitly recorded refunds. */
   cashPaid: Cents;
   /** Owed to suppliers for on-account expenses, before supplier payments. */
   supplierOutstanding: Cents;
 };
 
 /**
- * Totals over approved expenses (and their reversals). Each expense lands in
- * exactly one of cash paid or supplier outstanding, so cash + outstanding =
- * the GST-inclusive total, whatever the mix; cost ignores settlement.
+ * Totals over approved expenses (and their reversals). Each settled row lands
+ * in exactly one of cash paid or supplier outstanding, so cash + outstanding =
+ * the GST-inclusive total of settled rows; cost-only reversals move neither.
+ * Cost ignores settlement.
  */
 export function expenseTotals(rows: readonly ApprovedExpense[]): ExpenseTotals {
   const paid = rows.filter((row) => row.settlement === "paid_at_purchase");
