@@ -4,12 +4,13 @@ How to hand the remaining JobFlow work (milestones M0–M5) to OpenAI Codex. Cod
 these prompts tell it how to work through the GitHub issues. See [plan.md](../plan.md) for the full project plan.
 
 ## Before you start
-1. Merge PR **#1**, then PR **#68**, so `main` contains the aligned docs. Without them Codex builds from the old spec
-   that left GST out.
-2. **Codex cloud** (chatgpt.com/codex): connect the repo and give the environment a setup script that installs Node 20+,
-   pnpm and PostgreSQL. Cloud containers often can't run Docker, so integration tests need a local Postgres. The
-   container usually can't run `gh` with your login, so you update issue labels yourself.
-3. **Codex CLI on this PC**: `gh` is already logged in as `arvindjonn09`, so Codex can claim and comment on issues itself.
+Since 23 October 2026 Claude Code and Codex **both implement**, in parallel, and review each other's PRs; see
+AGENTS.md "Who does what" and "Merge policy". Coordination lives on the shared page
+`/home/prod/jobflow-updates.md`: the current split of issues and an append-only log. Codex's current brief is
+`/home/prod/jobflow-codex-next.md`.
+
+**Codex CLI on this PC:** `gh` is logged in as `arvindjonn09`, so Codex can claim issues, review and merge itself.
+Codex works only in `/home/prod/tax-invoice`.
 
 ---
 
@@ -119,10 +120,14 @@ Begin with issue #8.
 
 ```text
 Work on issue #<N> in arvindjonn09/tax-invoice. Follow plan.md, AGENTS.md, CLAUDE.md and the
-role file .claude/agents/<agent-label>.md. Confirm every "Depends on" issue is
-closed, then: branch from the latest main, implement with tests, run type-check,
-lint, tests and build, and open a PR with "Closes #<N>" and an acceptance-criteria
-checklist backed by real test output. Merge only under the AGENTS.md merge policy.
+role file .claude/agents/<agent-label>.md. Read /home/prod/jobflow-updates.md first and
+append "<UTC time> · Codex · #<N> · claimed (branch …)"; skip the issue if Claude claimed it.
+Confirm every "Depends on" issue is closed, then: branch from the latest main, implement
+with tests, run type-check, lint, tests and build, and open a PR with "Closes #<N>" and an
+acceptance-criteria checklist backed by real test output. Log the PR on the updates page.
+Also review Claude's open PRs listed there (one "🔎 Codex review (<sha7>)" comment per new
+head). Merge only under the AGENTS.md merge policy (CI green on the exact head, the other
+agent's review of that head, all threads resolved), then log the merge.
 ```
 
 ---
@@ -134,13 +139,12 @@ PR #<P> in arvindjonn09/tax-invoice has review comments. Read them with
 gh pr view <P> --json title,body,reviews,comments and gh pr diff <P>.
 Fix every Blocking and Should-fix item on the same branch, add tests that would
 have caught each bug, rerun type-check, lint, tests and build, push, and reply to
-each comment with what changed. Then wait for a new supervisor review of the new commit.
+each comment with what changed, and resolve the threads you fixed. Then wait for a new
+review of the new commit by the other agent.
 ```
 
 ## Your loop as owner
-1. Codex opens a PR.
-2. Optionally have Claude review it: *"use the code-reviewer agent on PR #N"* (and the security-engineer agent for
-   auth, money, files or personal data).
-3. If changes are needed, give Codex Prompt 3.
-4. Codex merges once Claude's review of the exact head commit says "Ready to merge" (AGENTS.md merge policy). Any issue whose dependencies are now all closed can start; give Codex Prompt 2 for it.
-5. Issues with no dependencies on each other can run as parallel Codex tasks (in M0: #8, #16, #18, #24).
+1. Check `/home/prod/jobflow-updates.md` to see who is doing what and what merged.
+2. Agents merge without waiting for you, once the other agent's review and CI are green (AGENTS.md merge policy).
+3. Test the preview after merges (http://shiva-1.tail3e0a57.ts.net:3300) and report problems as GitHub issues.
+4. Still yours: branch protection, preview design sign-off, security exceptions, accountant sign-off, deploys and costs.
