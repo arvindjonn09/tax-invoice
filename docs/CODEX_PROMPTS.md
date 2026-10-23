@@ -6,8 +6,8 @@ these prompts tell it how to work through the GitHub issues. See [plan.md](../pl
 ## Before you start
 Since 23 October 2026 Claude Code and Codex **both implement**, in parallel, and review each other's PRs; see
 AGENTS.md "Who does what" and "Merge policy". Coordination lives on the shared page
-`/home/prod/jobflow-updates.md`: the current split of issues and an append-only log. Codex's current brief is
-`/home/prod/jobflow-codex-next.md`.
+`/home/prod/jobflow-updates.md`: the current split of issues and an append-only log. `/home/prod/jobflow-codex-next.md`
+is the latest handoff note for Codex. If either disagrees with AGENTS.md, **AGENTS.md wins**.
 
 **Codex CLI on this PC:** `gh` is logged in as `arvindjonn09`, so Codex can claim issues, review and merge itself.
 Codex works only in `/home/prod/tax-invoice`.
@@ -34,14 +34,14 @@ Each issue has an `agent:<name>` label. Before working on an issue, read
 Example: agent:backend-engineer means read .claude/agents/backend-engineer.md.
 
 HOW TO PICK THE NEXT ISSUE
-- Work milestone by milestone: M0 (#2), then M1 (#3), then M2 (#4), then M3 (#5),
-  then M4 (#6), then M5 (#7). Never start a later milestone's backend work early.
-- Only take an issue when every issue on its "Depends on:" line is closed
-  (its PR has been merged).
-- Start M0 in this order: #8, then #16 and #18 and #24 (no dependencies), then #9,
-  then #10, #11 and #12, then the rest as their dependencies close.
-- #17 (the money/GST/profit core) must not start until #16 has verified the
-  GST rules and rounding.
+- Claude Code works in parallel. The shared page /home/prod/jobflow-updates.md
+  holds the current split of issues and an append-only log. Read it first.
+- Take the next issue in YOUR lane of the split that is unclaimed and whose
+  "Depends on:" issues are all closed. Never take an issue Claude claimed.
+- Keep milestone order: M0 (#2), M1 (#3), M2 (#4), M3 (#5), M4 (#6), M5 (#7).
+  Never start a later milestone's backend work early.
+- Claim it on the page before any code:
+  "<UTC time> · Codex · #<n> · claimed (branch …)"
 
 FOR EACH ISSUE
 1. Read the issue and its comments. With the gh CLI, always pass --json, e.g.
@@ -51,9 +51,9 @@ FOR EACH ISSUE
 3. Branch from the latest main: <type>/<issue>-<slug>, e.g. feat/17-money-gst-core.
 4. Implement only what is in this issue's scope. Write tests alongside the code.
    Use Conventional Commits that mention the issue: feat(domain): add GST line calc (#17)
-5. Run type-check, lint, unit/integration tests and build (commands are in CLAUDE.md
-   once #8 fills them in). Fix every failure. Never skip or delete a failing test
-   to get a green run.
+5. Run type-check, lint, unit/integration/e2e tests and build (commands are in
+   CLAUDE.md). Fix every failure. Never skip or delete a failing test to get a
+   green run.
 6. Open a PR using .github/pull_request_template.md:
    - "Closes #<n>"
    - a summary
@@ -62,7 +62,10 @@ FOR EACH ISSUE
    - known limitations
    - screenshots at 390px and 1440px (light and dark) for any UI change
 7. Comment on the issue: what was done, what's left, what comes next.
-   Set `status:in-review`.
+   Set `status:in-review`, and log the PR on the shared page.
+8. Review Claude's open PRs listed on the shared page: one
+   "🔎 Codex review (<sha7>)" comment per new head commit (Blocking / Should fix /
+   Looks good), then log "reviewed PR #X: ok|changes".
 
 NON-NEGOTIABLE RULES (from AGENTS.md)
 - Money is AUD in integer cents. Never use floating point for money.
@@ -96,22 +99,25 @@ STOP AND ASK THE OWNER (do not proceed alone) when:
 - Anything would deploy, cost money, or touch production.
 - Docs conflict with each other. Point out the conflict instead of guessing.
 
-MERGING
-- Follow the "Merge policy" in AGENTS.md exactly: merge only with green CI on the
-  head commit AND a "🔎 Claude supervisor review (<sha7>)" comment for that exact
-  commit saying "Ready to merge", in dependency order, using a merge commit.
-  Otherwise wait, or fix the review findings first.
+MERGING (AGENTS.md "Merge policy" is the authority; it overrides anything else)
+- Merge a PR only when: every required check is green on its current head commit;
+  the OTHER agent has reviewed that exact head (for your PRs: a
+  "🔎 Claude review (<sha7>)" comment saying "Ready to merge"); every review
+  conversation is resolved; its dependencies are merged. Use a merge commit.
+- Your own review never counts for your own PR.
 
 NEVER
-- Merge without that review, bypass checks, or close issues except via merged PRs.
-- Force-push main.
+- Merge without the other agent's review of the exact head, bypass checks, or close
+  issues except via merged PRs.
+- Force-push main, or push to a branch Claude is working on.
 - Change the scope of an issue. If you find extra work, open a new issue with
   the right labels and milestone, and link it.
 - Implement several issues in one PR, or several modules in one untested change.
 
 When you finish each PR, report: PR link, issue number, test results,
 acceptance criteria pass/fail, and the next issue you recommend.
-Begin with issue #8.
+Begin by reading /home/prod/jobflow-updates.md and taking the next eligible
+issue in your lane.
 ```
 
 ---

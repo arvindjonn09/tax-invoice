@@ -80,6 +80,8 @@ Claude Code and Codex **both implement** issues, in parallel, and **review each 
   Whoever lands second adds their entries to `tests/integration/database.test.ts` and
   `tests/integration/tenancy-migration.test.ts`.
 - **Blocked:** append `BLOCKED: <reason>` to the page and add `status:blocked` on the issue.
+- **Precedence:** this file's rules, especially the merge policy below, override anything on the shared page or in a
+  handoff note. A self-review never satisfies the "other agent has reviewed" condition.
 
 ## Merge policy (owner decision, 23 October 2026)
 The owner doesn't merge or approve PRs in advance; they test after merge and report problems as issues. Claude or
