@@ -110,33 +110,34 @@ model AuthRateLimit {
 }
 
 model Company {
-  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name            String           @db.VarChar(200)
-  isDemo          Boolean          @default(false) @map("is_demo")
-  legalName       String?          @map("legal_name") @db.VarChar(200)
+  id               String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String                   @db.VarChar(200)
+  isDemo           Boolean                  @default(false) @map("is_demo")
+  legalName        String?                  @map("legal_name") @db.VarChar(200)
   /// 11 digits, checksum-validated by the application (#25).
-  abn             String?          @db.Char(11)
-  addressLine1    String?          @map("address_line1") @db.VarChar(200)
-  addressLine2    String?          @map("address_line2") @db.VarChar(200)
-  suburb          String?          @db.VarChar(100)
-  state           String?          @db.VarChar(3)
-  postcode        String?          @db.Char(4)
-  invoicePrefix   String           @default("INV-") @map("invoice_prefix") @db.VarChar(10)
-  jobPrefix       String           @default("JOB-") @map("job_prefix") @db.VarChar(10)
-  basPeriod       BasReportingPeriod @default(quarterly) @map("bas_period")
-  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy       String           @map("created_by") @db.Uuid
+  abn              String?                  @db.Char(11)
+  addressLine1     String?                  @map("address_line1") @db.VarChar(200)
+  addressLine2     String?                  @map("address_line2") @db.VarChar(200)
+  suburb           String?                  @db.VarChar(100)
+  state            String?                  @db.VarChar(3)
+  postcode         String?                  @db.Char(4)
+  invoicePrefix    String                   @default("INV-") @map("invoice_prefix") @db.VarChar(10)
+  jobPrefix        String                   @default("JOB-") @map("job_prefix") @db.VarChar(10)
+  basPeriod        BasReportingPeriod       @default(quarterly) @map("bas_period")
+  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy        String                   @map("created_by") @db.Uuid
   // Migration defers this FK until commit so company + first owner can be atomic.
-  creator         Membership       @relation("CompanyCreator", fields: [id, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  memberships     Membership[]     @relation("CompanyMemberships")
-  auditEvents     AuditEvent[]
-  idempotencyKeys IdempotencyKey[]
-  authSessions    AuthSession[]
+  creator          Membership               @relation("CompanyCreator", fields: [id, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  memberships      Membership[]             @relation("CompanyMemberships")
+  auditEvents      AuditEvent[]
+  idempotencyKeys  IdempotencyKey[]
+  authSessions     AuthSession[]
   gstRegistrations CompanyGstRegistration[]
   employees        Employee[]
   customers        Customer[]
   numberSequences  NumberSequence[]
+  documents        Document[]
 
   userInvitations UserInvitation[]
 
@@ -177,19 +178,19 @@ model CompanyGstRegistration {
 }
 
 model Membership {
-  id                 String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId          String           @map("company_id") @db.Uuid
-  userId             String           @map("user_id") @db.Uuid
+  id                 String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId          String                   @map("company_id") @db.Uuid
+  userId             String                   @map("user_id") @db.Uuid
   role               MembershipRole
-  isActive           Boolean          @default(true) @map("is_active")
-  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy          String           @map("created_by") @db.Uuid
-  company            Company          @relation("CompanyMemberships", fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  user               User             @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  creator            Membership       @relation("MembershipCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  createdMemberships Membership[]     @relation("MembershipCreator")
-  createdCompanies   Company[]        @relation("CompanyCreator")
+  isActive           Boolean                  @default(true) @map("is_active")
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy          String                   @map("created_by") @db.Uuid
+  company            Company                  @relation("CompanyMemberships", fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user               User                     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator            Membership               @relation("MembershipCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  createdMemberships Membership[]             @relation("MembershipCreator")
+  createdCompanies   Company[]                @relation("CompanyCreator")
   auditEvents        AuditEvent[]
   idempotencyKeys    IdempotencyKey[]
   gstRegistrations   CompanyGstRegistration[]
@@ -201,6 +202,7 @@ model Membership {
   jobsCreated        Job[]
   jobEventsCreated   JobStatusEvent[]
   jobVisitsCreated   JobVisit[]
+  documentsCreated   Document[]
 
   invitationsCreated UserInvitation[]
 
@@ -386,25 +388,25 @@ enum JobVisitStatus {
 
 /// The core work order (#31). Price is GST-exclusive integer cents.
 model Job {
-  id                         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId                  String           @map("company_id") @db.Uuid
-  number                     Int
-  reference                  String           @db.VarChar(30)
-  customerId                 String           @map("customer_id") @db.Uuid
-  locationId                 String?          @map("location_id") @db.Uuid
-  title                      String           @db.VarChar(200)
-  description                String?          @db.VarChar(4000)
-  status                     JobStatus        @default(draft)
-  agreedPriceExclusiveCents  BigInt?          @map("agreed_price_exclusive_cents")
-  dueOn                      DateTime?        @map("due_on") @db.Date
-  createdAt                  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt                  DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy                  String           @map("created_by") @db.Uuid
-  customer                   Customer         @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  location                   Location?        @relation(fields: [companyId, customerId, locationId], references: [companyId, customerId, id], onDelete: NoAction, onUpdate: NoAction)
-  creator                    Membership       @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  statusEvents               JobStatusEvent[]
-  visits                     JobVisit[]
+  id                        String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId                 String           @map("company_id") @db.Uuid
+  number                    Int
+  reference                 String           @db.VarChar(30)
+  customerId                String           @map("customer_id") @db.Uuid
+  locationId                String?          @map("location_id") @db.Uuid
+  title                     String           @db.VarChar(200)
+  description               String?          @db.VarChar(4000)
+  status                    JobStatus        @default(draft)
+  agreedPriceExclusiveCents BigInt?          @map("agreed_price_exclusive_cents")
+  dueOn                     DateTime?        @map("due_on") @db.Date
+  createdAt                 DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy                 String           @map("created_by") @db.Uuid
+  customer                  Customer         @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  location                  Location?        @relation(fields: [companyId, customerId, locationId], references: [companyId, customerId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator                   Membership       @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  statusEvents              JobStatusEvent[]
+  visits                    JobVisit[]
 
   @@unique([companyId, number])
   @@unique([companyId, id])
@@ -472,4 +474,34 @@ model UserInvitation {
   @@index([companyId, createdAt, id])
   @@index([companyId, createdBy])
   @@map("user_invitations")
+}
+
+enum DocumentKind {
+  receipt
+  photo
+  tax_invoice
+  other
+
+  @@map("document_kind")
+}
+
+/// A private file (#34). Bytes live in S3-compatible storage under a random
+/// key; reached only through an authorised, short-lived signed link.
+model Document {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String       @map("company_id") @db.Uuid
+  kind        DocumentKind
+  objectKey   String       @unique @map("object_key") @db.VarChar(200)
+  fileName    String       @map("file_name") @db.VarChar(200)
+  contentType String       @map("content_type") @db.VarChar(100)
+  sizeBytes   Int          @map("size_bytes")
+  sha256      String       @db.Char(64)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy   String       @map("created_by") @db.Uuid
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership   @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@index([companyId, createdBy])
+  @@map("documents")
 }

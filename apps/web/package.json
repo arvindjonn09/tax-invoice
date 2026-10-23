@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1156.0",
     "@jobflow/authz": "workspace:^",
     "@jobflow/database": "workspace:^",
     "@jobflow/domain": "workspace:^",

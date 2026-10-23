@@ -43,6 +43,8 @@ export const PERMISSIONS = [
   "expense.read_all",
   "expense.approve",
   "evidence.submit_assigned",
+  "document.upload",
+  "document.read_all",
   "quote.read",
   "quote.write",
   "invoice.read",
@@ -62,6 +64,8 @@ export type Permission = (typeof PERMISSIONS)[number];
 
 const OFFICE: readonly Permission[] = [
   "company.read",
+  "document.upload",
+  "document.read_all",
   "customer.read",
   "job.read_all",
   "job.price.read",
@@ -110,6 +114,7 @@ const GRANTS: Record<Role, readonly Permission[]> = {
   ],
   employee: [
     "company.read",
+    "document.upload",
     "job.read_assigned",
     "timesheet.submit_own",
     "expense.submit_own",
@@ -117,6 +122,7 @@ const GRANTS: Record<Role, readonly Permission[]> = {
   ],
   subcontractor: [
     "company.read",
+    "document.upload",
     "job.read_assigned",
     "offer.read_own",
     "offer.respond_own",
