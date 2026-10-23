@@ -161,7 +161,7 @@ function pick<T extends object>(record: T, keys: readonly string[]) {
 }
 
 async function ownCustomer(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   actor: Actor,
   id: string,
 ): Promise<Customer> {
@@ -170,6 +170,23 @@ async function ownCustomer(
     actor,
     safe ? await db.customer.findUnique({ where: { id: safe } }) : null,
   );
+}
+
+/** Serialize directory writes per customer before reading audit preimages. */
+async function lockCustomer(
+  tx: Prisma.TransactionClient,
+  actor: Actor,
+  id: string,
+): Promise<Customer> {
+  const safe = uuidOrNull(id);
+  if (safe) {
+    await tx.$queryRaw`
+      SELECT id FROM customers
+      WHERE id = ${safe}::uuid AND company_id = ${actor.companyId}::uuid
+      FOR UPDATE
+    `;
+  }
+  return ownCustomer(tx, actor, id);
 }
 
 export function customerHandlers(db: () => PrismaClient) {
@@ -267,10 +284,10 @@ export function customerHandlers(db: () => PrismaClient) {
     const { id } = await context.params;
     const parsed = UpdateCustomer.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
-    const before = await ownCustomer(db(), actor, id);
     const data = withArchive(parsed.data);
     const keys = Object.keys(data);
     const row = await withAudit(db(), async (tx, audit) => {
+      const before = await lockCustomer(tx, actor, id);
       const updated = await tx.customer.update({
         where: { id: before.id },
         data,
@@ -296,9 +313,9 @@ export function customerHandlers(db: () => PrismaClient) {
     const { id } = await context.params;
     const parsed = CreateContact.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
-    const customer = await ownCustomer(db(), actor, id);
     const data = defined(parsed.data);
     const row = await withAudit(db(), async (tx, audit) => {
+      const customer = await lockCustomer(tx, actor, id);
       if (data.isPrimary) await clearPrimary(tx, actor.companyId, customer.id);
       const created = await tx.customerContact.create({
         data: {
@@ -330,19 +347,19 @@ export function customerHandlers(db: () => PrismaClient) {
     const { id, childId } = await context.params;
     const parsed = UpdateContact.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
-    const customer = await ownCustomer(db(), actor, id);
-    const safe = uuidOrNull(childId);
-    const before = requireSameCompany(
-      actor,
-      safe
-        ? await db().customerContact.findFirst({
-            where: { id: safe, customerId: customer.id },
-          })
-        : null,
-    );
     const data = withArchive(parsed.data);
     const keys = Object.keys(data);
     const row = await withAudit(db(), async (tx, audit) => {
+      const customer = await lockCustomer(tx, actor, id);
+      const safe = uuidOrNull(childId);
+      const before = requireSameCompany(
+        actor,
+        safe
+          ? await tx.customerContact.findFirst({
+              where: { id: safe, customerId: customer.id },
+            })
+          : null,
+      );
       if (parsed.data.isPrimary)
         await clearPrimary(tx, actor.companyId, customer.id);
       const updated = await tx.customerContact.update({
@@ -370,9 +387,9 @@ export function customerHandlers(db: () => PrismaClient) {
     const { id } = await context.params;
     const parsed = CreateLocation.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
-    const customer = await ownCustomer(db(), actor, id);
     const data = defined(parsed.data);
     const row = await withAudit(db(), async (tx, audit) => {
+      const customer = await lockCustomer(tx, actor, id);
       const created = await tx.location.create({
         data: {
           ...data,
@@ -403,19 +420,19 @@ export function customerHandlers(db: () => PrismaClient) {
     const { id, childId } = await context.params;
     const parsed = UpdateLocation.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
-    const customer = await ownCustomer(db(), actor, id);
-    const safe = uuidOrNull(childId);
-    const before = requireSameCompany(
-      actor,
-      safe
-        ? await db().location.findFirst({
-            where: { id: safe, customerId: customer.id },
-          })
-        : null,
-    );
     const data = withArchive(parsed.data);
     const keys = Object.keys(data);
     const row = await withAudit(db(), async (tx, audit) => {
+      const customer = await lockCustomer(tx, actor, id);
+      const safe = uuidOrNull(childId);
+      const before = requireSameCompany(
+        actor,
+        safe
+          ? await tx.location.findFirst({
+              where: { id: safe, customerId: customer.id },
+            })
+          : null,
+      );
       const updated = await tx.location.update({
         where: { id: before.id },
         data,
