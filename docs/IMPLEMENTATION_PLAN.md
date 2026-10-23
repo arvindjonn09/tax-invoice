@@ -27,7 +27,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [x] Customers, locations and contacts — #28 merged via PR #107; concurrency regression tests cover primary contacts and atomic audit history
 - [ ] Customer directory screens — #29 implemented with search/sort/pagination, billing forms, contacts and sites; [verification](testing/customer-screens.md); pending CI and cross-review
 - [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
-- [ ] Per-company job numbers, detail, status timeline, visits
+- [x] Per-company job numbers, detail, status timeline, visits — #31: atomic per-company numbering, status machine with immutable history, visits; GST-exclusive cents price
 - [ ] Assignment to employee and authorisation tests
 
 ## M2 Contractors, timesheets and job expenses
