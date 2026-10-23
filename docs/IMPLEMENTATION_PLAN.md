@@ -25,7 +25,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Company profile and effective-dated GST registration settings (ABN, basis, BAS period)
 - [ ] User and role management
 - [ ] Customers, locations and contacts
-- [ ] Employee records
+- [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
 - [ ] Per-company job numbers, detail, status timeline, visits
 - [ ] Assignment to employee and authorisation tests
 
