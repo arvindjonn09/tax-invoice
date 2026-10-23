@@ -14,20 +14,23 @@ import { parsePage } from "../http/guards";
 
 type JobContext = { params: Promise<{ id: string }> };
 
+function liveAssignment(actor: Actor): Prisma.AssignmentWhereInput {
+  return {
+    companyId: actor.companyId,
+    endedAt: null,
+    employee: {
+      companyId: actor.companyId,
+      userId: actor.userId,
+      isActive: true,
+    },
+  };
+}
+
 /** Live assignments of the actor's own active employee record. */
 function assignedTo(actor: Actor): Prisma.JobWhereInput {
   return {
     companyId: actor.companyId,
-    assignments: {
-      some: {
-        endedAt: null,
-        employee: {
-          companyId: actor.companyId,
-          userId: actor.userId,
-          isActive: true,
-        },
-      },
-    },
+    assignments: { some: liveAssignment(actor) },
   };
 }
 
@@ -107,7 +110,24 @@ export function myJobHandlers(db: () => PrismaClient) {
     const row = id
       ? await db().job.findFirst({
           where: { id, ...assignedTo(actor) },
-          select: DETAIL,
+          select: {
+            ...DETAIL,
+            visits: {
+              ...DETAIL.visits,
+              where: {
+                OR: [
+                  { assignments: { some: liveAssignment(actor) } },
+                  {
+                    job: {
+                      assignments: {
+                        some: { ...liveAssignment(actor), visitId: null },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
         })
       : null;
     if (!row) throw notFound();

@@ -8,6 +8,7 @@ import type {
 import { withAudit } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
+import { lockRow } from "../db/locks";
 import { uuidOrNull } from "../http/fields";
 import { Refusal, inTransaction, lockedJob } from "./handlers";
 
@@ -90,6 +91,21 @@ export function assignmentHandlers(db: () => PrismaClient) {
           if (!isJobEditable(current.status))
             throw new Refusal(
               fail(409, `A ${current.status} job can't be assigned`),
+            );
+          // Deactivation uses the same employee row lock. Recheck after taking
+          // it so a stale preflight read cannot assign an inactive employee.
+          await lockRow(tx, "employees", employeeId);
+          const active = await tx.employee.findFirst({
+            where: {
+              id: employeeId,
+              companyId: actor.companyId,
+              isActive: true,
+            },
+            select: { id: true },
+          });
+          if (!active)
+            throw new Refusal(
+              fail(400, "Choose an active employee", "employeeId"),
             );
           const created = await tx.assignment.create({
             data: {

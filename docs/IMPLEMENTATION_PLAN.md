@@ -28,7 +28,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Customer directory screens — #29 implemented with search/sort/pagination, billing forms, contacts and sites; [verification](testing/customer-screens.md); pending CI and cross-review
 - [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
 - [x] Per-company job numbers, detail, status timeline, visits — #31: atomic per-company numbering, status machine with immutable history, visits; GST-exclusive cents price
-- [ ] Assignment to employee and authorisation tests
+- [ ] Assignment to employee and authorisation tests — #32 reuses Claude’s implementation with current-main integration, visit scoping and locked employee eligibility; [API contract](architecture/assignments.md); pending CI/cross-review
 
 ## M2 Contractors, timesheets and job expenses
 - [ ] Private document storage with signed URLs

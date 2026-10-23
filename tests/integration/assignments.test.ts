@@ -453,3 +453,111 @@ describe("assignment concurrency", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("visit visibility and assignment refusal", () => {
+  it("hides other visits for visit-only assignments, while whole-job assignments include them", async () => {
+    const extra = await db.jobVisit.create({
+      data: {
+        companyId,
+        jobId: visitJob,
+        createdBy: userIds.owner,
+        startsAt: new Date("2026-11-03T22:00:00Z"),
+      },
+    });
+    const onlyMine = await (
+      await r().myRead(call("worker", "GET"), one(visitJob))
+    ).json();
+    expect(onlyMine.visits.map((row: { id: string }) => row.id)).toEqual([
+      visitId,
+    ]);
+    expect(
+      (await assign(visitJob, { employeeId: workerEmployee })).status,
+    ).toBe(201);
+    const whole = await (
+      await r().myRead(call("worker", "GET"), one(visitJob))
+    ).json();
+    expect(whole.visits.map((row: { id: string }) => row.id).sort()).toEqual(
+      [visitId, extra.id].sort(),
+    );
+  });
+
+  it("refuses assignment on a terminal job without writing an audit event", async () => {
+    const original = await db.job.findUniqueOrThrow({
+      where: { id: unassignedJob },
+    });
+    const job = await db.job.create({
+      data: {
+        companyId,
+        customerId: original.customerId,
+        createdBy: userIds.owner,
+        number: 90,
+        reference: "JOB-90",
+        title: "Terminal fixture",
+        status: "cancelled",
+      },
+    });
+    const before = await db.auditEvent.count({ where: { targetId: job.id } });
+    expect((await assign(job.id, { employeeId: workerEmployee })).status).toBe(
+      409,
+    );
+    expect(await db.assignment.count({ where: { jobId: job.id } })).toBe(0);
+    expect(await db.auditEvent.count({ where: { targetId: job.id } })).toBe(
+      before,
+    );
+  });
+});
+
+it("rechecks employee deactivation after a stale assignment preflight", async () => {
+  const employee = await db.employee.create({
+    data: {
+      companyId,
+      createdBy: userIds.owner,
+      name: "Concurrent eligibility fixture",
+    },
+  });
+  let announce!: () => void;
+  let resume!: () => void;
+  const observed = new Promise<void>((resolve) => {
+    announce = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const employeeProxy = new Proxy(db.employee, {
+    get(target, property, receiver) {
+      if (property === "findFirst")
+        return async (...args: Parameters<typeof db.employee.findFirst>) => {
+          const before = await db.employee.findFirst(...args);
+          announce();
+          await released;
+          return before;
+        };
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const wrapped = new Proxy(db, {
+    get(target, property, receiver) {
+      return property === "employee"
+        ? employeeProxy
+        : Reflect.get(target, property, receiver);
+    },
+  });
+  const handler = assignmentHandlers(() => wrapped);
+  const pending = withPolicy("job.assign", handler.assign)(
+    call("manager", "POST", { employeeId: employee.id }),
+    one(unassignedJob),
+  );
+  try {
+    await observed;
+    await db.employee.update({
+      where: { id: employee.id },
+      data: { isActive: false },
+    });
+  } finally {
+    resume();
+  }
+  expect((await pending).status).toBe(400);
+  expect(
+    await db.assignment.count({ where: { employeeId: employee.id } }),
+  ).toBe(0);
+});
