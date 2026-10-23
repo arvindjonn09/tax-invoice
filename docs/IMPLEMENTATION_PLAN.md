@@ -30,9 +30,10 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
 - [x] Per-company job numbers, detail, status timeline, visits — #31: atomic per-company numbering, status machine with immutable history, visits; GST-exclusive cents price
 - [x] Assignment to employee and authorisation tests — #32 merged via PR #115; visit scoping and locked employee eligibility; [API contract](architecture/assignments.md)
-- [ ] Job screens — #33 directory, role-scoped detail tabs, visits, assignments and status timeline; [verification](testing/job-screens.md); pending CI/cross-review
+- [x] Job screens — #33 directory, role-scoped detail tabs, visits, assignments and status timeline; [verification](testing/job-screens.md); merged via PR #118
 
 ## M2 Contractors, timesheets and job expenses
+- [ ] Contractor directory and offer screens — #36; [verification](testing/contractor-screens.md); pending CI/cross-review
 - [x] Private document storage with signed URLs — #34: app-mediated upload with content sniffing, random keys, 5-minute HMAC download links after authz
 - [ ] Contractors, offers, approvals and acceptance history; restricted contractor portal
   - #35 schema + API: contractors (ABN, GST flag, optional subcontractor login), fixed/hourly offers in GST-exclusive cents with a tax code, accept/decline with immutable acceptance snapshots and committed cost recorded once; portal screens remain #37
