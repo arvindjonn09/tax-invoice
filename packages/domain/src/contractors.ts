@@ -1,5 +1,5 @@
 import { type GstLine, type TaxCode, calculateSupplyLine } from "./gst";
-import { type Cents, sum } from "./money";
+import { type Cents, divideRounded, sum } from "./money";
 import { calculatePurchase } from "./purchases";
 
 // Contractor offers and committed cost (#35, docs/DATA_MODEL.md#financial-definitions).
@@ -73,15 +73,31 @@ export function committedJobCost(
 }
 
 export type Commitment = {
+  /** Job cost committed on acceptance (exclusive + non-creditable GST). */
   committed: Cents;
-  /** Job costs of bills linked to this commitment (already in incurred costs). */
-  billed: readonly Cents[];
+  /** The accepted GST-exclusive amount the commitment was made for. */
+  committedExclusive: Cents;
+  /**
+   * GST-exclusive amounts of bills linked to this commitment. Their actual
+   * job cost (which may carry non-creditable GST the commitment didn't) is
+   * already in incurred cost; here they only measure how much was fulfilled.
+   */
+  billedExclusive: readonly Cents[];
 };
 
-/** What is still committed after linked bills: never below zero. */
+/**
+ * What is still committed after linked bills, released on the commitment's
+ * own basis: billing half the agreed exclusive amount releases half the
+ * committed cost, whatever GST the actual bill carried. Never below zero.
+ */
 export function outstandingCommitment(commitment: Commitment): Cents {
-  const remaining = commitment.committed - sum(commitment.billed);
-  return remaining > 0n ? remaining : 0n;
+  const billed = sum(commitment.billedExclusive);
+  if (billed >= commitment.committedExclusive) return 0n;
+  const released = divideRounded(
+    commitment.committed * billed,
+    commitment.committedExclusive,
+  );
+  return commitment.committed - released;
 }
 
 export type JobCostExposure = {

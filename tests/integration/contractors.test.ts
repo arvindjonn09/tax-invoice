@@ -808,3 +808,183 @@ describe("subcontractor visibility", () => {
     );
   });
 });
+
+/**
+ * Pause the first `contractor.findFirst` outside a transaction (a handler's
+ * preflight) until `mutate` has committed, then let the handler continue.
+ */
+async function withStalePreflight(
+  run: (handlers: ReturnType<typeof contractorHandlers>) => Promise<Response>,
+  mutate: () => Promise<unknown>,
+) {
+  let announce!: () => void;
+  let resume!: () => void;
+  const observed = new Promise<void>((resolve) => {
+    announce = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const contractorProxy = new Proxy(db.contractor, {
+    get(target, property, receiver) {
+      if (property === "findFirst")
+        return async (...args: Parameters<typeof db.contractor.findFirst>) => {
+          const before = await db.contractor.findFirst(...args);
+          announce();
+          await released;
+          return before;
+        };
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const wrapped = new Proxy(db, {
+    get(target, property, receiver) {
+      return property === "contractor"
+        ? contractorProxy
+        : Reflect.get(target, property, receiver);
+    },
+  });
+  const pending = run(contractorHandlers(() => wrapped));
+  try {
+    await observed;
+    await mutate();
+  } finally {
+    resume();
+  }
+  return pending;
+}
+
+describe("locked rechecks (Codex #116 review)", () => {
+  it("refuses an answer from a login unlinked after the preflight; no snapshot", async () => {
+    const sub = await createCredentialUser(db, {
+      email: "relink-sub@jobflow.invalid",
+      name: "Synthetic relink sub",
+      password: PASSWORD,
+    });
+    await db.membership.create({
+      data: {
+        companyId,
+        userId: sub.id,
+        createdBy: userIds.owner,
+        role: "subcontractor",
+      },
+    });
+    const contractor = await db.contractor.create({
+      data: {
+        companyId,
+        name: "Relink Sample",
+        abn: ABN,
+        gstRegistered: true,
+        userId: userIds.sub2,
+        createdBy: userIds.owner,
+      },
+    });
+    const job = await newJob();
+    const created = await (await offer(job.id, contractor.id)).json();
+    const response = await withStalePreflight(
+      (fresh) =>
+        withPolicy<One>("offer.respond_own", fresh.respond)(
+          call("sub2", "POST", { decision: "accept" }),
+          one(created.id),
+        ),
+      () =>
+        db.contractor.update({
+          where: { id: contractor.id },
+          data: { userId: sub.id },
+        }),
+    );
+    expect(response.status).toBe(404);
+    expect(
+      await db.contractorAcceptance.count({ where: { offerId: created.id } }),
+    ).toBe(0);
+    expect(
+      (
+        await db.contractorOffer.findUniqueOrThrow({
+          where: { id: created.id },
+        })
+      ).status,
+    ).toBe("offered");
+  });
+
+  it("refuses a new offer to a contractor archived after the preflight", async () => {
+    const { id } = await newContractor({
+      name: "Archived meanwhile",
+      abn: ABN,
+      gstRegistered: true,
+    });
+    const job = await newJob();
+    const response = await withStalePreflight(
+      (fresh) =>
+        withPolicy<One>("contractor.write", fresh.createOffer)(
+          call("manager", "POST", { contractorId: id, ...FIXED }),
+          one(job.id),
+        ),
+      () =>
+        db.contractor.update({
+          where: { id },
+          data: { archivedAt: new Date() },
+        }),
+    );
+    expect(response.status).toBe(400);
+    expect(
+      await db.contractorOffer.count({ where: { contractorId: id } }),
+    ).toBe(0);
+  });
+
+  it("refuses a taxable offer once the contractor is deregistered after the preflight", async () => {
+    const { id } = await newContractor({
+      name: "Deregistered meanwhile",
+      abn: ABN,
+      gstRegistered: true,
+    });
+    const job = await newJob();
+    const response = await withStalePreflight(
+      (fresh) =>
+        withPolicy<One>("contractor.write", fresh.createOffer)(
+          call("manager", "POST", { contractorId: id, ...FIXED }),
+          one(job.id),
+        ),
+      () =>
+        db.contractor.update({ where: { id }, data: { gstRegistered: false } }),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).fields).toHaveProperty("taxCode");
+  });
+
+  it("keeps accepted amounts from the snapshot after the contractor's GST registration changes", async () => {
+    const job = await newJob();
+    const contractorId = await linked();
+    const created = await (await offer(job.id, contractorId)).json();
+    expect((await respond("subcontractor", created.id, "accept")).status).toBe(
+      200,
+    );
+    const change = await r().update(
+      call("manager", "PATCH", { gstRegistered: false }),
+      one(contractorId),
+    );
+    expect(change.status).toBe(200);
+    const office = await (
+      await r().jobOffers(call("accountant", "GET"), one(job.id))
+    ).json();
+    const mine = await (
+      await r().myOffers(call("subcontractor", "GET"), undefined)
+    ).json();
+    const own = mine.offers.find(
+      (item: { id: string }) => item.id === created.id,
+    );
+    for (const view of [office.offers[0], own]) {
+      expect(view).toMatchObject({
+        status: "accepted",
+        taxCode: "TAXABLE_10",
+        exclusiveCents: "90000",
+        gstCents: "9000",
+        inclusiveCents: "99000",
+      });
+    }
+    // Restore for later tests that reuse the linked contractor.
+    await r().update(
+      call("manager", "PATCH", { gstRegistered: true }),
+      one(contractorId),
+    );
+  });
+});

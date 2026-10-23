@@ -105,15 +105,27 @@ describe("committed cost", () => {
   });
 
   it("never goes below zero after linked bills", () => {
-    expect(outstandingCommitment({ committed: 90000n, billed: [] })).toBe(
-      90000n,
-    );
-    expect(outstandingCommitment({ committed: 90000n, billed: [40000n] })).toBe(
-      50000n,
-    );
-    expect(outstandingCommitment({ committed: 90000n, billed: [95000n] })).toBe(
-      0n,
-    );
+    expect(
+      outstandingCommitment({
+        committed: 90000n,
+        committedExclusive: 90000n,
+        billedExclusive: [],
+      }),
+    ).toBe(90000n);
+    expect(
+      outstandingCommitment({
+        committed: 90000n,
+        committedExclusive: 90000n,
+        billedExclusive: [40000n],
+      }),
+    ).toBe(50000n);
+    expect(
+      outstandingCommitment({
+        committed: 90000n,
+        committedExclusive: 90000n,
+        billedExclusive: [95000n],
+      }),
+    ).toBe(0n);
   });
 });
 
@@ -132,7 +144,9 @@ describe("combined fixture: commitment then bill, counted once", () => {
   it("before the bill: forecast includes the commitment, profit does not", () => {
     const exposure = jobCostExposure({
       incurred: [labour, materials, travel],
-      commitments: [{ committed, billed: [] }],
+      commitments: [
+        { committed, committedExclusive: 90000n, billedExclusive: [] },
+      ],
     });
     expect(exposure).toEqual({
       incurred: 55000n,
@@ -157,7 +171,13 @@ describe("combined fixture: commitment then bill, counted once", () => {
     const incurred = [bill.jobCost, labour, materials, travel];
     const exposure = jobCostExposure({
       incurred,
-      commitments: [{ committed, billed: [bill.jobCost] }],
+      commitments: [
+        {
+          committed,
+          committedExclusive: 90000n,
+          billedExclusive: [bill.exclusive],
+        },
+      ],
     });
     expect(exposure).toEqual({
       incurred: 145000n,
@@ -181,8 +201,86 @@ describe("combined fixture: commitment then bill, counted once", () => {
     expect(unregistered).toBe(90000n);
     const exposure = jobCostExposure({
       incurred: [90000n, 30000n, 15000n, 10000n],
-      commitments: [{ committed: unregistered, billed: [90000n] }],
+      commitments: [
+        {
+          committed: unregistered,
+          committedExclusive: 90000n,
+          billedExclusive: [90000n],
+        },
+      ],
     });
     expect(exposure.total).toBe(145000n);
+  });
+});
+
+describe("partial bills release the commitment on its own basis (Codex #116 review)", () => {
+  const accepted = fixed(true); // 90000 ex + 9000 GST
+  const committed = committedJobCost(accepted, true); // 90000 (GST creditable)
+  const commitment = (billedExclusive: bigint[]) => ({
+    committed,
+    committedExclusive: accepted.exclusive,
+    billedExclusive,
+  });
+
+  it("half billed without valid evidence: forecast 94500, not 90000", () => {
+    const halfBill = calculatePurchase({
+      exclusive: 45000n,
+      gst: 4500n,
+      buyerRegistered: true,
+      hasEvidence: false,
+    });
+    expect(halfBill.jobCost).toBe(49500n);
+    expect(outstandingCommitment(commitment([halfBill.exclusive]))).toBe(
+      45000n,
+    );
+    expect(
+      jobCostExposure({
+        incurred: [halfBill.jobCost],
+        commitments: [commitment([halfBill.exclusive])],
+      }),
+    ).toEqual({ incurred: 49500n, committed: 45000n, total: 94500n });
+  });
+
+  it("half billed with valid evidence: forecast 90000", () => {
+    const halfBill = calculatePurchase({
+      exclusive: 45000n,
+      gst: 4500n,
+      buyerRegistered: true,
+      hasEvidence: true,
+    });
+    expect(
+      jobCostExposure({
+        incurred: [halfBill.jobCost],
+        commitments: [commitment([halfBill.exclusive])],
+      }).total,
+    ).toBe(90000n);
+  });
+
+  it("unregistered company: half billed releases half of the GST-inclusive commitment", () => {
+    const unregistered = committedJobCost(accepted, false); // 99000
+    expect(
+      outstandingCommitment({
+        committed: unregistered,
+        committedExclusive: accepted.exclusive,
+        billedExclusive: [45000n],
+      }),
+    ).toBe(49500n);
+  });
+
+  it("rounds a partial release to the cent and frees a zero-value commitment on any bill", () => {
+    expect(
+      outstandingCommitment({
+        committed: 99000n,
+        committedExclusive: 90000n,
+        billedExclusive: [1n],
+      }),
+    ).toBe(98999n);
+    expect(
+      outstandingCommitment({
+        committed: 0n,
+        committedExclusive: 0n,
+        billedExclusive: [],
+      }),
+    ).toBe(0n);
   });
 });
