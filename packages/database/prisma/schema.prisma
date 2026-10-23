@@ -137,6 +137,7 @@ model Company {
   employees        Employee[]
   customers        Customer[]
   numberSequences  NumberSequence[]
+  documents        Document[]
   contractors      Contractor[]
 
   userInvitations UserInvitation[]
@@ -202,6 +203,7 @@ model Membership {
   jobsCreated        Job[]
   jobEventsCreated   JobStatusEvent[]
   jobVisitsCreated   JobVisit[]
+  documentsCreated   Document[]
   contractorsCreated Contractor[]             @relation("ContractorCreator")
   contractorRecords  Contractor[]             @relation("ContractorUser")
   offersCreated      ContractorOffer[]        @relation("ContractorOfferCreator")
@@ -479,6 +481,36 @@ model UserInvitation {
   @@index([companyId, createdAt, id])
   @@index([companyId, createdBy])
   @@map("user_invitations")
+}
+
+enum DocumentKind {
+  receipt
+  photo
+  tax_invoice
+  other
+
+  @@map("document_kind")
+}
+
+/// A private file (#34). Bytes live in S3-compatible storage under a random
+/// key; reached only through an authorised, short-lived signed link.
+model Document {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String       @map("company_id") @db.Uuid
+  kind        DocumentKind
+  objectKey   String       @unique @map("object_key") @db.VarChar(200)
+  fileName    String       @map("file_name") @db.VarChar(200)
+  contentType String       @map("content_type") @db.VarChar(100)
+  sizeBytes   Int          @map("size_bytes")
+  sha256      String       @db.Char(64)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy   String       @map("created_by") @db.Uuid
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership   @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@index([companyId, createdBy])
+  @@map("documents")
 }
 
 enum ContractorRateType {
