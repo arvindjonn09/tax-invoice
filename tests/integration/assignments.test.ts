@@ -332,7 +332,9 @@ describe("employee-scoped jobs", () => {
       [assignedJob, visitJob].sort(),
     );
     expect(await myIds("colleague")).toEqual([unassignedJob]);
-    expect(await myIds("subcontractor")).toEqual([]);
+    expect(
+      (await r().myList(call("subcontractor", "GET"), undefined)).status,
+    ).toBe(403);
   });
 
   it("returns not-found for any job not assigned to them, by id", async () => {
@@ -590,4 +592,31 @@ it("commits one assignment and audit when concurrent duplicate requests race", a
       where: { targetId: job.id, action: "job.assigned" },
     }),
   ).toBe(1);
+});
+
+it("revokes employee-scoped job access when the actor becomes a subcontractor", async () => {
+  expect((await r().myRead(call("worker", "GET"), one(visitJob))).status).toBe(
+    200,
+  );
+  const membership = await db.membership.findFirstOrThrow({
+    where: { companyId, userId: userIds.worker },
+  });
+  await db.membership.update({
+    where: { id: membership.id },
+    data: { role: "subcontractor" },
+  });
+  try {
+    // The active linked Employee and live assignments deliberately remain.
+    expect((await r().myList(call("worker", "GET"), undefined)).status).toBe(
+      403,
+    );
+    const detail = await r().myRead(call("worker", "GET"), one(visitJob));
+    expect(detail.status).toBe(403);
+    expect(await detail.json()).not.toHaveProperty("site");
+  } finally {
+    await db.membership.update({
+      where: { id: membership.id },
+      data: { role: "employee" },
+    });
+  }
 });

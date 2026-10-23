@@ -1,4 +1,4 @@
-import { type Actor, notFound } from "@jobflow/authz";
+import { type Actor, forbidden, notFound } from "@jobflow/authz";
 import type {
   Prisma,
   PrismaClient,
@@ -71,6 +71,7 @@ const DETAIL = {
 
 export function myJobHandlers(db: () => PrismaClient) {
   const list: PolicyHandler<unknown> = async ({ actor, request }) => {
+    if (actor.role !== "employee") throw forbidden();
     const { page, take, skip } = parsePage(new URL(request.url).searchParams);
     const where = assignedTo(actor);
     const [rows, total] = await Promise.all([
@@ -106,6 +107,7 @@ export function myJobHandlers(db: () => PrismaClient) {
 
   /** Another job — someone else's, another company's, or unknown — is a 404. */
   const read: PolicyHandler<JobContext> = async ({ actor, context }) => {
+    if (actor.role !== "employee") throw forbidden();
     const id = uuidOrNull((await context.params).id);
     const row = id
       ? await db().job.findFirst({

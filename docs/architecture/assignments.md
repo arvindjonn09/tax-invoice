@@ -13,12 +13,12 @@ so concurrent requests cannot both end/audit the same assignment. Ended records
 remain, and reassigning creates a new row. Ending is permitted to revoke access
 on terminal jobs; creating assignments on terminal jobs is refused.
 
-`GET /api/my/jobs` and `/api/my/jobs/:id` resolve active employee records linked
+`GET /api/my/jobs` and `/api/my/jobs/:id` require the current employee role and resolve active employee records linked
 to the signed-in user and live assignments. Another tenant's job, an unassigned
 job or an invalid ID returns 404. The explicit response projections exclude
 customer prices, cost rates, costs, profit and internal visit notes. A whole-job
 assignment grants its visits; a visit-only assignment grants only that visit.
-Employee deactivation or ending all relevant assignments removes access.
+Employee deactivation, changing to a non-employee role, or ending all relevant assignments removes access. Subcontractor offers use a separate scope in #37.
 
 The migration retains the reserved `20261023070000_assignments` timestamp after
 jobs `060000`; later invitation/document/customer-primary migrations remain intact.
