@@ -28,7 +28,7 @@ export function CustomerDetail({
     kind: "success" | "error";
     text: string;
   } | null>(null);
-  if (error)
+  if (error && !data)
     return (
       <>
         <PageHeader title="Customer" />
@@ -87,6 +87,14 @@ export function CustomerDetail({
           ) : null
         }
       />
+      {error ? (
+        <div role="alert">
+          <p>{error} Showing the last loaded details.</p>
+          <Button onClick={reload} variant="outline">
+            Try again
+          </Button>
+        </div>
+      ) : null}
       <FormMessage message={message} />
       <section className="space-y-4 rounded-lg border bg-card p-6">
         <h2 className="text-xl font-semibold">Billing details</h2>

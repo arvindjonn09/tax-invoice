@@ -620,3 +620,66 @@ it("revokes employee-scoped job access when the actor becomes a subcontractor", 
     });
   }
 });
+
+it("supports scoped employee search, status filters and paging without exposing unassigned work", async () => {
+  const filtered = await (
+    await r().myList(
+      call(
+        "worker",
+        "GET",
+        undefined,
+        "/api/my/jobs?q=Visit&status=approved&sort=title&direction=asc&pageSize=1",
+      ),
+      undefined,
+    )
+  ).json();
+  expect(filtered.jobs.map((job: { id: string }) => job.id)).toEqual([
+    visitJob,
+  ]);
+  expect(filtered).toMatchObject({ total: 1, pageSize: 1 });
+  const hidden = await (
+    await r().myList(
+      call(
+        "worker",
+        "GET",
+        undefined,
+        "/api/my/jobs?q=Someone&sort=companyId&direction=unsafe",
+      ),
+      undefined,
+    )
+  ).json();
+  expect(hidden.jobs).toEqual([]);
+});
+
+it("rejects assigning a cancelled visit without changing the audit or assignment history", async () => {
+  const visit = await db.jobVisit.create({
+    data: {
+      companyId,
+      jobId: visitJob,
+      createdBy: userIds.owner,
+      startsAt: new Date("2026-11-06T08:00:00Z"),
+      status: "cancelled",
+    },
+  });
+  const before = await db.auditEvent.count({
+    where: { action: "job.assigned", targetId: visitJob },
+  });
+  expect(
+    (await assign(visitJob, { employeeId: workerEmployee, visitId: visit.id }))
+      .status,
+  ).toBe(409);
+  expect(await db.assignment.count({ where: { visitId: visit.id } })).toBe(0);
+  expect(
+    await db.auditEvent.count({
+      where: { action: "job.assigned", targetId: visitJob },
+    }),
+  ).toBe(before);
+  const office = await (
+    await r().officeRead(call("manager", "GET"), one(unassignedJob))
+  ).json();
+  expect(
+    office.assignments.find(
+      (row: { employeeId: string }) => row.employeeId === colleagueEmployee,
+    ),
+  ).toMatchObject({ employeeActive: false });
+});
