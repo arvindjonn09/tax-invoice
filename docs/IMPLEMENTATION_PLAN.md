@@ -29,7 +29,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Primary-contact audit and uniqueness follow-up — #113 implemented with transactional demotion events and a partial unique index; pending CI and cross-review
 - [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
 - [x] Per-company job numbers, detail, status timeline, visits — #31: atomic per-company numbering, status machine with immutable history, visits; GST-exclusive cents price
-- [ ] Assignment to employee and authorisation tests
+- [ ] Assignment to employee and authorisation tests — #32 reuses Claude’s implementation with current-main integration, visit scoping and locked employee eligibility; [API contract](architecture/assignments.md); pending CI/cross-review
 
 ## M2 Contractors, timesheets and job expenses
 - [x] Private document storage with signed URLs — #34: app-mediated upload with content sniffing, random keys, 5-minute HMAC download links after authz
