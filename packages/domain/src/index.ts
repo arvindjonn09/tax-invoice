@@ -12,3 +12,4 @@ export * from "./registration";
 export * from "./jobs";
 export * from "./contractors";
 export * from "./invoices";
+export * from "./receipts";

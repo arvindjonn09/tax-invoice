@@ -45,7 +45,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Supplier bills with creditable GST and payment allocations
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
-- [ ] Customer receipts and allocations
+- [x] Customer receipts and allocations — #50: idempotent, transactional, no overpayment, refunds, cash-basis GST attribution per allocation
 - [ ] Financial concurrency/idempotency tests
 
 ## M4 Profit, GST reporting and dashboard
