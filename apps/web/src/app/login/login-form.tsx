@@ -24,7 +24,7 @@ export function LoginForm() {
       }),
     }).catch(() => undefined);
     if (response?.ok) {
-      router.push("/account");
+      router.push("/home");
       router.refresh();
       return;
     }
