@@ -38,7 +38,7 @@ and fills in the commands below.
 | Unit / integration tests | `pnpm test` / `pnpm test:integration` |
 | E2E tests | `pnpm exec playwright install chromium` then `pnpm test:e2e` |
 | DB generate / migrate / test reset | `pnpm db:generate` / `pnpm db:migrate` / `RESET_TEST_DATABASE=yes pnpm db:test:reset` (local test only) |
-| Demo seed | Not available until demo-seed issue; see README for local `pnpm db:env` + Compose setup |
+| Demo seed (local only) | `DEMO_SEED=yes pnpm db:seed:demo` (optional `DEMO_PASSWORD`; refused in production) |
 | Production build / start | `pnpm build` / `pnpm --filter @jobflow/web start` |
 
 ## The team (`.claude/agents/`)
