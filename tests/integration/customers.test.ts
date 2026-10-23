@@ -566,4 +566,85 @@ describe("customers", () => {
     ).json();
     expect(paged).toMatchObject({ page: 2, total: 2 });
   });
+  it("audits displaced primaries, clears archived flags, and backstops uniqueness (#113)", async () => {
+    const customer = await db.customer.create({
+      data: {
+        companyId,
+        createdBy: userIds.owner,
+        name: "Primary audit fixture",
+      },
+    });
+    const add = async (name: string, isPrimary: boolean) => {
+      const response = await r().addContact(
+        call("owner", "POST", { name, isPrimary }),
+        one(customer.id),
+      );
+      expect(response.status).toBe(201);
+      return (await response.json()).id as string;
+    };
+    const a = await add("Synthetic A", true);
+    const b = await add("Synthetic B", true);
+    const demotion = await db.auditEvent.findFirstOrThrow({
+      where: { targetId: a, action: "customer_contact.updated" },
+    });
+    expect(demotion.metadata).toMatchObject({
+      changes: { isPrimary: { before: true, after: false } },
+    });
+    expect(
+      (
+        await r().updateContact(
+          call("manager", "PATCH", { isPrimary: true }),
+          child(customer.id, a),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await db.auditEvent.findFirstOrThrow({
+          where: { targetId: b, action: "customer_contact.updated" },
+        })
+      ).metadata,
+    ).toMatchObject({ changes: { isPrimary: { before: true, after: false } } });
+    await expect(
+      db.customerContact.update({
+        where: { id: b },
+        data: { isPrimary: true },
+      }),
+    ).rejects.toMatchObject({ code: "P2002" });
+    expect(
+      (
+        await r().updateContact(
+          call("owner", "PATCH", { archived: true }),
+          child(customer.id, a),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      await db.customerContact.findUniqueOrThrow({ where: { id: a } }),
+    ).toMatchObject({ isPrimary: false, archivedAt: expect.any(Date) });
+    expect(
+      (
+        await r().updateContact(
+          call("owner", "PATCH", { isPrimary: true }),
+          child(customer.id, a),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (await db.customerContact.findUniqueOrThrow({ where: { id: a } }))
+        .isPrimary,
+    ).toBe(false);
+    expect(
+      (
+        await r().updateContact(
+          call("owner", "PATCH", { archived: false, isPrimary: true }),
+          child(customer.id, a),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (await db.customerContact.findUniqueOrThrow({ where: { id: a } }))
+        .isPrimary,
+    ).toBe(true);
+  });
 });

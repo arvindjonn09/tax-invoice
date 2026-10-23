@@ -24,7 +24,8 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 ## M1 Customers, company settings and jobs
 - [ ] Company profile and effective-dated GST registration settings (ABN, basis, BAS period)
 - [ ] User and role management — #27 implementation includes owner-only access screens, expiring invitations, audited role/deactivation changes and concurrent last-owner protection; local unit/integration/browser checks pass, CI and review pending
-- [ ] Customers, locations and contacts — #28 implemented in PR #107; concurrency regression tests cover primary contacts and atomic audit history; CI and review pending, screens remain #29
+- [x] Customers, locations and contacts — #28 merged in PR #107; screens tracked in #29
+- [ ] Primary-contact audit and uniqueness follow-up — #113 implemented with transactional demotion events and a partial unique index; pending CI and cross-review
 - [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
 - [x] Per-company job numbers, detail, status timeline, visits — #31: atomic per-company numbering, status machine with immutable history, visits; GST-exclusive cents price
 - [ ] Assignment to employee and authorisation tests

@@ -35,3 +35,14 @@ Partial/multiple payment allocations, retries and concurrency, zero/negative val
 The #12 tenancy models, constraints, index rationale, ER diagram and migration
 verification are documented in [core tenancy](testing/core-tenancy.md). Business
 tables listed above remain planned until their milestone implementation.
+
+
+## Customer primary contacts (#113)
+
+Customer writes hold the parent customer's row lock. Promoting a contact demotes each
+other primary in the same transaction and writes an individual audit event containing
+`isPrimary: true → false`. Archiving clears the primary flag; archived contacts cannot
+be promoted until restored. A partial unique SQL index on `(company_id, customer_id)`
+where `is_primary AND archived_at IS NULL` also rejects competing active primaries
+from direct database writes. The additive migration refuses inconsistent existing data
+rather than silently repairing it; its test-only rollback removes only that index.

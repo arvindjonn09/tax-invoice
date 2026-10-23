@@ -13,7 +13,10 @@ import type {
   Prisma,
   PrismaClient,
 } from "../../../../../packages/database/src/generated/prisma/client";
-import { withAudit } from "../../../../../packages/database/src/index";
+import {
+  type AuditRecorder,
+  withAudit,
+} from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import {
@@ -316,7 +319,7 @@ export function customerHandlers(db: () => PrismaClient) {
     const data = defined(parsed.data);
     const row = await withAudit(db(), async (tx, audit) => {
       const customer = await lockCustomer(tx, actor, id);
-      if (data.isPrimary) await clearPrimary(tx, actor.companyId, customer.id);
+      if (data.isPrimary) await clearPrimary(tx, audit, actor, customer.id);
       const created = await tx.customerContact.create({
         data: {
           ...data,
@@ -348,7 +351,6 @@ export function customerHandlers(db: () => PrismaClient) {
     const parsed = UpdateContact.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
     const data = withArchive(parsed.data);
-    const keys = Object.keys(data);
     const row = await withAudit(db(), async (tx, audit) => {
       const customer = await lockCustomer(tx, actor, id);
       const safe = uuidOrNull(childId);
@@ -360,8 +362,12 @@ export function customerHandlers(db: () => PrismaClient) {
             })
           : null,
       );
-      if (parsed.data.isPrimary)
-        await clearPrimary(tx, actor.companyId, customer.id);
+      const archivedAt =
+        data.archivedAt === undefined ? before.archivedAt : data.archivedAt;
+      if (archivedAt !== null) data.isPrimary = false;
+      if (archivedAt === null && (data.isPrimary ?? before.isPrimary))
+        await clearPrimary(tx, audit, actor, customer.id, before.id);
+      const keys = Object.keys(data);
       const updated = await tx.customerContact.update({
         where: { id: before.id },
         data,
@@ -369,7 +375,11 @@ export function customerHandlers(db: () => PrismaClient) {
       await audit({
         companyId: actor.companyId,
         actorUserId: actor.userId,
-        action: updateAction("customer_contact", parsed.data, keys.length),
+        action: updateAction(
+          "customer_contact",
+          parsed.data,
+          Object.keys(parsed.data).length,
+        ),
         target: { type: "customer_contact", id: before.id },
         before: pick(before, keys),
         after: pick(updated, keys),
@@ -462,14 +472,35 @@ export function customerHandlers(db: () => PrismaClient) {
   };
 }
 
-/** At most one primary contact per customer. */
+/** Customer lock is held: demotions and their audit records commit together. */
 async function clearPrimary(
   tx: Prisma.TransactionClient,
-  companyId: string,
+  audit: AuditRecorder,
+  actor: Actor,
   customerId: string,
+  exceptId?: string,
 ) {
-  await tx.customerContact.updateMany({
-    where: { companyId, customerId, isPrimary: true },
-    data: { isPrimary: false },
+  const previous = await tx.customerContact.findMany({
+    where: {
+      companyId: actor.companyId,
+      customerId,
+      isPrimary: true,
+      ...(exceptId ? { id: { not: exceptId } } : {}),
+    },
+    select: { id: true },
   });
+  for (const contact of previous) {
+    await tx.customerContact.update({
+      where: { id: contact.id },
+      data: { isPrimary: false },
+    });
+    await audit({
+      companyId: actor.companyId,
+      actorUserId: actor.userId,
+      action: "customer_contact.updated",
+      target: { type: "customer_contact", id: contact.id },
+      before: { isPrimary: true },
+      after: { isPrimary: false },
+    });
+  }
 }
