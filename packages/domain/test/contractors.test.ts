@@ -83,6 +83,15 @@ describe("offer amounts", () => {
       }),
     ).toThrow(/no estimated hours/);
     expect(() => hoursQuantity(0n)).toThrow();
+    expect(() =>
+      offerLine({
+        rateType: "fixed",
+        rateExclusive: -1n,
+        estimatedHoursHundredths: null,
+        taxCode: "GST_FREE",
+        contractorRegistered: true,
+      }),
+    ).toThrow(/>= 0/);
   });
 });
 
