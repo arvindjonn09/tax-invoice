@@ -96,8 +96,12 @@ test("owner creates a job, schedules a visit, assigns and ends work, and changes
     .getByLabel("Agreed price (AUD ex GST)", { exact: true })
     .fill("2500.01");
   await page.getByRole("button", { name: "Save job", exact: true }).click();
+  // The detail route compiles on first visit under `next dev` (CI), which can
+  // take longer than the default 5 s; wait for it explicitly.
+  await page.waitForURL(/\/jobs\/[0-9a-f-]{36}$/, { timeout: 30_000 });
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Synthetic screen job",
+    { timeout: 30_000 },
   );
   const id = page.url().split("/").at(-1)!;
   expect(
