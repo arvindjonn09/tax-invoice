@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -15,6 +15,7 @@ import {
   postcodeField,
 } from "@/server/http/fields";
 import type { Contact, Customer, Location } from "./remote";
+import { useUnsavedChanges } from "./use-unsaved-changes";
 type Kind = "customer" | "contact" | "location";
 const fields: Record<
   Kind,
@@ -48,7 +49,7 @@ const fields: Record<
     { key: "addressLine2", label: "Address line 2", max: 200 },
     { key: "suburb", label: "Suburb", required: true, max: 100 },
     { key: "postcode", label: "Postcode", required: true, max: 4 },
-    { key: "accessNotes", label: "Access notes", max: 300 },
+    { key: "accessNotes", label: "Access notes", max: 500 },
   ],
 };
 export function Editor({
@@ -71,25 +72,7 @@ export function Editor({
     kind: "error";
     text: string;
   } | null>(null);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-    };
-    const navigate = (event: MouseEvent) => {
-      const link = (event.target as Element).closest?.("a[href]");
-      if (link && !window.confirm("Discard unsaved changes?")) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    };
-    window.addEventListener("beforeunload", warn);
-    document.addEventListener("click", navigate, true);
-    return () => {
-      window.removeEventListener("beforeunload", warn);
-      document.removeEventListener("click", navigate, true);
-    };
-  }, [dirty]);
+  useUnsavedChanges(dirty);
   const values = initial as unknown as
     Record<string, string | boolean | null> | undefined;
   return (

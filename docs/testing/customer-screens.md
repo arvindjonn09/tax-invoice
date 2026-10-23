@@ -8,7 +8,10 @@ Archive and restore preserve existing records; job and invoice history remains a
 Owners and managers can create and edit; accountants can read. Worker roles cannot open either page.
 The detail route checks the company-scoped customer before rendering; existing API policies recheck
 company/object permissions on every read and write. Form errors preserve inputs, inline errors are
-associated with fields, and unsaved edits warn before leaving or cancelling. Demo indication comes
+associated with fields, and unsaved edits warn before leaving or cancelling, including
+same-document Back/Forward traversal. The Navigation API cancels supported traversals
+before unmount; older browsers restore the current history entry on refusal (which
+can replace forward history). The 500-character site access-notes limit matches the API. Demo indication comes
 from the database-backed application shell.
 
 Verification uses synthetic isolated databases:

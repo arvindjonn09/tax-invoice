@@ -39,9 +39,13 @@ test("owner creates and maintains a customer, contact and site", async ({
   await page.getByLabel("Suburb *", { exact: true }).fill("Sampleville");
   await page.getByLabel("State *", { exact: true }).selectOption("NSW");
   await page.getByLabel("Postcode *", { exact: true }).fill("2000");
+  await page.getByLabel("Access notes").fill("S".repeat(500));
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "42 Synthetic Street" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(`Access: ${"S".repeat(500)}`, { exact: true }),
   ).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   page.on("dialog", (dialog) => dialog.accept());
@@ -165,4 +169,80 @@ test("accountant reads without controls; worker roles cannot open directory", as
     ).toHaveCount(0);
     expect((await page.request.get("/api/customers")).status()).toBe(403);
   }
+});
+
+test("history Back and Forward warn before discarding edits", async ({
+  page,
+}) => {
+  const traverse = (direction: "back" | "forward") =>
+    page.evaluate(async (direction) => {
+      const nav = (
+        window as unknown as {
+          navigation: Record<
+            "back" | "forward",
+            () => { committed: Promise<unknown>; finished: Promise<unknown> }
+          >;
+        }
+      ).navigation;
+      const result = nav[direction]();
+      // Cancelling a traversal rejects both promises. Wait for settlement before
+      // issuing another browser-history request, rather than racing its rollback.
+      await Promise.allSettled([result.committed, result.finished]);
+    }, direction);
+  await signIn(page, "owner");
+  await page.goto("/customers");
+  const id = await page.evaluate(async () => {
+    const response = await fetch("/api/customers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Synthetic history customer" }),
+    });
+    if (!response.ok) throw new Error("Couldn't create history fixture");
+    return ((await response.json()) as { id: string }).id;
+  });
+  await page.reload();
+  await page.locator(`a[href="/customers/${id}"]`).first().click();
+  await page
+    .getByRole("button", { name: "Edit customer", exact: true })
+    .click();
+  await page
+    .getByLabel("Customer name *", { exact: true })
+    .fill("Unsaved synthetic edit");
+  await Promise.all([
+    page
+      .waitForEvent("dialog", { timeout: 10000 })
+      .then((dialog) => dialog.dismiss()),
+    traverse("back"),
+  ]);
+  await expect(page.getByLabel("Customer name *", { exact: true })).toHaveValue(
+    "Unsaved synthetic edit",
+  );
+  await Promise.all([
+    page
+      .waitForEvent("dialog", { timeout: 10000 })
+      .then((dialog) => dialog.accept()),
+    traverse("back"),
+  ]);
+  await expect(page).toHaveURL(/\/customers$/);
+  await page.getByRole("button", { name: "Add customer", exact: true }).click();
+  await page
+    .getByLabel("Customer name *", { exact: true })
+    .fill("Unsaved new customer");
+  await Promise.all([
+    page
+      .waitForEvent("dialog", { timeout: 10000 })
+      .then((dialog) => dialog.dismiss()),
+    traverse("forward"),
+  ]);
+  await expect(page.getByLabel("Customer name *", { exact: true })).toHaveValue(
+    "Unsaved new customer",
+  );
+  await page.getByLabel("Customer name *", { exact: true }).click();
+  await Promise.all([
+    page
+      .waitForEvent("dialog", { timeout: 10000 })
+      .then((dialog) => dialog.accept()),
+    traverse("forward"),
+  ]);
+  await expect(page).toHaveURL(new RegExp(`/customers/${id}$`));
 });
