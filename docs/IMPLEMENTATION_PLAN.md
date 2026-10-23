@@ -16,7 +16,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Design tokens, themes, typography, shadcn/ui setup — #18 specification in [design system](design/design-system.md); tokens, themes, self-hosted Geist, shadcn base and component/browser tests implemented in #19; CI and exact-head review pending
 - [ ] Application shell and role-aware navigation
 - [ ] Database-backed synthetic demo data with a persistent "Demo Data" indicator
-- [ ] Dashboard and invoice-builder **design previews** (non-functional, clearly labelled, no financial logic) — #22 [screen specifications and owner review sheet](design/review-22.md) owner layouts approved with changes on #22; requested specification updates in #76, supervisor review and #23 implementation/rendered owner review pending
+- [ ] Dashboard and invoice-builder **design previews** (non-functional, clearly labelled, no financial logic) — #22 [screen specifications and owner review sheet](design/review-22.md) owner layouts approved with changes on #22; requested specification updates in #76, rendered previews merged via #102 and owner approval recorded on #23 (2026-10-23)
 - [ ] Threat model — drafted in [security/threat-model.md](security/threat-model.md) for #24; architect/QA design review completed; controls unverified, mitigation follow-ups #70/#71
 - [ ] GST + profit rules verified against ATO sources — research and exact-cent contract prepared in #16; QA/code review completed, accountant review before production remains required
 
@@ -24,7 +24,8 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 ## M1 Customers, company settings and jobs
 - [ ] Company profile and effective-dated GST registration settings (ABN, basis, BAS period)
 - [ ] User and role management
-- [ ] Customers, locations and contacts — #28 implemented in PR #107; concurrency regression tests cover primary contacts and atomic audit history; CI and review pending, screens remain #29
+- [x] Customers, locations and contacts — #28 merged via PR #107; concurrency regression tests cover primary contacts and atomic audit history
+- [ ] Customer directory screens — #29 implemented with search/sort/pagination, billing forms, contacts and sites; [verification](testing/customer-screens.md); pending CI and cross-review
 - [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
 - [ ] Per-company job numbers, detail, status timeline, visits
 - [ ] Assignment to employee and authorisation tests
