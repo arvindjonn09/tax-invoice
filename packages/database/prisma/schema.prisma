@@ -306,6 +306,7 @@ model Customer {
   @@map("customers")
 }
 
+/// SQL partial unique index customer_contacts_one_primary enforces one active primary per customer.
 model CustomerContact {
   id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId  String     @map("company_id") @db.Uuid
