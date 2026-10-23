@@ -151,7 +151,8 @@ const fail = (status: 400 | 409, error: string, field?: string) =>
 const TRANSITION_MESSAGES = {
   "same-status": "The job already has that status",
   "not-allowed": "That status change isn't allowed from the current status",
-  "system-only": "A job becomes invoiced when an invoice is issued",
+  "system-only":
+    "That change happens through invoicing: a job becomes invoiced when an invoice is issued, and an invoiced job is cancelled with its credit note",
 } as const;
 
 async function ownJob(db: PrismaClient, actor: Actor, id: string) {
@@ -253,7 +254,8 @@ export function jobHandlers(db: () => PrismaClient) {
     const [events, visits] = await Promise.all([
       db().jobStatusEvent.findMany({
         where: { companyId: actor.companyId, jobId: job.id },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        // Insertion order (monotonic sequence), not same-millisecond timestamps.
+        orderBy: [{ seq: "asc" }],
       }),
       db().jobVisit.findMany({
         where: { companyId: actor.companyId, jobId: job.id },
@@ -498,7 +500,12 @@ export function jobHandlers(db: () => PrismaClient) {
     const data = defined(parsed.data);
     return inTransaction(async () => {
       const visit = await withAudit(db(), async (tx, audit) => {
-        await lockedJob(tx, owned.id);
+        const job = await lockedJob(tx, owned.id);
+        // A final job's visits are frozen, like the job itself.
+        if (!isJobEditable(job.status))
+          throw new Refusal(
+            fail(409, `A ${job.status} job's visits can't be changed`),
+          );
         const before = requireSameCompany(
           actor,
           safe

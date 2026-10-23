@@ -490,3 +490,75 @@ describe("audit integrity", () => {
     ).toBe(3);
   });
 });
+
+describe("review fixes (#111)", () => {
+  it("freezes visits of a final job: refused, visit and audit unchanged", async () => {
+    const id = (await newJob()).body.id;
+    const visit = await (
+      await r().addVisit(
+        call("manager", "POST", { startsAt: "2026-11-05T08:00:00+11:00" }),
+        one(id),
+      )
+    ).json();
+    expect((await move(id, "cancelled")).status).toBe(200);
+    const audits = () =>
+      db.auditEvent.count({
+        where: { companyId, action: "job_visit.updated", targetId: visit.id },
+      });
+    const before = await audits();
+    const response = await r().updateVisit(
+      call("manager", "PATCH", { status: "completed", notes: "late edit" }),
+      { params: Promise.resolve({ id, visitId: visit.id }) },
+    );
+    expect(response.status).toBe(409);
+    const row = await db.jobVisit.findUniqueOrThrow({
+      where: { id: visit.id },
+    });
+    expect(row.status).toBe("scheduled");
+    expect(row.notes).toBeNull();
+    expect(await audits()).toBe(before);
+  });
+
+  it("cancels completed work (costs kept); an invoiced job needs the system", async () => {
+    const id = (await newJob()).body.id;
+    for (const to of [
+      "approved",
+      "in_progress",
+      "awaiting_review",
+      "completed",
+    ])
+      expect((await move(id, to)).status, to).toBe(200);
+    expect((await move(id, "cancelled")).status).toBe(200);
+
+    const invoiced = (await newJob()).body.id;
+    // Simulate M3 invoice issue (system move) directly.
+    await db.job.update({
+      where: { id: invoiced },
+      data: { status: "invoiced" },
+    });
+    const refused = await move(invoiced, "cancelled");
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error).toMatch(/invoice/i);
+  });
+
+  it("orders the timeline by insertion sequence", async () => {
+    const id = (await newJob()).body.id;
+    for (const to of ["quoted", "draft", "quoted", "approved"])
+      await move(id, to);
+    const events = await db.jobStatusEvent.findMany({
+      where: { jobId: id },
+      orderBy: { seq: "asc" },
+    });
+    const detail = await (await r().read(call("owner", "GET"), one(id))).json();
+    expect(detail.statusHistory.map((e: { id: string }) => e.id)).toEqual(
+      events.map((e) => e.id),
+    );
+    expect(events.map((e) => `${e.fromStatus ?? "∅"}→${e.toStatus}`)).toEqual([
+      "∅→draft",
+      "draft→quoted",
+      "quoted→draft",
+      "draft→quoted",
+      "quoted→approved",
+    ]);
+  });
+});

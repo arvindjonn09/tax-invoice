@@ -51,7 +51,7 @@ describe("job status machine", () => {
     expect(nextStatuses("closed")).toEqual([]);
   });
 
-  it("lets every open status be cancelled, but not completed/invoiced work", () => {
+  it("allows cancelling at any point before closed (plan.md); invoiced needs the system", () => {
     for (const from of [
       "draft",
       "quoted",
@@ -59,10 +59,15 @@ describe("job status machine", () => {
       "assigned",
       "in_progress",
       "awaiting_review",
+      "completed",
     ] as const)
       expect(transitionProblem(from, "cancelled"), from).toBeNull();
-    expect(transitionProblem("completed", "cancelled")).toBe("not-allowed");
-    expect(transitionProblem("invoiced", "cancelled")).toBe("not-allowed");
+    // An invoiced job is cancelled only with its credit note/void (M3).
+    expect(transitionProblem("invoiced", "cancelled")).toBe("system-only");
+    expect(
+      transitionProblem("invoiced", "cancelled", { bySystem: true }),
+    ).toBeNull();
+    expect(transitionProblem("closed", "cancelled")).toBe("not-allowed");
   });
 
   it("keeps 'invoiced' for the system (invoice issue)", () => {

@@ -49,6 +49,9 @@ CREATE TABLE "jobs" (
 -- CreateTable: append-only (trigger below).
 CREATE TABLE "job_status_events" (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    -- Monotonic insertion order. Moves on one job are serialised by the
+    -- status compare-and-set, so this orders each job's timeline exactly.
+    "seq" BIGSERIAL NOT NULL,
     "company_id" UUID NOT NULL,
     "job_id" UUID NOT NULL,
     "from_status" "job_status",
@@ -83,7 +86,8 @@ CREATE UNIQUE INDEX "jobs_company_id_id_key" ON "jobs"("company_id", "id");
 CREATE INDEX "jobs_company_id_status_idx" ON "jobs"("company_id", "status");
 CREATE INDEX "jobs_company_id_customer_id_idx" ON "jobs"("company_id", "customer_id");
 CREATE INDEX "jobs_company_id_created_by_idx" ON "jobs"("company_id", "created_by");
-CREATE INDEX "job_status_events_company_id_job_id_created_at_idx" ON "job_status_events"("company_id", "job_id", "created_at");
+CREATE UNIQUE INDEX "job_status_events_seq_key" ON "job_status_events"("seq");
+CREATE INDEX "job_status_events_company_id_job_id_seq_idx" ON "job_status_events"("company_id", "job_id", "seq");
 CREATE INDEX "job_status_events_company_id_created_by_idx" ON "job_status_events"("company_id", "created_by");
 CREATE UNIQUE INDEX "job_visits_company_id_id_key" ON "job_visits"("company_id", "id");
 CREATE INDEX "job_visits_company_id_job_id_starts_at_idx" ON "job_visits"("company_id", "job_id", "starts_at");

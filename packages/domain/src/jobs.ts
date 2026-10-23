@@ -17,8 +17,9 @@ export type JobStatus = (typeof JOB_STATUSES)[number];
 
 /**
  * Allowed moves. Backward moves exist only where work really goes back
- * (quote revised, assignment removed, rework after review). Closed and
- * cancelled are final; cancelling never removes the job's real costs.
+ * (quote revised, assignment removed, rework after review). A job can be
+ * cancelled at any point before it is closed (plan.md); cancelling never
+ * removes its real costs. Closed and cancelled are final.
  */
 const TRANSITIONS: Readonly<Record<JobStatus, readonly JobStatus[]>> = {
   draft: ["quoted", "approved", "cancelled"],
@@ -27,14 +28,22 @@ const TRANSITIONS: Readonly<Record<JobStatus, readonly JobStatus[]>> = {
   assigned: ["approved", "in_progress", "cancelled"],
   in_progress: ["awaiting_review", "cancelled"],
   awaiting_review: ["in_progress", "completed", "cancelled"],
-  completed: ["invoiced", "closed"],
-  invoiced: ["closed"],
+  completed: ["invoiced", "closed", "cancelled"],
+  invoiced: ["closed", "cancelled"],
   closed: [],
   cancelled: [],
 };
 
 /** Set only by the system (issuing an invoice, M3), never by hand. */
 export const SYSTEM_ONLY_STATUSES: readonly JobStatus[] = ["invoiced"];
+
+/**
+ * Moves only the system may make: cancelling an invoiced job must come with
+ * the invoice's credit note or void (M3), never as a bare status change.
+ */
+const SYSTEM_ONLY_MOVES: readonly (readonly [JobStatus, JobStatus])[] = [
+  ["invoiced", "cancelled"],
+];
 
 export function isJobStatus(value: string): value is JobStatus {
   return (JOB_STATUSES as readonly string[]).includes(value);
@@ -54,7 +63,12 @@ export function transitionProblem(
 ): TransitionProblem | null {
   if (from === to) return "same-status";
   if (!TRANSITIONS[from].includes(to)) return "not-allowed";
-  if (!bySystem && SYSTEM_ONLY_STATUSES.includes(to)) return "system-only";
+  if (
+    !bySystem &&
+    (SYSTEM_ONLY_STATUSES.includes(to) ||
+      SYSTEM_ONLY_MOVES.some(([a, b]) => a === from && b === to))
+  )
+    return "system-only";
   return null;
 }
 

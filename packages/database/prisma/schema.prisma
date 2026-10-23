@@ -413,6 +413,8 @@ model Job {
 /// Immutable status history (database trigger refuses UPDATE/DELETE/TRUNCATE).
 model JobStatusEvent {
   id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Monotonic insertion order; the timeline sorts by this.
+  seq        BigInt     @unique @default(autoincrement())
   companyId  String     @map("company_id") @db.Uuid
   jobId      String     @map("job_id") @db.Uuid
   fromStatus JobStatus? @map("from_status")
@@ -423,7 +425,7 @@ model JobStatusEvent {
   job        Job        @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
   creator    Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
 
-  @@index([companyId, jobId, createdAt])
+  @@index([companyId, jobId, seq])
   @@index([companyId, createdBy])
   @@map("job_status_events")
 }
