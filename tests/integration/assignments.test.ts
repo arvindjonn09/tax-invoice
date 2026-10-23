@@ -429,3 +429,27 @@ describe("employee-scoped jobs", () => {
     expect(await myIds("colleague")).toEqual([]);
   });
 });
+
+describe("assignment concurrency", () => {
+  it("ends an assignment once even when two managers end it at the same time", async () => {
+    const created = await assign(unassignedJob, { employeeId: workerEmployee });
+    expect(created.status).toBe(201);
+    const assignmentId = (await created.json()).id;
+    const results = await Promise.all(
+      [1, 2].map(() =>
+        r().end(call("manager", "PATCH", { ended: true }), {
+          params: Promise.resolve({ id: unassignedJob, assignmentId }),
+        }),
+      ),
+    );
+    expect(results.map((res) => res.status).sort()).toEqual([200, 409]);
+    const events = await db.auditEvent.findMany({
+      where: { companyId, action: "job.unassigned", targetId: unassignedJob },
+    });
+    expect(
+      events.filter((event) =>
+        JSON.stringify(event.metadata).includes(assignmentId),
+      ),
+    ).toHaveLength(1);
+  });
+});

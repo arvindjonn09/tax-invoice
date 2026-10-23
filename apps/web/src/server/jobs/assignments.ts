@@ -9,6 +9,7 @@ import { withAudit } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { uuidOrNull } from "../http/fields";
+import { Refusal, inTransaction, lockedJob } from "./handlers";
 
 // #32. Managers (job.assign: owner, manager) assign employees to a job or to
 // one of its visits. Unassigning ends the assignment; history is kept.
@@ -69,8 +70,6 @@ export function assignmentHandlers(db: () => PrismaClient) {
     const parsed = Assign.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
     const job = await ownJob(db(), actor, (await context.params).id);
-    if (!isJobEditable(job.status))
-      return fail(409, `A ${job.status} job can't be assigned`);
     const { employeeId, visitId = null } = parsed.data;
     const employee = await db().employee.findFirst({
       where: { id: employeeId, companyId: actor.companyId, isActive: true },
@@ -84,27 +83,35 @@ export function assignmentHandlers(db: () => PrismaClient) {
         return fail(400, "Choose one of this job's visits", "visitId");
     }
     try {
-      const row = await withAudit(db(), async (tx, audit) => {
-        const created = await tx.assignment.create({
-          data: {
+      return await inTransaction(async () => {
+        const row = await withAudit(db(), async (tx, audit) => {
+          // Status is checked under the job lock, so it can't change meanwhile.
+          const current = await lockedJob(tx, job.id);
+          if (!isJobEditable(current.status))
+            throw new Refusal(
+              fail(409, `A ${current.status} job can't be assigned`),
+            );
+          const created = await tx.assignment.create({
+            data: {
+              companyId: actor.companyId,
+              jobId: job.id,
+              employeeId,
+              visitId,
+              createdBy: actor.userId,
+            },
+            include: { employee: { select: { name: true } } },
+          });
+          await audit({
             companyId: actor.companyId,
-            jobId: job.id,
-            employeeId,
-            visitId,
-            createdBy: actor.userId,
-          },
-          include: { employee: { select: { name: true } } },
+            actorUserId: actor.userId,
+            action: "job.assigned",
+            target: { type: "job", id: job.id },
+            after: { assignmentId: created.id, employeeId, visitId },
+          });
+          return created;
         });
-        await audit({
-          companyId: actor.companyId,
-          actorUserId: actor.userId,
-          action: "job.assigned",
-          target: { type: "job", id: job.id },
-          after: { assignmentId: created.id, employeeId, visitId },
-        });
-        return created;
+        return privateJson(assignmentView(row), { status: 201 });
       });
-      return privateJson(assignmentView(row), { status: 201 });
     } catch (error) {
       if (isDuplicate(error))
         return fail(409, `${employee.name} is already assigned here`);
@@ -122,31 +129,36 @@ export function assignmentHandlers(db: () => PrismaClient) {
     const { id, assignmentId } = await context.params;
     const job = await ownJob(db(), actor, id);
     const safe = uuidOrNull(assignmentId);
-    const before = requireSameCompany(
-      actor,
-      safe
-        ? await db().assignment.findFirst({
-            where: { id: safe, jobId: job.id },
-          })
-        : null,
-    );
-    if (before.endedAt) return fail(409, "That assignment has already ended");
-    const row = await withAudit(db(), async (tx, audit) => {
-      const updated = await tx.assignment.update({
-        where: { id: before.id },
-        data: { endedAt: new Date(), endedBy: actor.userId },
-        include: { employee: { select: { name: true } } },
+    return inTransaction(async () => {
+      const row = await withAudit(db(), async (tx, audit) => {
+        // Read under the job lock: two concurrent ends can't both apply.
+        await lockedJob(tx, job.id);
+        const before = requireSameCompany(
+          actor,
+          safe
+            ? await tx.assignment.findFirst({
+                where: { id: safe, jobId: job.id },
+              })
+            : null,
+        );
+        if (before.endedAt)
+          throw new Refusal(fail(409, "That assignment has already ended"));
+        const updated = await tx.assignment.update({
+          where: { id: before.id },
+          data: { endedAt: new Date(), endedBy: actor.userId },
+          include: { employee: { select: { name: true } } },
+        });
+        await audit({
+          companyId: actor.companyId,
+          actorUserId: actor.userId,
+          action: "job.unassigned",
+          target: { type: "job", id: job.id },
+          before: { assignmentId: before.id, employeeId: before.employeeId },
+        });
+        return updated;
       });
-      await audit({
-        companyId: actor.companyId,
-        actorUserId: actor.userId,
-        action: "job.unassigned",
-        target: { type: "job", id: job.id },
-        before: { assignmentId: before.id, employeeId: before.employeeId },
-      });
-      return updated;
+      return privateJson(assignmentView(row));
     });
-    return privateJson(assignmentView(row));
   };
 
   return { assign, end };
