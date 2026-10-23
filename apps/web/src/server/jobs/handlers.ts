@@ -1,0 +1,521 @@
+import {
+  type Actor,
+  type FieldRules,
+  companyScope,
+  requireSameCompany,
+  visibleFields,
+} from "@jobflow/authz";
+import {
+  JOB_STATUSES,
+  formatJobReference,
+  isJobEditable,
+  transitionProblem,
+} from "@jobflow/domain";
+import { z } from "zod";
+import type {
+  Job,
+  JobStatusEvent,
+  JobVisit,
+  Prisma,
+  PrismaClient,
+} from "../../../../../packages/database/src/generated/prisma/client";
+import { withAudit } from "../../../../../packages/database/src/index";
+import { type PolicyHandler, privateJson } from "../authz/policy";
+import { invalid, jsonOrNull } from "../company/handlers";
+import { toDay } from "../company/gst";
+import {
+  defined,
+  optionalText,
+  requiredText,
+  uuidOrNull,
+} from "../http/fields";
+import { parsePage } from "../http/guards";
+
+// #31. Reads: job.read_all (office). Assigned-only reads for employees and
+// subcontractors arrive with assignments (#32). Writes: job.write (owner,
+// manager). The agreed price is only returned with job.price.read.
+
+type JobView = Omit<Job, "agreedPriceExclusiveCents" | "dueOn"> & {
+  agreedPriceExclusiveCents: string | null;
+  dueOn: string | null;
+};
+
+const JOB_FIELDS: FieldRules<JobView> = {
+  id: true,
+  number: true,
+  reference: true,
+  customerId: true,
+  locationId: true,
+  title: true,
+  description: true,
+  status: true,
+  agreedPriceExclusiveCents: "job.price.read",
+  dueOn: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
+/** Money leaves the API as integer-cent strings: exact, never floats. */
+function view(job: Job): JobView {
+  return {
+    ...job,
+    agreedPriceExclusiveCents:
+      job.agreedPriceExclusiveCents === null
+        ? null
+        : job.agreedPriceExclusiveCents.toString(),
+    dueOn: job.dueOn ? toDay(job.dueOn) : null,
+  };
+}
+
+function eventView(event: JobStatusEvent) {
+  return {
+    id: event.id,
+    fromStatus: event.fromStatus,
+    toStatus: event.toStatus,
+    note: event.note,
+    createdAt: event.createdAt,
+    createdBy: event.createdBy,
+  };
+}
+
+function visitView(visit: JobVisit) {
+  return {
+    id: visit.id,
+    startsAt: visit.startsAt,
+    endsAt: visit.endsAt,
+    status: visit.status,
+    notes: visit.notes,
+  };
+}
+
+/** GST-exclusive cents as a non-negative integer (number or digit string). */
+const cents = z
+  .union([z.string().regex(/^\d{1,13}$/, "Whole cents only"), z.number().int()])
+  .transform((value, context) => {
+    const amount = BigInt(value);
+    if (amount < 0n || amount > 1_000_000_000_000n) {
+      context.addIssue({ code: "custom", message: "Enter a price from $0" });
+      return z.NEVER;
+    }
+    return amount;
+  });
+
+const jobFields = {
+  title: requiredText(200, "Enter a job title"),
+  description: optionalText(4000),
+  locationId: z.uuid().nullable(),
+  agreedPriceExclusiveCents: cents.nullable(),
+  dueOn: z.iso.date("Use a date like 2026-07-01").nullable(),
+};
+const CreateJob = z
+  .object({ customerId: z.uuid("Choose a customer"), ...jobFields })
+  .partial()
+  .required({ customerId: true, title: true });
+const UpdateJob = z
+  .object(jobFields)
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, "Nothing to update");
+const ChangeStatus = z.object({
+  to: z.enum(JOB_STATUSES),
+  note: optionalText(500).optional(),
+});
+const visitFields = {
+  startsAt: z.iso.datetime({ offset: true }),
+  endsAt: z.iso.datetime({ offset: true }).nullable(),
+  status: z.enum(["scheduled", "completed", "cancelled"]),
+  notes: optionalText(1000),
+};
+const CreateVisit = z
+  .object(visitFields)
+  .partial()
+  .required({ startsAt: true });
+const UpdateVisit = z
+  .object(visitFields)
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, "Nothing to update");
+
+const STATUS_FILTER = z.enum(JOB_STATUSES).optional().catch(undefined);
+
+type JobContext = { params: Promise<{ id: string }> };
+type VisitContext = { params: Promise<{ id: string; visitId: string }> };
+
+const fail = (status: 400 | 409, error: string, field?: string) =>
+  privateJson(
+    { error, ...(field ? { fields: { [field]: error } } : {}) },
+    {
+      status,
+    },
+  );
+
+const TRANSITION_MESSAGES = {
+  "same-status": "The job already has that status",
+  "not-allowed": "That status change isn't allowed from the current status",
+  "system-only": "A job becomes invoiced when an invoice is issued",
+} as const;
+
+async function ownJob(db: PrismaClient, actor: Actor, id: string) {
+  const safe = uuidOrNull(id);
+  return requireSameCompany(
+    actor,
+    safe ? await db.job.findUnique({ where: { id: safe } }) : null,
+  );
+}
+
+/**
+ * The customer must be active in this company, and the site (if any) must be
+ * an active location of that customer. Returns a field error or null.
+ */
+async function siteProblem(
+  db: PrismaClient,
+  companyId: string,
+  customerId: string,
+  locationId: string | null | undefined,
+  { requireActiveCustomer }: { requireActiveCustomer: boolean },
+): Promise<[string, string] | null> {
+  const customer = await db.customer.findFirst({
+    where: { id: customerId, companyId },
+    select: { archivedAt: true },
+  });
+  if (!customer || (requireActiveCustomer && customer.archivedAt))
+    return ["customerId", "Choose an active customer"];
+  if (!locationId) return null;
+  const location = await db.location.findFirst({
+    where: { id: locationId, companyId, customerId, archivedAt: null },
+    select: { id: true },
+  });
+  return location
+    ? null
+    : ["locationId", "Choose one of this customer's sites"];
+}
+
+/** Next per-company number, atomically (row lock until commit). */
+async function nextNumber(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  kind: "job",
+): Promise<number> {
+  const rows = await tx.$queryRaw<{ last_value: number }[]>`
+    INSERT INTO number_sequences (company_id, kind, last_value)
+    VALUES (${companyId}::uuid, ${kind}, 1)
+    ON CONFLICT (company_id, kind)
+    DO UPDATE SET last_value = number_sequences.last_value + 1
+    RETURNING last_value`;
+  const value = rows[0]?.last_value;
+  if (!value) throw new Error("Numbering failed");
+  return value;
+}
+
+export function jobHandlers(db: () => PrismaClient) {
+  const list: PolicyHandler<unknown> = async ({ actor, request }) => {
+    const params = new URL(request.url).searchParams;
+    const { page, take, skip } = parsePage(params);
+    const status = STATUS_FILTER.parse(params.get("status") ?? undefined);
+    const customerId = uuidOrNull(params.get("customerId") ?? "");
+    const q = params.get("q")?.trim().slice(0, 100);
+    const filter: Prisma.JobWhereInput = {
+      ...(status ? { status } : {}),
+      ...(customerId ? { customerId } : {}),
+      ...(q
+        ? {
+            OR: [
+              { title: { contains: q, mode: "insensitive" } },
+              { reference: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+    const where: Prisma.JobWhereInput = companyScope(actor, filter);
+    const [rows, total] = await Promise.all([
+      db().job.findMany({
+        where,
+        orderBy: [{ number: "desc" }],
+        take,
+        skip,
+      }),
+      db().job.count({ where }),
+    ]);
+    return privateJson({
+      page,
+      pageSize: take,
+      total,
+      jobs: rows.map((row) => visibleFields(actor, view(row), JOB_FIELDS)),
+    });
+  };
+
+  /** A job with its visits and full status timeline (oldest first). */
+  const read: PolicyHandler<JobContext> = async ({ actor, context }) => {
+    const job = await ownJob(db(), actor, (await context.params).id);
+    const [events, visits] = await Promise.all([
+      db().jobStatusEvent.findMany({
+        where: { companyId: actor.companyId, jobId: job.id },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      }),
+      db().jobVisit.findMany({
+        where: { companyId: actor.companyId, jobId: job.id },
+        orderBy: [{ startsAt: "asc" }],
+      }),
+    ]);
+    return privateJson({
+      ...visibleFields(actor, view(job), JOB_FIELDS),
+      statusHistory: events.map(eventView),
+      visits: visits.map(visitView),
+    });
+  };
+
+  const create: PolicyHandler<unknown> = async ({ actor, request }) => {
+    const parsed = CreateJob.safeParse(await jsonOrNull(request));
+    if (!parsed.success) return invalid(parsed.error);
+    const { dueOn, ...data } = defined(parsed.data);
+    const problem = await siteProblem(
+      db(),
+      actor.companyId,
+      data.customerId,
+      data.locationId,
+      { requireActiveCustomer: true },
+    );
+    if (problem) return fail(400, problem[1], problem[0]);
+    const job = await withAudit(db(), async (tx, audit) => {
+      const number = await nextNumber(tx, actor.companyId, "job");
+      const { jobPrefix } = await tx.company.findUniqueOrThrow({
+        where: { id: actor.companyId },
+        select: { jobPrefix: true },
+      });
+      const created = await tx.job.create({
+        data: {
+          ...data,
+          ...(dueOn !== undefined
+            ? { dueOn: dueOn ? new Date(`${dueOn}T00:00:00Z`) : null }
+            : {}),
+          companyId: actor.companyId,
+          createdBy: actor.userId,
+          number,
+          reference: formatJobReference(jobPrefix, number),
+          status: "draft",
+        },
+      });
+      await tx.jobStatusEvent.create({
+        data: {
+          companyId: actor.companyId,
+          jobId: created.id,
+          fromStatus: null,
+          toStatus: "draft",
+          createdBy: actor.userId,
+        },
+      });
+      await audit({
+        companyId: actor.companyId,
+        actorUserId: actor.userId,
+        action: "job.created",
+        target: { type: "job", id: created.id },
+        after: {
+          reference: created.reference,
+          customerId: created.customerId,
+          title: created.title,
+          agreedPriceExclusiveCents: created.agreedPriceExclusiveCents,
+        },
+      });
+      return created;
+    });
+    return privateJson(visibleFields(actor, view(job), JOB_FIELDS), {
+      status: 201,
+    });
+  };
+
+  /** Details only; status moves go through `changeStatus`. */
+  const update: PolicyHandler<JobContext> = async ({
+    actor,
+    request,
+    context,
+  }) => {
+    const parsed = UpdateJob.safeParse(await jsonOrNull(request));
+    if (!parsed.success) return invalid(parsed.error);
+    const before = await ownJob(db(), actor, (await context.params).id);
+    if (!isJobEditable(before.status))
+      return fail(409, `A ${before.status} job can't be edited`);
+    const { dueOn, ...rest } = defined(parsed.data);
+    if (rest.locationId !== undefined) {
+      const problem = await siteProblem(
+        db(),
+        actor.companyId,
+        before.customerId,
+        rest.locationId,
+        { requireActiveCustomer: false },
+      );
+      if (problem) return fail(400, problem[1], problem[0]);
+    }
+    const data = {
+      ...rest,
+      ...(dueOn !== undefined
+        ? { dueOn: dueOn ? new Date(`${dueOn}T00:00:00Z`) : null }
+        : {}),
+    };
+    const keys = Object.keys(data) as (keyof Job)[];
+    const job = await withAudit(db(), async (tx, audit) => {
+      const updated = await tx.job.update({ where: { id: before.id }, data });
+      const pick = (record: Job) =>
+        Object.fromEntries(keys.map((key) => [key, record[key]]));
+      await audit({
+        companyId: actor.companyId,
+        actorUserId: actor.userId,
+        action: "job.updated",
+        target: { type: "job", id: before.id },
+        before: pick(before),
+        after: pick(updated),
+      });
+      return updated;
+    });
+    return privateJson(visibleFields(actor, view(job), JOB_FIELDS));
+  };
+
+  /**
+   * Move the job along its status machine. A compare-and-set update applies
+   * only if the status is still the one we checked, so two concurrent moves
+   * can't both apply; every move appends an immutable status event in the
+   * same transaction.
+   */
+  const changeStatus: PolicyHandler<JobContext> = async ({
+    actor,
+    request,
+    context,
+  }) => {
+    const parsed = ChangeStatus.safeParse(await jsonOrNull(request));
+    if (!parsed.success) return invalid(parsed.error);
+    const current = await ownJob(db(), actor, (await context.params).id);
+    const { to, note } = parsed.data;
+    const early = transitionProblem(current.status, to);
+    if (early) return fail(409, TRANSITION_MESSAGES[early], "to");
+    const job = await withAudit(db(), async (tx, audit) => {
+      // Compare-and-set: applies only if nobody moved the job meanwhile.
+      const moved = await tx.job.updateMany({
+        where: { id: current.id, status: current.status },
+        data: { status: to },
+      });
+      if (moved.count !== 1) throw new StatusRaceError();
+      await tx.jobStatusEvent.create({
+        data: {
+          companyId: actor.companyId,
+          jobId: current.id,
+          fromStatus: current.status,
+          toStatus: to,
+          note: note ?? null,
+          createdBy: actor.userId,
+        },
+      });
+      await audit({
+        companyId: actor.companyId,
+        actorUserId: actor.userId,
+        action: "job.status_changed",
+        target: { type: "job", id: current.id },
+        before: { status: current.status },
+        after: { status: to },
+      });
+      return tx.job.findUniqueOrThrow({ where: { id: current.id } });
+    }).catch((error: unknown) => {
+      if (error instanceof StatusRaceError) return null;
+      throw error;
+    });
+    if (!job)
+      return fail(409, "The job changed meanwhile. Reload and try again.");
+    return privateJson(visibleFields(actor, view(job), JOB_FIELDS));
+  };
+
+  const addVisit: PolicyHandler<JobContext> = async ({
+    actor,
+    request,
+    context,
+  }) => {
+    const parsed = CreateVisit.safeParse(await jsonOrNull(request));
+    if (!parsed.success) return invalid(parsed.error);
+    const job = await ownJob(db(), actor, (await context.params).id);
+    if (!isJobEditable(job.status))
+      return fail(409, `A ${job.status} job can't get new visits`);
+    const data = defined(parsed.data);
+    const startsAt = new Date(data.startsAt);
+    const endsAt = data.endsAt ? new Date(data.endsAt) : null;
+    if (endsAt && endsAt <= startsAt)
+      return fail(400, "The visit must end after it starts", "endsAt");
+    const visit = await withAudit(db(), async (tx, audit) => {
+      const created = await tx.jobVisit.create({
+        data: {
+          companyId: actor.companyId,
+          jobId: job.id,
+          startsAt,
+          endsAt,
+          ...(data.status ? { status: data.status } : {}),
+          notes: data.notes ?? null,
+          createdBy: actor.userId,
+        },
+      });
+      await audit({
+        companyId: actor.companyId,
+        actorUserId: actor.userId,
+        action: "job_visit.created",
+        target: { type: "job_visit", id: created.id },
+        after: { jobId: job.id, startsAt, endsAt, status: created.status },
+      });
+      return created;
+    });
+    return privateJson(visitView(visit), { status: 201 });
+  };
+
+  const updateVisit: PolicyHandler<VisitContext> = async ({
+    actor,
+    request,
+    context,
+  }) => {
+    const parsed = UpdateVisit.safeParse(await jsonOrNull(request));
+    if (!parsed.success) return invalid(parsed.error);
+    const { id, visitId } = await context.params;
+    const job = await ownJob(db(), actor, id);
+    const safe = uuidOrNull(visitId);
+    const before = requireSameCompany(
+      actor,
+      safe
+        ? await db().jobVisit.findFirst({ where: { id: safe, jobId: job.id } })
+        : null,
+    );
+    const data = defined(parsed.data);
+    const startsAt = data.startsAt ? new Date(data.startsAt) : before.startsAt;
+    const endsAt =
+      data.endsAt === undefined
+        ? before.endsAt
+        : data.endsAt
+          ? new Date(data.endsAt)
+          : null;
+    if (endsAt && endsAt <= startsAt)
+      return fail(400, "The visit must end after it starts", "endsAt");
+    const visit = await withAudit(db(), async (tx, audit) => {
+      const updated = await tx.jobVisit.update({
+        where: { id: before.id },
+        data: {
+          startsAt,
+          endsAt,
+          ...(data.status ? { status: data.status } : {}),
+          ...(data.notes !== undefined ? { notes: data.notes } : {}),
+        },
+      });
+      await audit({
+        companyId: actor.companyId,
+        actorUserId: actor.userId,
+        action: "job_visit.updated",
+        target: { type: "job_visit", id: before.id },
+        before: {
+          startsAt: before.startsAt,
+          endsAt: before.endsAt,
+          status: before.status,
+        },
+        after: {
+          startsAt: updated.startsAt,
+          endsAt: updated.endsAt,
+          status: updated.status,
+        },
+      });
+      return updated;
+    });
+    return privateJson(visitView(visit));
+  };
+
+  return { list, read, create, update, changeStatus, addVisit, updateVisit };
+}
+
+class StatusRaceError extends Error {}

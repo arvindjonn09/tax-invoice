@@ -136,6 +136,7 @@ model Company {
   gstRegistrations CompanyGstRegistration[]
   employees        Employee[]
   customers        Customer[]
+  numberSequences  NumberSequence[]
 
   @@map("companies")
 }
@@ -195,6 +196,9 @@ model Membership {
   customersCreated   Customer[]
   contactsCreated    CustomerContact[]
   locationsCreated   Location[]
+  jobsCreated        Job[]
+  jobEventsCreated   JobStatusEvent[]
+  jobVisitsCreated   JobVisit[]
 
   @@unique([companyId, userId])
   @@index([userId])
@@ -285,6 +289,7 @@ model Customer {
   creator      Membership        @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   contacts     CustomerContact[]
   locations    Location[]
+  jobs         Job[]
 
   @@unique([companyId, id])
   @@index([companyId, archivedAt, name])
@@ -332,10 +337,113 @@ model Location {
   createdBy    String     @map("created_by") @db.Uuid
   customer     Customer   @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
   creator      Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  jobs         Job[]
 
   @@unique([companyId, id])
   @@unique([companyId, customerId, id])
   @@index([companyId, customerId])
   @@index([companyId, createdBy])
   @@map("locations")
+}
+
+/// Per-company counters for human numbers ("job", later "invoice").
+model NumberSequence {
+  companyId String  @map("company_id") @db.Uuid
+  kind      String  @db.VarChar(20)
+  lastValue Int     @default(0) @map("last_value")
+  company   Company @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([companyId, kind])
+  @@map("number_sequences")
+}
+
+enum JobStatus {
+  draft
+  quoted
+  approved
+  assigned
+  in_progress
+  awaiting_review
+  completed
+  invoiced
+  closed
+  cancelled
+
+  @@map("job_status")
+}
+
+enum JobVisitStatus {
+  scheduled
+  completed
+  cancelled
+
+  @@map("job_visit_status")
+}
+
+/// The core work order (#31). Price is GST-exclusive integer cents.
+model Job {
+  id                         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId                  String           @map("company_id") @db.Uuid
+  number                     Int
+  reference                  String           @db.VarChar(30)
+  customerId                 String           @map("customer_id") @db.Uuid
+  locationId                 String?          @map("location_id") @db.Uuid
+  title                      String           @db.VarChar(200)
+  description                String?          @db.VarChar(4000)
+  status                     JobStatus        @default(draft)
+  agreedPriceExclusiveCents  BigInt?          @map("agreed_price_exclusive_cents")
+  dueOn                      DateTime?        @map("due_on") @db.Date
+  createdAt                  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                  DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy                  String           @map("created_by") @db.Uuid
+  customer                   Customer         @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  location                   Location?        @relation(fields: [companyId, customerId, locationId], references: [companyId, customerId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator                    Membership       @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  statusEvents               JobStatusEvent[]
+  visits                     JobVisit[]
+
+  @@unique([companyId, number])
+  @@unique([companyId, id])
+  @@index([companyId, status])
+  @@index([companyId, customerId])
+  @@index([companyId, createdBy])
+  @@map("jobs")
+}
+
+/// Immutable status history (database trigger refuses UPDATE/DELETE/TRUNCATE).
+model JobStatusEvent {
+  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId  String     @map("company_id") @db.Uuid
+  jobId      String     @map("job_id") @db.Uuid
+  fromStatus JobStatus? @map("from_status")
+  toStatus   JobStatus  @map("to_status")
+  note       String?    @db.VarChar(500)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy  String     @map("created_by") @db.Uuid
+  job        Job        @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator    Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([companyId, jobId, createdAt])
+  @@index([companyId, createdBy])
+  @@map("job_status_events")
+}
+
+model JobVisit {
+  id        String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId String         @map("company_id") @db.Uuid
+  jobId     String         @map("job_id") @db.Uuid
+  startsAt  DateTime       @map("starts_at") @db.Timestamptz(3)
+  endsAt    DateTime?      @map("ends_at") @db.Timestamptz(3)
+  status    JobVisitStatus @default(scheduled)
+  notes     String?        @db.VarChar(1000)
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy String         @map("created_by") @db.Uuid
+  job       Job            @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator   Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@index([companyId, jobId, startsAt])
+  @@index([companyId, createdBy])
+  @@map("job_visits")
 }
