@@ -280,6 +280,124 @@ describe("customers", () => {
     ]);
   });
 
+  it("serializes concurrent primary contact creation and promotion", async () => {
+    const customer = await db.customer.create({
+      data: {
+        companyId,
+        createdBy: userIds.owner,
+        name: "Concurrent directory",
+      },
+    });
+    const created = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        r().addContact(
+          call("owner", "POST", {
+            name: `Concurrent ${index}`,
+            isPrimary: true,
+          }),
+          one(customer.id),
+        ),
+      ),
+    );
+    expect(created.map((response) => response.status)).toEqual([
+      201, 201, 201, 201,
+    ]);
+    const contacts = await Promise.all(
+      created.map((response) => response.json()),
+    );
+    const promoted = await Promise.all(
+      contacts.map((contact: { id: string }) =>
+        r().updateContact(
+          call("owner", "PATCH", { isPrimary: true }),
+          child(customer.id, contact.id),
+        ),
+      ),
+    );
+    expect(promoted.map((response) => response.status)).toEqual([
+      200, 200, 200, 200,
+    ]);
+    expect(
+      await db.customerContact.count({
+        where: { customerId: customer.id, isPrimary: true },
+      }),
+    ).toBe(1);
+  });
+
+  it("records a continuous audit chain for concurrent customer, contact and location edits", async () => {
+    const customer = await db.customer.create({
+      data: { companyId, createdBy: userIds.owner, name: "Initial" },
+    });
+    const contact = await db.customerContact.create({
+      data: {
+        companyId,
+        customerId: customer.id,
+        createdBy: userIds.owner,
+        name: "Initial",
+      },
+    });
+    const location = await db.location.create({
+      data: {
+        companyId,
+        customerId: customer.id,
+        createdBy: userIds.owner,
+        label: "Initial",
+        addressLine1: "1 Synthetic Road",
+        suburb: "Sampleton",
+        state: "NSW",
+        postcode: "2000",
+      },
+    });
+    for (const [targetId, field, update] of [
+      [
+        customer.id,
+        "name",
+        (value: string) =>
+          r().update(call("owner", "PATCH", { name: value }), one(customer.id)),
+      ],
+      [
+        contact.id,
+        "name",
+        (value: string) =>
+          r().updateContact(
+            call("owner", "PATCH", { name: value }),
+            child(customer.id, contact.id),
+          ),
+      ],
+      [
+        location.id,
+        "label",
+        (value: string) =>
+          r().updateLocation(
+            call("owner", "PATCH", { label: value }),
+            child(customer.id, location.id),
+          ),
+      ],
+    ] as const) {
+      const responses = await Promise.all(
+        Array.from({ length: 4 }, (_, index) => update(`Changed ${index}`)),
+      );
+      expect(responses.map((response) => response.status)).toEqual([
+        200, 200, 200, 200,
+      ]);
+      const events = await db.auditEvent.findMany({ where: { targetId } });
+      expect(events).toHaveLength(4);
+      const changes = events.map((event) => {
+        const metadata = event.metadata as {
+          changes: Record<string, { before: string; after: string }>;
+        };
+        return metadata.changes[field]!;
+      });
+      // A single chain must consume all events, regardless of request order.
+      let value = "Initial";
+      for (let index = 0; index < changes.length; index += 1) {
+        const next = changes.filter((change) => change.before === value);
+        expect(next).toHaveLength(1);
+        value = next[0]!.after;
+      }
+      expect(changes.some((change) => change.before === value)).toBe(false);
+    }
+  });
+
   it("archives (never deletes): hidden from pickers, still readable with history", async () => {
     const archived = await r().update(
       call("owner", "PATCH", { archived: true }),
@@ -442,7 +560,7 @@ describe("customers", () => {
     expect(byAbn).toEqual([acmeId]);
     const paged = await (
       await r().list(
-        call("owner", "GET", undefined, "?pageSize=1&page=2"),
+        call("owner", "GET", undefined, "?q=Sample&pageSize=1&page=2"),
         undefined,
       )
     ).json();
