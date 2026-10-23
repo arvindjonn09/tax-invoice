@@ -64,6 +64,18 @@ const INVITATION_SELECT = {
   acceptedAt: true,
   revokedAt: true,
 } as const;
+// Roll back the read-only transaction without weakening withAudit's guarantee
+// that every committed mutation records an event (same pattern as employees).
+class UnchangedAccess extends Error {
+  constructor(
+    readonly member: Prisma.MembershipGetPayload<{
+      select: typeof MEMBER_SELECT;
+    }>,
+  ) {
+    super("Membership access is unchanged");
+  }
+}
+
 type Context = { params: Promise<{ id: string }> };
 
 /** Serialize membership/invitation mutations, then re-check the current owner. */
@@ -81,6 +93,17 @@ export function userHandlers(db: () => PrismaClient) {
   const list: PolicyHandler<unknown> = async ({ actor, request }) => {
     const params = new URL(request.url).searchParams;
     const { page, take, skip } = parsePage(params);
+    const invitationPaging = parsePage(
+      new URLSearchParams({
+        page: params.get("invitationPage") ?? "1",
+        pageSize: "100",
+      }),
+    );
+    const invitationWhere = {
+      companyId: actor.companyId,
+      acceptedAt: null,
+      revokedAt: null,
+    };
     const q = params.get("q")?.trim().slice(0, 100);
     const where: Prisma.MembershipWhereInput = {
       companyId: actor.companyId,
@@ -95,7 +118,7 @@ export function userHandlers(db: () => PrismaClient) {
           }
         : {}),
     };
-    const [members, total, invitations] = await Promise.all([
+    const [members, total, invitations, invitationsTotal] = await Promise.all([
       db().membership.findMany({
         where,
         select: MEMBER_SELECT,
@@ -105,17 +128,24 @@ export function userHandlers(db: () => PrismaClient) {
       }),
       db().membership.count({ where }),
       db().userInvitation.findMany({
-        where: {
-          companyId: actor.companyId,
-          acceptedAt: null,
-          revokedAt: null,
-        },
+        where: invitationWhere,
         select: INVITATION_SELECT,
         orderBy: [{ createdAt: "desc" }, { id: "asc" }],
-        take: 100,
+        take: invitationPaging.take,
+        skip: invitationPaging.skip,
       }),
+      db().userInvitation.count({ where: invitationWhere }),
     ]);
-    return privateJson({ members, total, page, pageSize: take, invitations });
+    return privateJson({
+      members,
+      total,
+      page,
+      pageSize: take,
+      invitations,
+      invitationsTotal,
+      invitationPage: invitationPaging.page,
+      invitationPageSize: invitationPaging.take,
+    });
   };
 
   const update: PolicyHandler<Context> = async ({
@@ -131,10 +161,13 @@ export function userHandlers(db: () => PrismaClient) {
       await ownerLock(tx, actor);
       const before = await tx.membership.findFirst({
         where: { id, companyId: actor.companyId },
+        select: MEMBER_SELECT,
       });
       if (!before) throw notFound();
       const role = parsed.data.role ?? before.role;
       const isActive = parsed.data.isActive ?? before.isActive;
+      if (role === before.role && isActive === before.isActive)
+        throw new UnchangedAccess(before);
       if (
         before.role === "owner" &&
         before.isActive &&
@@ -181,6 +214,9 @@ export function userHandlers(db: () => PrismaClient) {
         after: { role, isActive },
       });
       return member;
+    }).catch((error: unknown) => {
+      if (error instanceof UnchangedAccess) return error.member;
+      throw error;
     });
     return privateJson(row);
   };

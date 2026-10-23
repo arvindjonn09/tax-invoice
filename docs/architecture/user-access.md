@@ -4,7 +4,9 @@ Owner-only administration is available at `/users` and `/api/users`. The existin
 `user.manage` permission protects reads and writes, even though managers retain
 `user.read` for future operational lookup. Company scope comes from the session.
 Memberships are never deleted. Role and active-status changes are audited in the
-same transaction, including the immediate previous state.
+same transaction, including the immediate previous state. Unchanged requests return
+the locked current row without updating timestamps, revoking sessions or writing
+audit events.
 
 All membership and invitation writes lock the company row before reading state,
 then re-check the acting owner's current membership. This serializes concurrent
@@ -32,7 +34,8 @@ access until acceptance.
   owner. A replacement requires revoking a live invitation first; expired ones
   are revoked and audited automatically when replaced. Pending invitations are
   unique per email/company. Lists exclude consumed/revoked invitations and never
-  return token digests. The UI shows up to 100 pending invitations.
+  return token digests. The UI paginates pending invitations in pages of 100, so
+  every outstanding invitation stays discoverable and revocable.
 - Acceptance POST is the documented public exception to the usual session policy.
   It enforces trusted origin, a streaming 4 KiB JSON limit, shared database IP
   throttling, token validity/expiry and a still-active owner inviter. It locks the
@@ -53,7 +56,7 @@ access until acceptance.
 
 | Operation | Endpoint | Permission |
 | --- | --- | --- |
-| Search/page memberships and pending invites | `GET /api/users?q=&page=&pageSize=` | `user.manage` |
+| Search/page memberships and pending invites | `GET /api/users?q=&page=&pageSize=&invitationPage=` | `user.manage` |
 | Set role and/or active status | `PATCH /api/users/[membershipId]` | `user.manage` |
 | Create invitation | `POST /api/users/invitations` | `user.manage` |
 | Revoke invitation | `DELETE /api/users/invitations/[id]` | `user.manage` |
@@ -75,7 +78,8 @@ invitation DDL can be reversed and reapplied on an empty disposable database.
 Browser coverage exercises invite → join → change role → deactivate, denied
 employee access, empty/error/retry states and keyboard/axe checks with mobile and
 desktop captures in light/dark themes. `pnpm test:e2e` now uses a migrated,
-disposable database and an ephemeral auth secret, never the development database.
+disposable database using main’s shared runner and global isolation guard, never
+the development database.
 
 Privileged MFA and automated email delivery are not enabled. This implementation
 adds no password-reset mail service; the existing sign-in minimum password length,

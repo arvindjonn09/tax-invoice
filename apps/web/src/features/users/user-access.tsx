@@ -17,6 +17,9 @@ type Invitation = { id: string; email: string; role: Role; expiresAt: string };
 type Directory = {
   members: Member[];
   invitations: Invitation[];
+  invitationsTotal: number;
+  invitationPage: number;
+  invitationPageSize: number;
   total: number;
   pageSize: number;
   page: number;
@@ -31,13 +34,17 @@ export function UserAccess() {
   const [dirty, setDirty] = useState(false);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [invitationPage, setInvitationPage] = useState(1);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`/api/users?q=${encodeURIComponent(query)}&page=${page}`, {
-      signal: controller.signal,
-      cache: "no-store",
-    })
+    fetch(
+      `/api/users?q=${encodeURIComponent(query)}&page=${page}&invitationPage=${invitationPage}`,
+      {
+        signal: controller.signal,
+        cache: "no-store",
+      },
+    )
       .then(async (response) => {
         if (!response.ok)
           throw new Error("Unable to load user access. Try again.");
@@ -54,7 +61,7 @@ export function UserAccess() {
           );
       });
     return () => controller.abort();
-  }, [query, page, revision]);
+  }, [query, page, invitationPage, revision]);
   useEffect(() => {
     if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
@@ -360,8 +367,44 @@ export function UserAccess() {
             </li>
           ))}
         </ul>
-        {data && data.invitations.length >= 100 ? (
-          <p>Showing the most recent 100 pending invitations.</p>
+        {data && data.invitationsTotal > 0 ? (
+          <nav
+            aria-label="Invitation pages"
+            className="flex flex-wrap items-center gap-4"
+          >
+            <Button
+              variant="outline"
+              disabled={busy || invitationPage <= 1}
+              onClick={() => {
+                setData(undefined);
+                setInvitationPage((value) => value - 1);
+              }}
+            >
+              Previous invitations
+            </Button>
+            <span>
+              Page {data.invitationPage} of{" "}
+              {Math.max(
+                1,
+                Math.ceil(data.invitationsTotal / data.invitationPageSize),
+              )}{" "}
+              · {data.invitationsTotal} pending invitations
+            </span>
+            <Button
+              variant="outline"
+              disabled={
+                busy ||
+                invitationPage * data.invitationPageSize >=
+                  data.invitationsTotal
+              }
+              onClick={() => {
+                setData(undefined);
+                setInvitationPage((value) => value + 1);
+              }}
+            >
+              Next invitations
+            </Button>
+          </nav>
         ) : null}
       </section>
     </div>

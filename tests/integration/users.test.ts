@@ -373,6 +373,80 @@ describe("owner user access", () => {
     cookies.employee = headersFrom(restored);
   });
 
+  it("returns unchanged access without writes or audit events, including concurrent retries", async () => {
+    const user = await createCredentialUser(db, {
+      email: "retry@jobflow.invalid",
+      name: "Audit Replay Sample",
+      password: PASSWORD,
+    });
+    const member = await db.membership.create({
+      data: {
+        companyId,
+        userId: user.id,
+        role: "employee",
+        createdBy: userIds.owner,
+      },
+    });
+    const countEvents = () =>
+      db.auditEvent.count({ where: { targetId: member.id } });
+    const current = () =>
+      db.membership.findUniqueOrThrow({ where: { id: member.id } });
+    const replay = await api().update(
+      request("owner", "PATCH", { role: "employee", isActive: true }),
+      context(member.id),
+    );
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({
+      id: member.id,
+      role: "employee",
+      isActive: true,
+      user: { email: user.email },
+    });
+    expect((await current()).updatedAt).toEqual(member.updatedAt);
+    expect(await countEvents()).toBe(0);
+    expect(
+      (
+        await api().update(
+          request("owner", "PATCH", { role: "manager" }),
+          context(member.id),
+        )
+      ).status,
+    ).toBe(200);
+    const changed = await current();
+    expect(await countEvents()).toBe(1);
+    expect(
+      (
+        await api().update(
+          request("owner", "PATCH", { role: "manager" }),
+          context(member.id),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await current()).updatedAt).toEqual(changed.updatedAt);
+    expect(await countEvents()).toBe(1);
+    const results = await Promise.all(
+      [0, 1].map(() =>
+        api().update(
+          request("owner", "PATCH", { isActive: false }),
+          context(member.id),
+        ),
+      ),
+    );
+    expect(results.map((response) => response.status)).toEqual([200, 200]);
+    expect(await countEvents()).toBe(2);
+    const deactivated = await current();
+    expect(
+      (
+        await api().update(
+          request("owner", "PATCH", { isActive: false }),
+          context(member.id),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await current()).updatedAt).toEqual(deactivated.updatedAt);
+    expect(await countEvents()).toBe(2);
+  });
+
   it("keeps unrelated company access active when a multi-company member is deactivated", async () => {
     const member = await db.membership.create({
       data: {
@@ -619,6 +693,65 @@ describe("invitations", () => {
         )
       ).status,
     ).toBe(400);
+  });
+
+  it("keeps every pending invitation discoverable and revocable across pages", async () => {
+    const now = Date.now();
+    const fixtures = Array.from({ length: 105 }, (_, index) => ({
+      id: crypto.randomUUID(),
+      companyId,
+      createdBy: userIds.owner,
+      email: `paged-${index}@jobflow.invalid`,
+      role: "employee" as const,
+      tokenHash: randomBytes(32).toString("hex"),
+      createdAt: new Date(now - (index + 1) * 1000),
+      expiresAt: new Date(now + 60000),
+    }));
+    await db.userInvitation.createMany({ data: fixtures });
+    const expected = await db.userInvitation.findMany({
+      where: { companyId, acceptedAt: null, revokedAt: null },
+      select: { id: true },
+    });
+    const seen: string[] = [];
+    let page = 1;
+    for (;;) {
+      const result = await (
+        await api().list(
+          request("owner", "GET", undefined, `?invitationPage=${page}`),
+          undefined,
+        )
+      ).json();
+      expect(result).toMatchObject({
+        invitationPage: page,
+        invitationPageSize: 100,
+        invitationsTotal: expected.length,
+      });
+      expect(result.invitations.length).toBeLessThanOrEqual(100);
+      seen.push(
+        ...result.invitations.map(
+          (invitation: { id: string }) => invitation.id,
+        ),
+      );
+      if (page * result.invitationPageSize >= result.invitationsTotal) break;
+      page += 1;
+    }
+    expect(seen.sort()).toEqual(expected.map((row) => row.id).sort());
+    const oldest = fixtures.at(-1)!;
+    expect(
+      (await api().revoke(request("owner", "DELETE"), context(oldest.id)))
+        .status,
+    ).toBe(200);
+    expect(
+      (await db.userInvitation.findUniqueOrThrow({ where: { id: oldest.id } }))
+        .revokedAt,
+    ).not.toBeNull();
+    const outsider = await (
+      await api().list(
+        request("outsider", "GET", undefined, "?invitationPage=2"),
+        undefined,
+      )
+    ).json();
+    expect(outsider).toMatchObject({ invitationsTotal: 0, invitations: [] });
   });
 
   it("enforces CSRF, bounded bodies, input validation and shared acceptance throttling", async () => {

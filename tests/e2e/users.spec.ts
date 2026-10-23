@@ -5,6 +5,12 @@ import { createDatabaseClient } from "../../packages/database/src/index";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
 import { isolatedTestConnection } from "../helpers/test-environment";
 
+// Same optional-database contract as main's signed-in settings specs.
+test.skip(
+  !process.env.JOBFLOW_ISOLATED_TEST_DATABASE,
+  "Use pnpm test:e2e with an isolated database for signed-in tests",
+);
+
 const PASSWORD = "synthetic browser test password";
 let db: ReturnType<typeof createDatabaseClient>;
 let ownerEmail = "";
@@ -213,4 +219,37 @@ test("empty search, load error and retry states", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Browser Owner", exact: true }),
   ).toBeVisible();
+});
+
+test("owner finds and revokes an invitation beyond the first 100", async ({
+  page,
+}) => {
+  const now = Date.now();
+  const run = randomUUID();
+  const fixtures = Array.from({ length: 105 }, (_, index) => ({
+    id: randomUUID(),
+    companyId,
+    createdBy: ownerId,
+    email: `paged-${run}-${index}@jobflow.invalid`,
+    role: "employee" as const,
+    tokenHash:
+      randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", ""),
+    createdAt: new Date(now - (index + 1) * 1000),
+    expiresAt: new Date(now + 60000),
+  }));
+  await db.userInvitation.createMany({ data: fixtures });
+  await login(page, ownerEmail);
+  await page.goto("/users");
+  const paging = page.getByRole("navigation", { name: "Invitation pages" });
+  await paging.getByRole("button", { name: "Next invitations" }).click();
+  const oldest = fixtures.at(-1)!;
+  const row = page.getByRole("listitem").filter({ hasText: oldest.email });
+  await expect(row).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await row.getByRole("button", { name: "Revoke invitation" }).click();
+  await expect(row).toHaveCount(0);
+  expect(
+    (await db.userInvitation.findUniqueOrThrow({ where: { id: oldest.id } }))
+      .revokedAt,
+  ).not.toBeNull();
 });
