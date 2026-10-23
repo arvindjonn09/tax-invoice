@@ -32,7 +32,8 @@ Record the version, source URLs, licences and decisions in docs/UI_REFERENCES.md
 - /invoices: tax invoice list, GST-inclusive/exclusive builder, mixed tax lines, PDF preview, send/issue workflow, partial payments, overdue state.
 - /expenses and /payments: separate obligations vs settlement; receipts, attachments and reconciliation.
 - /reports: job profitability, customer aging, supplier balances, cash position, draft GST/BAS summaries, CSV export.
-- /settings: company, ABN, GST registration, tax basis, invoice numbering, user access and audit events.
+- /settings: company, ABN, GST registration, tax basis, invoice numbering and audit events.
+- /users: owner-only invitations, role changes, deactivation and restoration; see [user access contract](architecture/user-access.md).
 
 ## Component standards
 Reusable AppShell, SidebarNav, PageHeader, Breadcrumbs, KPIStat, DataTable, FilterBar, EmptyState, StatusPill, MoneyDisplay, FormField, DateRangePicker, ConfirmDialog, Drawer, ActivityTimeline, FileUploader, InvoiceLineEditor, TaxCodeSelect, JobProfitBreakdown and ErrorState. Document props and usage.

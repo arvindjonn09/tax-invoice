@@ -105,6 +105,13 @@ export const NAV_ITEMS: readonly NavItem[] = [
     milestone: "M4",
   },
   {
+    slug: "users",
+    label: "User access",
+    icon: "♙",
+    anyOf: ["user.manage"],
+    milestone: "M1",
+  },
+  {
     slug: "settings",
     label: "Settings",
     icon: "⚙",

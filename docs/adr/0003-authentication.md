@@ -45,6 +45,12 @@ Use Better Auth 1.7.12 (`apps/web/src/server/auth/`).
 - Rate limiting keys on the client IP from `x-forwarded-for`. Deployment (#64) must
   put the app behind a proxy that sets this header correctly, and must not let
   clients spoof it.
-- Per-account lockout, MFA for privileged users and password reset email are
-  follow-ups (#71, #27).
+- #27 adds owner-managed invitation links, audited role/deactivation changes and
+  session revocation; see [user access contract](../architecture/user-access.md).
+  Accounts whose memberships are all inactive cannot create sessions. Accounts
+  without any membership can authenticate for invitation acceptance but cannot
+  access company data.
+- Per-account lockout, MFA for privileged users and password-reset email remain
+  unimplemented; manual invitation sharing does not send email or reset existing
+  credentials. Assess these controls before the production security review (#61).
 - Better Auth's own tables follow its schema; changes to them need this ADR updated.

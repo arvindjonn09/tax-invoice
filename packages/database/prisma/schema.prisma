@@ -137,6 +137,8 @@ model Company {
   employees        Employee[]
   customers        Customer[]
 
+  userInvitations UserInvitation[]
+
   @@map("companies")
 }
 
@@ -195,6 +197,8 @@ model Membership {
   customersCreated   Customer[]
   contactsCreated    CustomerContact[]
   locationsCreated   Location[]
+
+  invitationsCreated UserInvitation[]
 
   @@unique([companyId, userId])
   @@index([userId])
@@ -338,4 +342,24 @@ model Location {
   @@index([companyId, customerId])
   @@index([companyId, createdBy])
   @@map("locations")
+}
+
+/// Owner-issued, expiring one-use invitation (#27). Only SHA-256 token digests are stored.
+model UserInvitation {
+  id         String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId  String         @map("company_id") @db.Uuid
+  email      String         @db.VarChar(320)
+  role       MembershipRole
+  tokenHash  String         @unique @map("token_hash") @db.Char(64)
+  expiresAt  DateTime       @map("expires_at") @db.Timestamptz(3)
+  acceptedAt DateTime?      @map("accepted_at") @db.Timestamptz(3)
+  revokedAt  DateTime?      @map("revoked_at") @db.Timestamptz(3)
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy  String         @map("created_by") @db.Uuid
+  company    Company        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator    Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([companyId, createdAt, id])
+  @@index([companyId, createdBy])
+  @@map("user_invitations")
 }

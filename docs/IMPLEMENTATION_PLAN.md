@@ -23,7 +23,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 
 ## M1 Customers, company settings and jobs
 - [ ] Company profile and effective-dated GST registration settings (ABN, basis, BAS period)
-- [ ] User and role management
+- [x] User and role management — #27 merged via PR #108 after passing CI and Claude review; owner access screens, expiring invitations, audited access changes and concurrent last-owner protection
 - [x] Customers, locations and contacts — #28 merged via PR #107; concurrency regression tests cover primary contacts and atomic audit history
 - [ ] Customer directory screens — #29 implemented with search/sort/pagination, billing forms, contacts and sites; [verification](testing/customer-screens.md); pending CI and cross-review
 - [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
