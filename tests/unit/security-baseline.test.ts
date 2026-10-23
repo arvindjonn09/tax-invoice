@@ -208,7 +208,7 @@ describe("log redaction", () => {
     sessionToken: token,
     headers: { cookie: "jobflow.session=xyz", authorization: "Bearer abc.def" },
     customer: {
-      abn: "51 824 753 556",
+      abn: "12 345 678 901",
       bsb: "062-000",
       accountNumber: "12345678",
       email: "someone@example.test",
@@ -216,7 +216,7 @@ describe("log redaction", () => {
       address: "1 Sample St",
     },
     upload: { contents: "raw file bytes" },
-    note: "Contact someone@example.test or 0412345678 re ABN 51824753556",
+    note: "Contact someone@example.test or 0412345678 re ABN 12345678901",
     url: "https://bucket.example/obj?X-Amz-Signature=deadbeef&X-Amz-Credential=AKIA/x&part=1",
     amountCents: 125000n,
   };
@@ -228,8 +228,8 @@ describe("log redaction", () => {
       token,
       "xyz",
       "abc.def",
-      "51 824 753 556",
-      "51824753556",
+      "12 345 678 901",
+      "12345678901",
       "062-000",
       "12345678",
       "someone@example.test",

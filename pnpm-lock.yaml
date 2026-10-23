@@ -50,6 +50,9 @@ importers:
       '@jobflow/database':
         specifier: workspace:^
         version: link:../../packages/database
+      '@jobflow/domain':
+        specifier: workspace:^
+        version: link:../../packages/domain
       '@radix-ui/react-slot':
         specifier: 1.5.0
         version: 1.5.0(@types/react@19.3.0)(react@19.3.1)

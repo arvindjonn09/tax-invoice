@@ -113,6 +113,17 @@ model Company {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name            String           @db.VarChar(200)
   isDemo          Boolean          @default(false) @map("is_demo")
+  legalName       String?          @map("legal_name") @db.VarChar(200)
+  /// 11 digits, checksum-validated by the application (#25).
+  abn             String?          @db.Char(11)
+  addressLine1    String?          @map("address_line1") @db.VarChar(200)
+  addressLine2    String?          @map("address_line2") @db.VarChar(200)
+  suburb          String?          @db.VarChar(100)
+  state           String?          @db.VarChar(3)
+  postcode        String?          @db.Char(4)
+  invoicePrefix   String           @default("INV-") @map("invoice_prefix") @db.VarChar(10)
+  jobPrefix       String           @default("JOB-") @map("job_prefix") @db.VarChar(10)
+  basPeriod       BasReportingPeriod @default(quarterly) @map("bas_period")
   createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
   createdBy       String           @map("created_by") @db.Uuid
@@ -122,8 +133,42 @@ model Company {
   auditEvents     AuditEvent[]
   idempotencyKeys IdempotencyKey[]
   authSessions    AuthSession[]
+  gstRegistrations CompanyGstRegistration[]
 
   @@map("companies")
+}
+
+enum GstAccountingBasis {
+  cash
+  non_cash
+
+  @@map("gst_accounting_basis")
+}
+
+enum BasReportingPeriod {
+  monthly
+  quarterly
+
+  @@map("bas_reporting_period")
+}
+
+/// A period during which the company IS registered for GST (inclusive dates;
+/// endsOn null = open-ended). Overlaps are rejected by an exclusion constraint.
+model CompanyGstRegistration {
+  id        String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId String             @map("company_id") @db.Uuid
+  startsOn  DateTime           @map("starts_on") @db.Date
+  endsOn    DateTime?          @map("ends_on") @db.Date
+  basis     GstAccountingBasis
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy String             @map("created_by") @db.Uuid
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator   Membership         @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([companyId, startsOn])
+  @@index([companyId, createdBy])
+  @@map("company_gst_registrations")
 }
 
 model Membership {
@@ -142,6 +187,7 @@ model Membership {
   createdCompanies   Company[]        @relation("CompanyCreator")
   auditEvents        AuditEvent[]
   idempotencyKeys    IdempotencyKey[]
+  gstRegistrations   CompanyGstRegistration[]
 
   @@unique([companyId, userId])
   @@index([userId])
