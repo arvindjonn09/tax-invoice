@@ -5,6 +5,8 @@ import { isolatedTestConnection } from "./test-environment";
 
 export type CommittedDatabase = {
   client: PrismaClient;
+  /** Connection URL of the disposable database (for raw `pg` clients). */
+  url: string;
   /** Disconnect and drop the database; call from afterAll. */
   release: () => Promise<void>;
 };
@@ -43,6 +45,7 @@ export async function withCommittedDatabase(): Promise<CommittedDatabase> {
   const client = createDatabaseClient(environment.DATABASE_URL ?? "");
   return {
     client,
+    url: environment.DATABASE_URL ?? "",
     release: async () => {
       await client.$disconnect();
       finish();

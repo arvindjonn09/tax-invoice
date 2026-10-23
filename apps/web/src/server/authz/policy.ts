@@ -9,10 +9,19 @@ import {
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import type { Auth } from "../auth/config";
 import { resolveActor } from "../auth/actor";
+import {
+  HttpError,
+  MAX_JSON_BYTES,
+  requireBodyWithin,
+  requireTrustedOrigin,
+} from "../http/guards";
+import { log, safeError } from "../log";
 
 export type PolicyDependencies = {
   auth: () => Auth;
   db: () => PrismaClient;
+  /** Origins allowed to send state-changing requests (the app's own). */
+  trustedOrigins: () => readonly string[];
 };
 
 /** Resolve the request's actor and require `permission`, or throw AuthzError. */
@@ -50,24 +59,41 @@ export type PolicyHandler<Context> = (input: {
  * tests/unit/route-policy.test.ts): every request is authenticated, scoped to
  * the actor's active company and checked against an explicit permission
  * before the handler runs. 401/403/404 never reveal other tenants' data.
+ * Mutations must come from the app's own origin and declare a body within
+ * `maxBodyBytes`; unexpected errors are logged redacted and answered with a
+ * generic 500 that carries only a reference.
  */
 export function createWithPolicy(deps: PolicyDependencies) {
   return function withPolicy<Context = unknown>(
     permission: Permission,
     handler: PolicyHandler<Context>,
+    { maxBodyBytes = MAX_JSON_BYTES }: { maxBodyBytes?: number } = {},
   ) {
     return async (request: Request, context: Context): Promise<Response> => {
       try {
+        requireTrustedOrigin(request, deps.trustedOrigins());
+        requireBodyWithin(request, maxBodyBytes);
         const actor = await authorize(deps, request.headers, permission);
         return await handler({ actor, request, context });
       } catch (error) {
-        if (error instanceof AuthzError) {
+        if (error instanceof AuthzError || error instanceof HttpError) {
           return privateJson(
             { error: error.message },
             { status: error.status },
           );
         }
-        throw error;
+        const reference = crypto.randomUUID();
+        log("error", "route.unhandled", {
+          reference,
+          permission,
+          method: request.method,
+          path: new URL(request.url).pathname,
+          error: safeError(error),
+        });
+        return privateJson(
+          { error: "Something went wrong. Try again.", reference },
+          { status: 500 },
+        );
       }
     };
   };

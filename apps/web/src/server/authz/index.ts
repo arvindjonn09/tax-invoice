@@ -1,11 +1,15 @@
 import { headers } from "next/headers";
 import type { Permission } from "@jobflow/authz";
-import { getAuth, getDatabase } from "../auth";
+import { getAuth, getDatabase, getTrustedOrigins } from "../auth";
 import { authorize, createWithPolicy } from "./policy";
 
 export { privateJson } from "./policy";
 
-const deps = { auth: getAuth, db: getDatabase };
+const deps = {
+  auth: getAuth,
+  db: getDatabase,
+  trustedOrigins: getTrustedOrigins,
+};
 
 /** Wrap a route handler with an explicit permission (see policy.ts). */
 export const withPolicy = createWithPolicy(deps);

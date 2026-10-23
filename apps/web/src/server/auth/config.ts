@@ -3,6 +3,7 @@ import { prismaAdapter } from "better-auth/adapters/prisma";
 import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
+import { log } from "../log";
 
 export const SESSION_TTL_SECONDS = 60 * 60 * 12;
 export const SIGN_IN_WINDOW_SECONDS = 60;
@@ -40,8 +41,12 @@ export function createAuth(settings: AuthSettings) {
     trustedOrigins: [new URL(settings.baseURL).origin],
     database: prismaAdapter(db, { provider: "postgresql" }),
     telemetry: { enabled: false },
-    // Errors only; Better Auth never logs passwords or session tokens.
-    logger: { level: "error" },
+    // Errors only, through the redacting logger (#71).
+    logger: {
+      level: "error",
+      log: (level, message, ...args) =>
+        log(level === "debug" ? "info" : level, "auth", { message, args }),
+    },
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,

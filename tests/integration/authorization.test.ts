@@ -10,6 +10,12 @@ import {
 } from "../../apps/web/src/server/authz/policy";
 import { companyHandlers } from "../../apps/web/src/server/company/handlers";
 import {
+  THROTTLES,
+  hit,
+  throttle,
+} from "../../apps/web/src/server/http/throttle";
+import { setLogSink } from "../../apps/web/src/server/log";
+import {
   type CommittedDatabase,
   withCommittedDatabase,
 } from "../helpers/committed-database";
@@ -61,6 +67,7 @@ function request(
   path = "/api/company",
 ) {
   const init: RequestInit = { method, headers: new Headers(headers) };
+  (init.headers as Headers).set("origin", ORIGIN);
   if (body !== undefined) {
     (init.headers as Headers).set("content-type", "application/json");
     init.body = JSON.stringify(body);
@@ -77,7 +84,11 @@ beforeAll(async () => {
     baseURL: ORIGIN,
     production: false,
   });
-  withPolicy = createWithPolicy({ auth: () => auth, db: () => db });
+  withPolicy = createWithPolicy({
+    auth: () => auth,
+    db: () => db,
+    trustedOrigins: () => [ORIGIN],
+  });
   handlers = companyHandlers(() => db);
   for (const key of ["owner", "employee", "outsider", "lonely"] as const) {
     ids[key] = (
@@ -227,6 +238,103 @@ describe("company scope", () => {
     expect((await get(other.id)).status).toBe(404);
     expect((await get("00000000-0000-4000-8000-000000000000")).status).toBe(
       404,
+    );
+  });
+});
+
+describe("request guards (#71)", () => {
+  it("refuses cross-origin and Origin-less mutations before touching data, signed in or not", async () => {
+    for (const headers of [cookies.owner, new Headers()]) {
+      for (const origin of ["https://evil.example", null]) {
+        const req = request("PATCH", headers, { name: "Forged Rename" });
+        if (origin) req.headers.set("origin", origin);
+        else req.headers.delete("origin");
+        const response = await withPolicy("company.update", handlers.rename)(
+          req,
+          undefined,
+        );
+        expect(response.status).toBe(403);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+      }
+    }
+    expect(
+      (await db.company.findUniqueOrThrow({ where: { id: ids.companyA } }))
+        .name,
+    ).not.toBe("Forged Rename");
+  });
+
+  it("refuses an oversized body with 413", async () => {
+    const response = await withPolicy("company.update", handlers.rename)(
+      request("PATCH", cookies.owner, { name: "x".repeat(70_000) }),
+      undefined,
+    );
+    expect(response.status).toBe(413);
+  });
+
+  it("answers unexpected errors with a generic 500 and logs only redacted details", async () => {
+    const lines: string[] = [];
+    const restore = setLogSink((line) => lines.push(line));
+    try {
+      const response = await withPolicy("company.read", async () => {
+        throw new Error("db failed for owner@jobflow.invalid ABN 51824753556");
+      })(request("GET", cookies.owner), undefined);
+      expect(response.status).toBe(500);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      const body = await response.json();
+      expect(Object.keys(body).sort()).toEqual(["error", "reference"]);
+      expect(JSON.stringify(body)).not.toMatch(
+        /db failed|jobflow\.invalid|5182/,
+      );
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain(body.reference);
+      expect(lines[0]).not.toMatch(/jobflow\.invalid|51824753556/);
+    } finally {
+      restore();
+    }
+  });
+
+  it("serves each session its own company and marks every response private", async () => {
+    const read = withPolicy("company.read", handlers.read);
+    const a = await read(request("GET", cookies.owner), undefined);
+    const b = await read(request("GET", cookies.outsider), undefined);
+    for (const response of [a, b])
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect((await a.json()).id).toBe(ids.companyA);
+    expect((await b.json()).id).toBe(ids.companyB);
+  });
+});
+
+describe("throttle (#71)", () => {
+  it("counts per actor and per IP across calls and refuses past the limit", async () => {
+    const who = { userId: ids.owner, ip: "203.0.113.200" };
+    for (let i = 0; i < THROTTLES.export.max; i += 1)
+      await expect(throttle(db, "export", who)).resolves.toBeUndefined();
+    await expect(throttle(db, "export", who)).rejects.toMatchObject({
+      status: 429,
+    });
+    // Same IP, different user: still limited by the IP counter.
+    await expect(
+      throttle(db, "export", { userId: ids.employee, ip: who.ip }),
+    ).rejects.toMatchObject({ status: 429 });
+    // Another action has its own budget.
+    await expect(throttle(db, "pdf", who)).resolves.toBeUndefined();
+  });
+
+  it("starts a fresh window once the old one has passed", async () => {
+    const rule = { windowSeconds: 60, max: 1 };
+    const start = Date.now();
+    expect(await hit(db, "window-test", rule, start)).toBe(1);
+    expect(await hit(db, "window-test", rule, start + 1_000)).toBe(2);
+    expect(await hit(db, "window-test", rule, start + 61_000)).toBe(1);
+  });
+
+  it("is atomic under concurrent hits", async () => {
+    const rule = { windowSeconds: 60, max: 100 };
+    const counts = await Promise.all(
+      Array.from({ length: 20 }, () => hit(db, "race-test", rule)),
+    );
+    expect([...counts].sort((x, y) => x - y)).toEqual(
+      Array.from({ length: 20 }, (_, i) => i + 1),
     );
   });
 });
