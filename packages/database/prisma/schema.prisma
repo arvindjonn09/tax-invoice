@@ -134,6 +134,7 @@ model Company {
   idempotencyKeys IdempotencyKey[]
   authSessions    AuthSession[]
   gstRegistrations CompanyGstRegistration[]
+  employees        Employee[]
 
   userInvitations UserInvitation[]
 
@@ -190,6 +191,8 @@ model Membership {
   auditEvents        AuditEvent[]
   idempotencyKeys    IdempotencyKey[]
   gstRegistrations   CompanyGstRegistration[]
+  employeesCreated   Employee[]               @relation("EmployeeCreator")
+  employeeRecords    Employee[]               @relation("EmployeeUser")
 
   invitationsCreated UserInvitation[]
 
@@ -234,6 +237,30 @@ model IdempotencyKey {
   @@unique([companyId, key])
   @@index([companyId, createdBy])
   @@map("idempotency_keys")
+}
+
+/// An employee who can be assigned to jobs (#30). No payroll data.
+/// Optionally linked to a user account of the same company.
+model Employee {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId String      @map("company_id") @db.Uuid
+  userId    String?     @map("user_id") @db.Uuid
+  name      String      @db.VarChar(200)
+  email     String?     @db.VarChar(320)
+  phone     String?     @db.VarChar(30)
+  isActive  Boolean     @default(true) @map("is_active")
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy String      @map("created_by") @db.Uuid
+  company   Company     @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user      Membership? @relation("EmployeeUser", fields: [companyId, userId], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  creator   Membership  @relation("EmployeeCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@unique([companyId, userId])
+  @@index([companyId, isActive, name])
+  @@index([companyId, createdBy])
+  @@map("employees")
 }
 
 /// Owner-issued, expiring one-use invitation (#27). Only SHA-256 token digests are stored.
