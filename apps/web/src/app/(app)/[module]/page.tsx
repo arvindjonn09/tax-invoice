@@ -7,8 +7,12 @@ import { NAV_ITEMS, navItemFor } from "@/server/navigation";
 // Only known module slugs exist; any other path is a 404 before any auth or
 // database work runs.
 export const dynamicParams = false;
+/** Modules with their own pages; this placeholder no longer serves them. */
+const BUILT_MODULES = new Set(["settings"]);
 export function generateStaticParams() {
-  return NAV_ITEMS.map((item) => ({ module: item.slug }));
+  return NAV_ITEMS.filter((item) => !BUILT_MODULES.has(item.slug)).map(
+    (item) => ({ module: item.slug }),
+  );
 }
 
 /**
