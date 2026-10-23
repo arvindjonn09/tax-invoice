@@ -24,6 +24,7 @@ import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { toDay } from "../company/gst";
 import { lockRow } from "../db/locks";
+import { assignmentView } from "./assignments";
 import {
   defined,
   optionalText,
@@ -251,7 +252,7 @@ export function jobHandlers(db: () => PrismaClient) {
   /** A job with its visits and full status timeline (oldest first). */
   const read: PolicyHandler<JobContext> = async ({ actor, context }) => {
     const job = await ownJob(db(), actor, (await context.params).id);
-    const [events, visits] = await Promise.all([
+    const [events, visits, assignments] = await Promise.all([
       db().jobStatusEvent.findMany({
         where: { companyId: actor.companyId, jobId: job.id },
         // Insertion order (monotonic sequence), not same-millisecond timestamps.
@@ -261,11 +262,17 @@ export function jobHandlers(db: () => PrismaClient) {
         where: { companyId: actor.companyId, jobId: job.id },
         orderBy: [{ startsAt: "asc" }],
       }),
+      db().assignment.findMany({
+        where: { companyId: actor.companyId, jobId: job.id },
+        include: { employee: { select: { name: true } } },
+        orderBy: [{ assignedAt: "asc" }],
+      }),
     ]);
     return privateJson({
       ...visibleFields(actor, view(job), JOB_FIELDS),
       statusHistory: events.map(eventView),
       visits: visits.map(visitView),
+      assignments: assignments.map(assignmentView),
     });
   };
 
