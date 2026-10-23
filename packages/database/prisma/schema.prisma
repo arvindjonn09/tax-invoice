@@ -135,6 +135,7 @@ model Company {
   authSessions    AuthSession[]
   gstRegistrations CompanyGstRegistration[]
   employees        Employee[]
+  customers        Customer[]
 
   userInvitations UserInvitation[]
 
@@ -193,6 +194,9 @@ model Membership {
   gstRegistrations   CompanyGstRegistration[]
   employeesCreated   Employee[]               @relation("EmployeeCreator")
   employeeRecords    Employee[]               @relation("EmployeeUser")
+  customersCreated   Customer[]
+  contactsCreated    CustomerContact[]
+  locationsCreated   Location[]
 
   invitationsCreated UserInvitation[]
 
@@ -261,6 +265,83 @@ model Employee {
   @@index([companyId, isActive, name])
   @@index([companyId, createdBy])
   @@map("employees")
+}
+
+/// Customer directory (#28). Archived (never deleted) once no longer used.
+model Customer {
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId    String            @map("company_id") @db.Uuid
+  name         String            @db.VarChar(200)
+  /// 11 digits, checksum-validated by the application.
+  abn          String?           @db.Char(11)
+  billingEmail String?           @map("billing_email") @db.VarChar(320)
+  billingPhone String?           @map("billing_phone") @db.VarChar(30)
+  addressLine1 String?           @map("address_line1") @db.VarChar(200)
+  addressLine2 String?           @map("address_line2") @db.VarChar(200)
+  suburb       String?           @db.VarChar(100)
+  state        String?           @db.VarChar(3)
+  postcode     String?           @db.Char(4)
+  archivedAt   DateTime?         @map("archived_at") @db.Timestamptz(3)
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy    String            @map("created_by") @db.Uuid
+  company      Company           @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator      Membership        @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  contacts     CustomerContact[]
+  locations    Location[]
+
+  @@unique([companyId, id])
+  @@index([companyId, archivedAt, name])
+  @@index([companyId, createdBy])
+  @@map("customers")
+}
+
+model CustomerContact {
+  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId  String     @map("company_id") @db.Uuid
+  customerId String     @map("customer_id") @db.Uuid
+  name       String     @db.VarChar(200)
+  position   String?    @db.VarChar(100)
+  email      String?    @db.VarChar(320)
+  phone      String?    @db.VarChar(30)
+  isPrimary  Boolean    @default(false) @map("is_primary")
+  archivedAt DateTime?  @map("archived_at") @db.Timestamptz(3)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy  String     @map("created_by") @db.Uuid
+  customer   Customer   @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator    Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@index([companyId, customerId])
+  @@index([companyId, createdBy])
+  @@map("customer_contacts")
+}
+
+/// A customer's service location (job site).
+model Location {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId    String     @map("company_id") @db.Uuid
+  customerId   String     @map("customer_id") @db.Uuid
+  label        String?    @db.VarChar(100)
+  addressLine1 String     @map("address_line1") @db.VarChar(200)
+  addressLine2 String?    @map("address_line2") @db.VarChar(200)
+  suburb       String     @db.VarChar(100)
+  state        String     @db.VarChar(3)
+  postcode     String     @db.Char(4)
+  accessNotes  String?    @map("access_notes") @db.VarChar(500)
+  archivedAt   DateTime?  @map("archived_at") @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy    String     @map("created_by") @db.Uuid
+  customer     Customer   @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator      Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@unique([companyId, customerId, id])
+  @@index([companyId, customerId])
+  @@index([companyId, createdBy])
+  @@map("locations")
 }
 
 /// Owner-issued, expiring one-use invitation (#27). Only SHA-256 token digests are stored.
