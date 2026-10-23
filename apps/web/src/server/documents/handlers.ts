@@ -93,6 +93,11 @@ export function documentHandlers(deps: DocumentDeps) {
   const upload: PolicyHandler<unknown> = async ({ actor, request }) => {
     const store = deps.store();
     if (!store) return unavailable();
+    // Per user and per IP, before reading a single byte of the body.
+    await throttle(deps.db(), "document.upload", {
+      userId: actor.userId,
+      ip: clientIp(request.headers),
+    });
     const form = await readMultipart(request, UPLOAD_BODY_LIMIT);
     const file = form.get("file");
     const kind = Kind.safeParse(form.get("kind"));
@@ -118,33 +123,40 @@ export function documentHandlers(deps: DocumentDeps) {
     // Random key, never derived from the file name or any user input.
     const objectKey = `documents/${actor.companyId}/${randomBytes(32).toString("hex")}`;
     await store.put(objectKey, bytes, type);
-    const row = await withAudit(deps.db(), async (tx, audit) => {
-      const created = await tx.document.create({
-        data: {
-          id,
+    let row: Document;
+    try {
+      row = await withAudit(deps.db(), async (tx, audit) => {
+        const created = await tx.document.create({
+          data: {
+            id,
+            companyId: actor.companyId,
+            kind: kind.data,
+            objectKey,
+            fileName: safeFileName(file.name, type),
+            contentType: type,
+            sizeBytes: bytes.byteLength,
+            sha256: sha256Hex(bytes),
+            createdBy: actor.userId,
+          },
+        });
+        await audit({
           companyId: actor.companyId,
-          kind: kind.data,
-          objectKey,
-          fileName: safeFileName(file.name, type),
-          contentType: type,
-          sizeBytes: bytes.byteLength,
-          sha256: sha256Hex(bytes),
-          createdBy: actor.userId,
-        },
+          actorUserId: actor.userId,
+          action: "document.uploaded",
+          target: { type: "document", id },
+          after: {
+            kind: created.kind,
+            contentType: type,
+            sizeBytes: created.sizeBytes,
+          },
+        });
+        return created;
       });
-      await audit({
-        companyId: actor.companyId,
-        actorUserId: actor.userId,
-        action: "document.uploaded",
-        target: { type: "document", id },
-        after: {
-          kind: created.kind,
-          contentType: type,
-          sizeBytes: created.sizeBytes,
-        },
-      });
-      return created;
-    });
+    } catch (error) {
+      // No row means nobody can ever reach the object: remove it, then fail.
+      await store.delete(objectKey).catch(() => undefined);
+      throw error;
+    }
     return privateJson(documentView(row), { status: 201 });
   };
 

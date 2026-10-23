@@ -298,3 +298,34 @@ describe.runIf(s3 instanceof S3Store && process.env.CI)(
     });
   },
 );
+
+describe("review fixes (#110)", () => {
+  it("throttles uploads per user before reading or storing any bytes", async () => {
+    const stored = store.objects.size;
+    const results: number[] = [];
+    for (let i = 0; i < 31; i += 1)
+      results.push((await upload(uploadRequest("colleague", PDF))).status);
+    expect(results.filter((status) => status === 201)).toHaveLength(30);
+    expect(results.at(-1)).toBe(429);
+    expect(store.objects.size).toBe(stored + 30);
+  });
+
+  it("removes the stored object when the database write fails", async () => {
+    const failing = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "$transaction")
+          return () => Promise.reject(new Error("database unavailable"));
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const broken = documentHandlers({ ...deps, db: () => failing });
+    const before = new Set(store.objects.keys());
+    const response = await withPolicy("document.upload", broken.upload, {
+      maxBodyBytes: UPLOAD_BODY_LIMIT,
+    })(uploadRequest("accountant", PDF), undefined);
+    expect(response.status).toBe(500);
+    expect([...store.objects.keys()].filter((key) => !before.has(key))).toEqual(
+      [],
+    );
+  });
+});

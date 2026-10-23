@@ -1,5 +1,6 @@
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
@@ -15,6 +16,8 @@ export interface ObjectStore {
   put(key: string, body: Uint8Array, contentType: string): Promise<void>;
   /** The object's bytes, or null if it doesn't exist. */
   get(key: string): Promise<Uint8Array | null>;
+  /** Remove an object (compensation when its database row couldn't be saved). */
+  delete(key: string): Promise<void>;
 }
 
 /** For tests and local runs without MinIO. Never used when S3 is configured. */
@@ -25,6 +28,9 @@ export class MemoryStore implements ObjectStore {
   }
   async get(key: string) {
     return this.objects.get(key) ?? null;
+  }
+  async delete(key: string) {
+    this.objects.delete(key);
   }
 }
 
@@ -38,32 +44,50 @@ export type S3Settings = {
 
 /** S3 or an S3-compatible service (MinIO locally/CI), path-style addressing. */
 export class S3Store implements ObjectStore {
-  private readonly client: S3Client;
+  private readonly client: Pick<S3Client, "send">;
   private ready: Promise<void> | undefined;
 
-  constructor(private readonly settings: S3Settings) {
-    this.client = new S3Client({
-      region: settings.region,
-      ...(settings.endpoint ? { endpoint: settings.endpoint } : {}),
-      forcePathStyle: true,
-      credentials: {
-        accessKeyId: settings.accessKeyId,
-        secretAccessKey: settings.secretAccessKey,
-      },
-    });
+  constructor(
+    private readonly settings: S3Settings,
+    /** Injected in tests; a real S3Client otherwise. */
+    client?: Pick<S3Client, "send">,
+  ) {
+    this.client =
+      client ??
+      new S3Client({
+        region: settings.region,
+        ...(settings.endpoint ? { endpoint: settings.endpoint } : {}),
+        forcePathStyle: true,
+        credentials: {
+          accessKeyId: settings.accessKeyId,
+          secretAccessKey: settings.secretAccessKey,
+        },
+      });
   }
 
-  /** Create the private bucket on first use where it doesn't exist (dev/CI). */
+  /**
+   * Create the private bucket on first use, only when S3 confirms it is
+   * missing (dev/CI). Any other failure (network, auth, throttling) is
+   * rethrown and NOT cached, so the next request retries.
+   */
   private bucket() {
-    this.ready ??= this.client
-      .send(new HeadBucketCommand({ Bucket: this.settings.bucket }))
-      .then(
-        () => undefined,
-        () =>
-          this.client
-            .send(new CreateBucketCommand({ Bucket: this.settings.bucket }))
-            .then(() => undefined),
-      );
+    this.ready ??= (async () => {
+      const Bucket = this.settings.bucket;
+      try {
+        await this.client.send(new HeadBucketCommand({ Bucket }));
+      } catch (error) {
+        const { name, $metadata } = error as {
+          name?: string;
+          $metadata?: { httpStatusCode?: number };
+        };
+        if (name !== "NotFound" && $metadata?.httpStatusCode !== 404)
+          throw error;
+        await this.client.send(new CreateBucketCommand({ Bucket }));
+      }
+    })().catch((error: unknown) => {
+      this.ready = undefined;
+      throw error;
+    });
     return this.ready;
   }
 
@@ -90,6 +114,13 @@ export class S3Store implements ObjectStore {
       if ((error as { name?: string }).name === "NoSuchKey") return null;
       throw error;
     }
+  }
+
+  async delete(key: string) {
+    await this.bucket();
+    await this.client.send(
+      new DeleteObjectCommand({ Bucket: this.settings.bucket, Key: key }),
+    );
   }
 }
 

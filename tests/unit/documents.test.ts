@@ -7,6 +7,7 @@ import {
   sniffType,
   verifyLink,
 } from "../../apps/web/src/server/documents/files";
+import { S3Store } from "../../apps/web/src/server/documents/store";
 
 const bytes = (...parts: (string | number[])[]) =>
   new Uint8Array(
@@ -93,5 +94,68 @@ describe("signed download links (#34)", () => {
       token.slice(0, -2),
     ])
       expect(verifyLink(bad, secret)).toEqual({ ok: false, reason: "invalid" });
+  });
+});
+
+describe("S3 bucket initialisation (#110 review)", () => {
+  const settings = {
+    bucket: "jobflow-documents",
+    region: "us-east-1",
+    accessKeyId: "test",
+    secretAccessKey: "test",
+  };
+  const command = (input: unknown) =>
+    (input as { constructor: { name: string } }).constructor.name;
+
+  it("retries after a transient failure instead of caching it, and never creates an existing bucket", async () => {
+    const calls: string[] = [];
+    let headFailures = 1;
+    const client = {
+      send: async (input: unknown) => {
+        const name = command(input);
+        calls.push(name);
+        if (name === "HeadBucketCommand" && headFailures-- > 0)
+          throw Object.assign(new Error("timeout"), { name: "TimeoutError" });
+        return {};
+      },
+    };
+    const store = new S3Store(settings, client as never);
+    await expect(
+      store.put("k", new Uint8Array([1]), "image/png"),
+    ).rejects.toThrow("timeout");
+    await store.put("k", new Uint8Array([1]), "image/png");
+    expect(calls).toEqual([
+      "HeadBucketCommand",
+      "HeadBucketCommand",
+      "PutObjectCommand",
+    ]);
+  });
+
+  it("creates the bucket only when S3 says it is missing", async () => {
+    const calls: string[] = [];
+    let first = true;
+    const client = {
+      send: async (input: unknown) => {
+        const name = command(input);
+        calls.push(name);
+        if (name === "HeadBucketCommand" && first) {
+          first = false;
+          throw Object.assign(new Error("missing"), {
+            name: "NotFound",
+            $metadata: { httpStatusCode: 404 },
+          });
+        }
+        return {};
+      },
+    };
+    const store = new S3Store(settings, client as never);
+    await store.delete("k");
+    await store.delete("k2");
+    expect(calls).toEqual([
+      "HeadBucketCommand",
+      "CreateBucketCommand",
+      "DeleteObjectCommand",
+      "DeleteObjectCommand",
+    ]);
   });
 });

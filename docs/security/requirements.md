@@ -58,7 +58,7 @@ Rules:
 | Lists | `parsePage`: default 25, max 100 per page, page ≤ 10,000 | `server/http/guards.ts` |
 | Exports (CSV, #56) | 5 per minute per user **and** per IP | `throttle(db, "export", …)` |
 | PDF render (#48) | 20 per minute | `"pdf"` |
-| Document upload (#34) | 10 MiB per file, multipart only; type from the file's bytes (PDF, JPEG, PNG, WebP, HEIC) | `server/documents` |
+| Document upload (#34) | 30 per minute per user and per IP (checked before any bytes are read); 10 MiB per file, multipart only; type from the file's bytes (PDF, JPEG, PNG, WebP, HEIC) | `"document.upload"` |
 | Download links (#34) | 60 per minute, 5-minute expiry | `"download.sign"` |
 | Sign-in | 5 per minute per IP (Better Auth, #13) | `auth/config.ts` |
 
