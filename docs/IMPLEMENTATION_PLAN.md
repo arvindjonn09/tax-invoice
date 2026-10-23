@@ -26,10 +26,11 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [x] User and role management — #27 merged via PR #108 after passing CI and Claude review; owner access screens, expiring invitations, audited access changes and concurrent last-owner protection
 - [x] Customers, locations and contacts — #28 merged via PR #107; concurrency regression tests cover primary contacts and atomic audit history
 - [x] Customer directory screens — #29 implemented with search/sort/pagination, billing forms, contacts and sites; [verification](testing/customer-screens.md); merged via PR #112 after passing CI and Claude review
-- [ ] Primary-contact audit and uniqueness follow-up — #113 implemented with transactional demotion events and a partial unique index; pending CI and cross-review
+- [x] Primary-contact audit and uniqueness follow-up — #113 merged via PR #114; transactional demotion events and a partial unique index
 - [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
 - [x] Per-company job numbers, detail, status timeline, visits — #31: atomic per-company numbering, status machine with immutable history, visits; GST-exclusive cents price
-- [ ] Assignment to employee and authorisation tests — #32 reuses Claude’s implementation with current-main integration, visit scoping and locked employee eligibility; [API contract](architecture/assignments.md); pending CI/cross-review
+- [x] Assignment to employee and authorisation tests — #32 merged via PR #115; visit scoping and locked employee eligibility; [API contract](architecture/assignments.md)
+- [ ] Job screens — #33 directory, role-scoped detail tabs, visits, assignments and status timeline; [verification](testing/job-screens.md); pending CI/cross-review
 
 ## M2 Contractors, timesheets and job expenses
 - [x] Private document storage with signed URLs — #34: app-mediated upload with content sniffing, random keys, 5-minute HMAC download links after authz
