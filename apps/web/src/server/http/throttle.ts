@@ -11,7 +11,7 @@ export type ThrottleRule = { windowSeconds: number; max: number };
 export const THROTTLES = {
   export: { windowSeconds: 60, max: 5 },
   pdf: { windowSeconds: 60, max: 20 },
-  "upload.sign": { windowSeconds: 60, max: 30 },
+  "document.upload": { windowSeconds: 60, max: 30 },
   "download.sign": { windowSeconds: 60, max: 60 },
 } as const satisfies Record<string, ThrottleRule>;
 

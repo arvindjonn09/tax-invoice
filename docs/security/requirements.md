@@ -58,12 +58,19 @@ Rules:
 | Lists | `parsePage`: default 25, max 100 per page, page ≤ 10,000 | `server/http/guards.ts` |
 | Exports (CSV, #56) | 5 per minute per user **and** per IP | `throttle(db, "export", …)` |
 | PDF render (#48) | 20 per minute | `"pdf"` |
-| Upload signing (#34) | 30 per minute | `"upload.sign"` |
-| Download signing | 60 per minute | `"download.sign"` |
+| Document upload (#34) | 30 per minute per user and per IP (checked before any bytes are read); 10 MiB per file, multipart only; type from the file's bytes (PDF, JPEG, PNG, WebP, HEIC) | `"document.upload"` |
+| Download links (#34) | 60 per minute, 5-minute expiry | `"download.sign"` |
 | Sign-in | 5 per minute per IP (Better Auth, #13) | `auth/config.ts` |
 
 Throttle counters are atomic rows in the shared database (`auth_rate_limits`, `jobflow:` prefix), so they hold across
-server instances. Files are uploaded straight to private storage via signed URLs, never through request bodies.
+server instances. Files are uploaded **through the app** (#34), so the server can check the real bytes: a streaming
+10 MiB cap, a content-sniffed type allow-list (the client's type and file name are never trusted), a random object
+key and a sanitised display name. Bytes go to a private S3-compatible bucket that browsers never reach directly.
+Downloads use a 5-minute HMAC-signed link to `/api/files/<token>`, issued only after an authorisation check (office
+roles: any company document; everyone else: their own uploads). The link is bound to the document and company, and is
+served as an attachment with `Content-Security-Policy: default-src 'none'; sandbox`, `nosniff` and
+`private, no-store`, so a file can never run as a page in the app's origin. Expired links return 410; forged or
+cross-company links return 404.
 The client IP is the first `X-Forwarded-For` hop, so the production reverse proxy (#64) **must overwrite** that header.
 
 ## 5. Logging and errors (T03)

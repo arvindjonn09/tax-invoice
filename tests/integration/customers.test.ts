@@ -647,4 +647,33 @@ describe("customers", () => {
         .isPrimary,
     ).toBe(true);
   });
+
+  it("allows only named sort fields, retaining deterministic company-scoped pages", async () => {
+    const list = async (query: string) =>
+      (
+        await r().list(call("owner", "GET", undefined, query), undefined)
+      ).json();
+    const ascending = await list("?status=all&sort=name&direction=asc");
+    const descending = await list("?status=all&sort=name&direction=desc");
+    expect(
+      descending.customers.map((row: { name: string }) => row.name),
+    ).toEqual(
+      [
+        ...ascending.customers.map((row: { name: string }) => row.name),
+      ].reverse(),
+    );
+    const invalid = await list(
+      "?status=all&sort=companyId&direction=arbitrary",
+    );
+    expect(invalid.customers.map((row: { id: string }) => row.id)).toEqual(
+      ascending.customers.map((row: { id: string }) => row.id),
+    );
+    expect(
+      invalid.customers.some(
+        (row: { id: string }) => row.id === otherCustomerId,
+      ),
+    ).toBe(false);
+    const suburb = await list("?sort=suburb&direction=asc&pageSize=1");
+    expect(suburb.customers).toHaveLength(1);
+  });
 });
