@@ -44,6 +44,9 @@
       "ignoreGhsas": [
         "GHSA-vfj7-8cjw-p6xm"
       ]
+    },
+    "overrides": {
+      "zod@4.1.12": "4.6.7"
     }
   }
 }
