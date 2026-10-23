@@ -31,7 +31,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Assignment to employee and authorisation tests — #32 reuses Claude’s implementation with current-main integration, visit scoping and locked employee eligibility; [API contract](architecture/assignments.md); pending CI/cross-review
 
 ## M2 Contractors, timesheets and job expenses
-- [ ] Private document storage with signed URLs
+- [x] Private document storage with signed URLs — #34: app-mediated upload with content sniffing, random keys, 5-minute HMAC download links after authz
 - [ ] Contractors, offers, approvals and acceptance history; restricted contractor portal
 - [ ] Employee timesheets with cost-rate snapshots
 - [ ] Expenses with GST code, creditable portion, receipts and approvals
