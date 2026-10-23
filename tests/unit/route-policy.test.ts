@@ -9,6 +9,8 @@ const METHODS = "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS";
 
 const PUBLIC_ROUTES: Record<string, string> = {
   "api/health/route.ts": "liveness probe; returns no data",
+  "api/files/[token]/route.ts":
+    "signed 5-minute download token minted by /api/documents/[id]/link after authz; HMAC-verified, company-bound, served as a sandboxed attachment",
   "api/auth/[...all]/route.ts":
     "Better Auth endpoints: sign-in/out and session; they enforce their own origin checks and throttling",
 };
