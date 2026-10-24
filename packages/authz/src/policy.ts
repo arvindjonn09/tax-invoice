@@ -96,6 +96,8 @@ const GRANTS: Record<Role, readonly Permission[]> = {
     "employee.cost_rate.read",
     "timesheet.approve",
     "contractor.write",
+    // Office staff enter supplier expenses too (#40); approval stays separate.
+    "expense.submit_own",
     "expense.approve",
     "quote.write",
     "user.read",

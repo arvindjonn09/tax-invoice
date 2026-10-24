@@ -1,0 +1,168 @@
+import {
+  type GstLine,
+  type PriceEntry,
+  type TaxCode,
+  calculateSupplyLine,
+} from "./gst";
+import { type Cents, sum } from "./money";
+import { type Purchase, calculatePurchase } from "./purchases";
+
+// Job and general expenses (#40). Cost is incurred once, on approval:
+// GST-exclusive amount plus any GST the company can't claim. Settlement
+// (paid at purchase or on account) moves cash or creates a supplier balance
+// and never changes cost (docs/DATA_MODEL.md#financial-definitions).
+
+export const EXPENSE_CATEGORIES = [
+  "materials",
+  "travel",
+  "parking",
+  "equipment",
+  "misc",
+] as const;
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
+
+export type Settlement = "paid_at_purchase" | "on_account";
+
+/**
+ * R5: a tax invoice is generally needed to claim GST on a purchase over
+ * 8250 cents including GST; exactly 8250 is within the low-value exception.
+ */
+export const LOW_VALUE_PURCHASE_CENTS = 8250n;
+
+/** The receipt line as entered: one amount, GST-exclusive or -inclusive. */
+export function expenseLine(input: {
+  amount: Cents;
+  priceEntry: PriceEntry;
+  taxCode: TaxCode;
+}): GstLine {
+  if (input.amount < 0n)
+    throw new RangeError(
+      "Expense amounts must be >= 0; correct with a reversal",
+    );
+  // A supplier charging GST is registered by definition; zero-rated codes
+  // carry no GST either way.
+  return calculateSupplyLine({
+    quantity: "1",
+    unitPrice: input.amount,
+    priceEntry: input.priceEntry,
+    taxCode: input.taxCode,
+    supplierRegistered: true,
+  });
+}
+
+/** The kind of retained document attached to an expense, if any. */
+export type EvidenceDocument = "tax_invoice" | "receipt" | null;
+
+/**
+ * Qualifying evidence for an input tax credit (R5, R6), never inferred from
+ * an attachment or an amount alone: the approver must have verified the
+ * retained document. Above 8250 cents incl. GST that document must be a tax
+ * invoice; at or below it, retained alternative evidence (a receipt) is
+ * enough. No document, no evidence.
+ */
+export function hasPurchaseEvidence(input: {
+  inclusive: Cents;
+  document: EvidenceDocument;
+  verified: boolean;
+}): boolean {
+  if (!input.verified || input.document === null) return false;
+  return (
+    input.document === "tax_invoice" ||
+    input.inclusive <= LOW_VALUE_PURCHASE_CENTS
+  );
+}
+
+/**
+ * Creditable GST and job cost of an approved expense. Only a company
+ * registered on the purchase date, holding evidence, can claim; the claim is
+ * limited to the business-use share (basis points, 10000 = 100%).
+ */
+export function expenseCost(
+  line: GstLine,
+  input: {
+    companyRegistered: boolean;
+    document: EvidenceDocument;
+    evidenceVerified: boolean;
+    creditableBasisPoints: bigint;
+  },
+): Purchase {
+  if (input.creditableBasisPoints < 0n || input.creditableBasisPoints > 10_000n)
+    throw new RangeError("Creditable share must be 0–100%");
+  return calculatePurchase({
+    exclusive: line.exclusive,
+    gst: line.gst,
+    buyerRegistered: input.companyRegistered,
+    hasEvidence: hasPurchaseEvidence({
+      inclusive: line.inclusive,
+      document: input.document,
+      verified: input.evidenceVerified,
+    }),
+    creditableFraction: {
+      numerator: input.creditableBasisPoints,
+      denominator: 10_000n,
+    },
+  });
+}
+
+/** A reversal cancels the original's exact cents (never recalculated). */
+export function reverseExpense(original: Purchase): Purchase {
+  return {
+    exclusive: -original.exclusive,
+    gst: -original.gst,
+    inclusive: -original.inclusive,
+    creditableGst: -original.creditableGst,
+    nonCreditableGst: -original.nonCreditableGst,
+    jobCost: -original.jobCost,
+  };
+}
+
+export type ApprovedExpense = {
+  /**
+   * How cash or the supplier balance moved. Null for a cost-only reversal:
+   * correcting cost never implies a refund (only an explicit one does).
+   */
+  settlement: Settlement | null;
+  /** Snapshot at approval; negative for a reversal. */
+  inclusive: Cents;
+  jobCost: Cents;
+  creditableGst: Cents;
+};
+
+export type ExpenseTotals = {
+  /** Incurred job cost (exclusive + non-creditable GST). */
+  cost: Cents;
+  /** Input tax credits (1B); an asset, never cost. */
+  creditableGst: Cents;
+  /** Cash paid at purchase, net of explicitly recorded refunds. */
+  cashPaid: Cents;
+  /** Owed to suppliers for on-account expenses, before supplier payments. */
+  supplierOutstanding: Cents;
+};
+
+/**
+ * Totals over approved expenses (and their reversals). Each settled row lands
+ * in exactly one of cash paid or supplier outstanding, so cash + outstanding =
+ * the GST-inclusive total of settled rows; cost-only reversals move neither.
+ * Cost ignores settlement.
+ */
+export function expenseTotals(rows: readonly ApprovedExpense[]): ExpenseTotals {
+  const paid = rows.filter((row) => row.settlement === "paid_at_purchase");
+  const onAccount = rows.filter((row) => row.settlement === "on_account");
+  return {
+    cost: sum(rows.map((row) => row.jobCost)),
+    creditableGst: sum(rows.map((row) => row.creditableGst)),
+    cashPaid: sum(paid.map((row) => row.inclusive)),
+    supplierOutstanding: sum(onAccount.map((row) => row.inclusive)),
+  };
+}
+
+/** "75%" ⇄ 7500 basis points, without floating point. */
+export function percentToBasisPoints(percent: string): bigint {
+  const match = /^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(percent);
+  if (!match) throw new RangeError(`Invalid percentage "${percent}"`);
+  // Group 1 always matches; group 2 (the decimals) is optional.
+  const [, whole, decimals = ""] = match;
+  const value = BigInt(`${whole}`) * 100n + BigInt(decimals.padEnd(2, "0"));
+  if (value > 10_000n) throw new RangeError("Percentage must be 0–100");
+  return value;
+}

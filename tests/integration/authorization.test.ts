@@ -167,6 +167,8 @@ describe("withPolicy", () => {
       id: ids.companyA,
       name: "Synthetic Test Company",
       isDemo: true,
+      // Pre-fills expense forms (#40); not a financial figure.
+      defaultExpenseSettlement: "paid_at_purchase",
     });
   });
 });

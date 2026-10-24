@@ -434,3 +434,58 @@ test("directory supports search, retry, keyboard, mobile and both themes", async
     page.getByRole("button", { name: "Next", exact: true }),
   ).toBeVisible();
 });
+test("office reviews submitted work: rework needs a note, approval completes", async ({
+  page,
+}) => {
+  await signIn(page, "owner");
+  const seeded = await fixture(page);
+  const job = seeded.job!;
+  await write(page, `/api/jobs/${job.id}/assignments`, {
+    employeeId: seeded.employee.id,
+  });
+  for (const to of ["approved", "in_progress"])
+    await write(page, `/api/jobs/${job.id}/status`, { to });
+  const submitAsWorker = async () => {
+    await page.context().clearCookies();
+    await signIn(page, "employee");
+    await write(page, `/api/my/work/${job.id}/evidence`, {
+      kind: "note",
+      note: "Synthetic work done",
+    });
+    await write(page, `/api/my/work/${job.id}/submit`, {});
+    await page.context().clearCookies();
+    await signIn(page, "owner");
+    await page.goto(`/jobs/${job.id}`);
+  };
+  const statusOf = async () =>
+    (
+      (await (await page.request.get(`/api/jobs/${job.id}`)).json()) as {
+        status: string;
+      }
+    ).status;
+  const review = page.getByRole("region", { name: "Review submitted work" });
+
+  await submitAsWorker();
+  await expect(review).toBeVisible({ timeout: 30_000 });
+  // Completion is only reachable through the review.
+  await expect(page.getByLabel("Next status")).not.toContainText("Completed");
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .include('[aria-label="Review submitted work"]')
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+  await review.getByRole("button", { name: "Request rework" }).click();
+  await expect(review.getByText("Say what needs redoing")).toBeVisible();
+  expect(await statusOf()).toBe("awaiting_review");
+  await review.getByLabel("Review note").fill("Add a photo of the meter");
+  await review.getByRole("button", { name: "Request rework" }).click();
+  await expect(review).toHaveCount(0);
+  expect(await statusOf()).toBe("in_progress");
+
+  await submitAsWorker();
+  await review.getByRole("button", { name: "Approve completion" }).click();
+  await expect(page.getByText("Review saved.")).toBeVisible();
+  expect(await statusOf()).toBe("completed");
+});
