@@ -2,14 +2,17 @@ import { JOB_STATUSES } from "@jobflow/domain";
 import { z } from "zod";
 import type { Prisma } from "../../../../../packages/database/src/generated/prisma/client";
 export function jobSearch(params: URLSearchParams): Prisma.JobWhereInput {
-  const status = z
-    .enum(JOB_STATUSES)
+  // One status, or a comma-separated list (e.g. the jobs a variation can
+  // change), so eligibility is filtered before pagination.
+  const statuses = z
+    .array(z.enum(JOB_STATUSES))
+    .min(1)
     .optional()
     .catch(undefined)
-    .parse(params.get("status") || undefined);
+    .parse(params.get("status")?.split(",").filter(Boolean) || undefined);
   const q = params.get("q")?.trim().slice(0, 100);
   return {
-    ...(status ? { status } : {}),
+    ...(statuses ? { status: { in: statuses } } : {}),
     ...(q
       ? {
           OR: [

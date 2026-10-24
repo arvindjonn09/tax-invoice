@@ -1,6 +1,6 @@
 import type { Prisma } from "../../../../../packages/database/src/generated/prisma/client";
 
-export type NumberKind = "job" | "invoice" | "credit_note";
+export type NumberKind = "job" | "invoice" | "credit_note" | "quote";
 
 /**
  * Next per-company number for `kind`, atomically: the counter row stays
