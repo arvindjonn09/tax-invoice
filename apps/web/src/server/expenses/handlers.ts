@@ -25,6 +25,7 @@ import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { companyGstStatusOn, sydneyToday, toDay } from "../company/gst";
 import { isUniqueViolation, lockRow } from "../db/locks";
+import { lockDocumentClaim } from "../documents/claim";
 import {
   defined,
   optionalText,
@@ -217,7 +218,7 @@ type Draft = {
  * write (amounts recalculated from the entered value).
  */
 async function checkDraft(
-  db: PrismaClient | Prisma.TransactionClient,
+  db: Prisma.TransactionClient,
   actor: Actor,
   draft: Draft,
   expenseId?: string,
@@ -247,10 +248,12 @@ async function checkDraft(
     return ["jobId", "Choose one of your assigned jobs"];
   }
   if (draft.receiptDocumentId) {
-    const document = await db.document.findFirst({
-      where: { id: draft.receiptDocumentId, companyId: actor.companyId },
-      include: { expense: { select: { id: true } } },
-    });
+    // Under the document lock bills share, so one receipt never backs both.
+    const document = await lockDocumentClaim(
+      db,
+      actor.companyId,
+      draft.receiptDocumentId,
+    );
     const visible =
       document &&
       (document.createdBy === actor.userId ||
@@ -261,6 +264,11 @@ async function checkDraft(
       return [
         "receiptDocumentId",
         "That receipt is already attached to another expense",
+      ];
+    if (document.supplierBill)
+      return [
+        "receiptDocumentId",
+        "That document is already attached to a supplier bill",
       ];
   }
   if (draft.settlement === "paid_at_purchase") {
