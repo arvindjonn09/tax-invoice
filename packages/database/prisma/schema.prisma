@@ -1151,6 +1151,7 @@ model SupplierBill {
   voider                Membership?                 @relation("BillVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   items                 SupplierBillItem[]
   allocations           SupplierPaymentAllocation[]
+  gstAdjustments        SupplierPaymentGstAdjustment[]
 
   @@unique([companyId, id])
   @@unique([companyId, documentId])
@@ -1204,6 +1205,7 @@ model SupplierPayment {
   creator        Membership                  @relation("SupplierPaymentCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   voider         Membership?                 @relation("SupplierPaymentVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   allocations    SupplierPaymentAllocation[]
+  gstAdjustments SupplierPaymentGstAdjustment[]
 
   @@unique([companyId, idempotencyKey])
   @@unique([companyId, id])
@@ -1227,4 +1229,24 @@ model SupplierPaymentAllocation {
   @@unique([paymentId, billId])
   @@index([companyId, billId])
   @@map("supplier_payment_allocations")
+}
+
+/// Input tax credit correction written when a supplier payment is voided, so
+/// a bill's live credit (unvoided allocations plus adjustments) is always the
+/// rounded share of what stays paid. Append-only; dated on the void.
+model SupplierPaymentGstAdjustment {
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId          String          @map("company_id") @db.Uuid
+  /// The voided payment.
+  paymentId          String          @map("payment_id") @db.Uuid
+  billId             String          @map("bill_id") @db.Uuid
+  creditableGstCents BigInt          @map("creditable_gst_cents")
+  adjustedOn         DateTime        @map("adjusted_on") @db.Date
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  payment            SupplierPayment @relation(fields: [companyId, paymentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  bill               SupplierBill    @relation(fields: [companyId, billId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([paymentId, billId])
+  @@index([companyId, billId])
+  @@map("supplier_payment_gst_adjustments")
 }

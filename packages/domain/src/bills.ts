@@ -1,4 +1,4 @@
-import { cashGstToward } from "./attribution";
+import { cumulativeCashGst, voidGstAdjustment } from "./attribution";
 import { type EvidenceDocument, hasPurchaseEvidence } from "./expenses";
 import { type GstLine, type TaxCode, gstRateBasisPoints } from "./gst";
 import { type Cents, sum } from "./money";
@@ -98,7 +98,7 @@ export type BillBalance = {
   creditableGst: Cents;
   /** Paid so far by live (non-void) payments. */
   paid: Cents;
-  /** Creditable GST attributed by those live payments. */
+  /** Live attributed credit: those payments plus their voids' adjustments. */
   attributed: Cents;
 };
 
@@ -170,22 +170,37 @@ export function paymentProblems(
 }
 
 /**
- * Cash-basis input tax credit attributed to one payment allocation (R7),
- * reconciled against what live payments already attributed, so full payment
- * attributes the bill's creditable GST exactly once in total, even after
- * voids. Non-creditable GST is cost and is never attributed.
+ * Cash-basis input tax credit attributed to one payment allocation (R7): what
+ * takes the bill's live credit to the rounded share of what will then be
+ * paid, so full payment attributes its creditable GST exactly once.
+ * Non-creditable GST is cost and is never attributed.
  */
 export function paymentCreditableGst(
   amount: Cents,
   balance: BillBalance,
 ): Cents {
   if (balance.inclusive === 0n) return 0n;
-  return cashGstToward({
+  return (
+    cumulativeCashGst({
+      documentTotal: balance.inclusive,
+      documentGst: balance.creditableGst,
+      settled: balance.paid + amount,
+    }) - balance.attributed
+  );
+}
+
+/**
+ * Credit adjustment to record on this bill when voiding a payment allocation
+ * of `amount` that attributed `gst` (0 when none is needed).
+ */
+export function paymentVoidAdjustment(
+  allocation: { amount: Cents; gst: Cents },
+  balance: BillBalance,
+): Cents {
+  return voidGstAdjustment({
     documentTotal: balance.inclusive,
     documentGst: balance.creditableGst,
-    settledAfter: balance.paid + amount,
-    attributed: balance.attributed,
-    amount,
-    direction: 1n,
+    settledAfter: balance.paid - allocation.amount,
+    attributedAfter: balance.attributed - allocation.gst,
   });
 }

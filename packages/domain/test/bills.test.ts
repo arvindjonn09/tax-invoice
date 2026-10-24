@@ -9,6 +9,7 @@ import {
   jobProfit,
   outstandingCommitment,
   paymentCreditableGst,
+  paymentVoidAdjustment,
   paymentProblems,
 } from "../src/index";
 
@@ -208,21 +209,26 @@ describe("supplier bills (#46)", () => {
     expect(billOutstanding(balance({ paid: 100_000n }))).toBe(0n);
   });
 
-  it("a replacement for a voided middle payment recovers its credit cent", () => {
+  it("voiding a payment corrects the credit at once (adjustment, not edits)", () => {
     // $0.11 bill with $0.01 creditable GST: payments 5c, 1c, 5c → 0, 1, 0.
     const tiny = { inclusive: 11n, creditableGst: 1n };
-    const pay = (paid: bigint, attributed: bigint, amount: bigint) =>
-      paymentCreditableGst(amount, balance({ ...tiny, paid, attributed }));
-    expect([pay(0n, 0n, 5n), pay(5n, 0n, 1n), pay(6n, 1n, 5n)]).toEqual([
-      0n,
+    const at = (paid: bigint, attributed: bigint) =>
+      balance({ ...tiny, paid, attributed });
+    expect([
+      paymentCreditableGst(5n, at(0n, 0n)),
+      paymentCreditableGst(1n, at(5n, 0n)),
+      paymentCreditableGst(5n, at(6n, 1n)),
+    ]).toEqual([0n, 1n, 0n]);
+    // Void the 1c payment: 10c stays paid → round(10/11) = 1c, so +1c.
+    expect(paymentVoidAdjustment({ amount: 1n, gst: 1n }, at(11n, 1n))).toBe(
       1n,
+    );
+    // Its replacement then attributes nothing; the bill ends at 1c.
+    expect(paymentCreditableGst(1n, at(10n, 1n))).toBe(0n);
+    // Voiding the first 5c leaves 6c paid → round(6/11) = 1c: no adjustment.
+    expect(paymentVoidAdjustment({ amount: 5n, gst: 0n }, at(11n, 1n))).toBe(
       0n,
-    ]);
-    // Void the 1c payment (history unchanged), then pay it again.
-    expect(pay(10n, 0n, 1n)).toBe(1n);
-    // Voiding the first 5c leaves 1c attributed on 6c paid: the next payment
-    // attributes nothing rather than a negative credit.
-    expect(pay(1n, 1n, 1n)).toBe(0n);
+    );
   });
 
   it("a bill linked to an acceptance releases the commitment, never double counting", () => {

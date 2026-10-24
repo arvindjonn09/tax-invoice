@@ -9,6 +9,7 @@ import {
   jobBillCosts,
   supplierPaymentHandlers,
 } from "../../apps/web/src/server/bills/handlers";
+import { expenseHandlers } from "../../apps/web/src/server/expenses/handlers";
 import { syntheticAbn } from "../helpers/abn";
 import {
   type CommittedDatabase,
@@ -31,6 +32,7 @@ let db: PrismaClient;
 let withPolicy: ReturnType<typeof createWithPolicy>;
 let bills: ReturnType<typeof billHandlers>;
 let payments: ReturnType<typeof supplierPaymentHandlers>;
+let expenses: ReturnType<typeof expenseHandlers>;
 let companyId = "";
 let otherCompanyId = "";
 let customerId = "";
@@ -56,6 +58,7 @@ beforeAll(async () => {
   });
   bills = billHandlers(() => db);
   payments = supplierPaymentHandlers(() => db);
+  expenses = expenseHandlers(() => db);
   for (const key of WHO) {
     userIds[key] = (
       await createCredentialUser(db, {
@@ -197,6 +200,7 @@ const r = () => ({
   payment: withPolicy<One>("payment.read", payments.read),
   payments: withPolicy("payment.read", payments.list),
   voidPayment: withPolicy<One>("payment.write", payments.void),
+  submitExpense: withPolicy("expense.submit_own", expenses.create),
 });
 
 type Bill = {
@@ -860,6 +864,57 @@ describe("supplier payments (#46)", () => {
     expect(ids).toHaveLength(3);
   });
 
+  it("voiding a payment corrects the bill's credit at once, without editing history", async () => {
+    // $990 bill with $90 creditable GST (1/11): 5c → 0, 1c → 1, the rest.
+    const bill = await openBill();
+    const paid: Payment[] = [];
+    for (const amount of ["5", "1", "98994"])
+      paid.push((await pay(payment(bill.id, amount))).body);
+    expect(
+      paid.map((p) => p.allocations[0]!.creditableGstAttributedCents),
+    ).toEqual(["0", "1", "8999"]);
+    const liveCredit = async () => {
+      const [allocations, adjustments] = await Promise.all([
+        db.supplierPaymentAllocation.aggregate({
+          where: { billId: bill.id, payment: { voidedAt: null } },
+          _sum: { creditableGstAttributedCents: true },
+        }),
+        db.supplierPaymentGstAdjustment.aggregate({
+          where: { billId: bill.id },
+          _sum: { creditableGstCents: true },
+        }),
+      ]);
+      return (
+        (allocations._sum.creditableGstAttributedCents ?? 0n) +
+        (adjustments._sum.creditableGstCents ?? 0n)
+      );
+    };
+    expect(
+      (
+        await r().voidPayment(
+          call("accountant", "POST", { reason: "Bounced" }),
+          one(paid[1]!.id),
+        )
+      ).status,
+    ).toBe(200);
+    // 98999c stays paid → round(8999.9) = 9000c: the void records +1c.
+    expect(
+      await db.supplierPaymentGstAdjustment.findMany({
+        where: { billId: bill.id },
+        select: { paymentId: true, creditableGstCents: true },
+      }),
+    ).toEqual([{ paymentId: paid[1]!.id, creditableGstCents: 1n }]);
+    expect(await liveCredit()).toBe(9_000n);
+    const replacement = (await pay(payment(bill.id, "1"))).body;
+    expect(replacement.allocations[0]!.creditableGstAttributedCents).toBe("0");
+    expect(await liveCredit()).toBe(9_000n);
+    await expect(
+      db.supplierPaymentGstAdjustment.deleteMany({
+        where: { billId: bill.id },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("voids: a paid bill can't be voided until its payments are; voided payments reopen the bill", async () => {
     const job = await newJob();
     const recorded = await record({
@@ -935,5 +990,68 @@ describe("supplier payments (#46)", () => {
       db.supplierBillItem.deleteMany({ where: { billId: bill.id } }),
     ).rejects.toThrow();
     expect((await readBill(bill.id)).paidCents).toBe("100");
+  });
+});
+
+describe("one purchase document backs one record", () => {
+  const expense = (receiptDocumentId: string) =>
+    r().submitExpense(
+      call("owner", "POST", {
+        jobId: null,
+        category: "materials",
+        description: "Synthetic cable",
+        purchasedOn: "2026-07-15",
+        priceEntry: "inclusive",
+        amountCents: "99000",
+        taxCode: "TAXABLE_10",
+        receiptDocumentId,
+        settlement: "paid_at_purchase",
+        paymentMethod: "card",
+      }),
+      undefined,
+    );
+  const bill = (documentId: string) =>
+    record({
+      supplierName: "Sample Supplies",
+      supplierAbn: SUPPLIER_ABN,
+      supplierGstRegistered: true,
+      issuedOn: "2026-07-15",
+      lines: [SUBCONTRACT_LINE],
+      documentId,
+    });
+
+  it("refuses an expense on a bill's document, and a bill on an expense's", async () => {
+    const billed = await document();
+    expect((await bill(billed)).status).toBe(201);
+    const refused = await expense(billed);
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).fields).toHaveProperty("receiptDocumentId");
+
+    const expensed = await document();
+    expect((await expense(expensed)).status).toBe(201);
+    const second = await bill(expensed);
+    expect(second.status).toBe(400);
+    expect(second.body.fields).toHaveProperty("documentId");
+  });
+
+  it("lets only one of a racing bill and expense claim a document", async () => {
+    for (let run = 0; run < 3; run += 1) {
+      const shared = await document();
+      const [billed, expensed] = await Promise.all([
+        bill(shared),
+        expense(shared),
+      ]);
+      expect([billed.status, expensed.status].sort()).toEqual([201, 400]);
+      const claims = await db.document.findUniqueOrThrow({
+        where: { id: shared },
+        select: {
+          supplierBill: { select: { id: true } },
+          expense: { select: { id: true } },
+        },
+      });
+      expect(
+        [claims.supplierBill, claims.expense].filter(Boolean),
+      ).toHaveLength(1);
+    }
   });
 });

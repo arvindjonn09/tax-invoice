@@ -138,6 +138,23 @@ CREATE TABLE "supplier_payment_allocations" (
     )
 );
 
+-- CreateTable
+-- Input tax credit correction written when a supplier payment is voided, so a
+-- bill's live attributed credit (unvoided allocations plus adjustments) is
+-- always the rounded share of what stays paid (as receipt_gst_adjustments).
+CREATE TABLE "supplier_payment_gst_adjustments" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "company_id" UUID NOT NULL,
+    "payment_id" UUID NOT NULL,
+    "bill_id" UUID NOT NULL,
+    "creditable_gst_cents" BIGINT NOT NULL,
+    "adjusted_on" DATE NOT NULL,
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "supplier_payment_gst_adjustments_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "supplier_payment_gst_adjustments_nonzero" CHECK ("creditable_gst_cents" <> 0)
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "supplier_bills_company_id_id_key" ON "supplier_bills"("company_id", "id");
 CREATE UNIQUE INDEX "supplier_bills_company_id_document_id_key" ON "supplier_bills"("company_id", "document_id");
@@ -162,6 +179,8 @@ CREATE INDEX "supplier_payments_company_id_contractor_id_idx" ON "supplier_payme
 CREATE INDEX "supplier_payments_company_id_created_by_idx" ON "supplier_payments"("company_id", "created_by");
 CREATE UNIQUE INDEX "supplier_payment_allocations_payment_id_bill_id_key" ON "supplier_payment_allocations"("payment_id", "bill_id");
 CREATE INDEX "supplier_payment_allocations_company_id_bill_id_idx" ON "supplier_payment_allocations"("company_id", "bill_id");
+CREATE UNIQUE INDEX "supplier_payment_gst_adjustments_payment_id_bill_id_key" ON "supplier_payment_gst_adjustments"("payment_id", "bill_id");
+CREATE INDEX "supplier_payment_gst_adjustments_company_id_bill_id_idx" ON "supplier_payment_gst_adjustments"("company_id", "bill_id");
 
 -- AddForeignKey (tenant-safe: every reference carries company_id)
 ALTER TABLE "supplier_bills" ADD CONSTRAINT "supplier_bills_company_id_fkey" FOREIGN KEY ("company_id") REFERENCES "companies"("id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -179,6 +198,8 @@ ALTER TABLE "supplier_payments" ADD CONSTRAINT "supplier_payments_company_id_cre
 ALTER TABLE "supplier_payments" ADD CONSTRAINT "supplier_payments_company_id_voided_by_fkey" FOREIGN KEY ("company_id", "voided_by") REFERENCES "memberships"("company_id", "user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "supplier_payment_allocations" ADD CONSTRAINT "supplier_payment_allocations_company_id_payment_id_fkey" FOREIGN KEY ("company_id", "payment_id") REFERENCES "supplier_payments"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "supplier_payment_allocations" ADD CONSTRAINT "supplier_payment_allocations_company_id_bill_id_fkey" FOREIGN KEY ("company_id", "bill_id") REFERENCES "supplier_bills"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "supplier_payment_gst_adjustments" ADD CONSTRAINT "supplier_payment_gst_adjustments_company_id_payment_id_fkey" FOREIGN KEY ("company_id", "payment_id") REFERENCES "supplier_payments"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "supplier_payment_gst_adjustments" ADD CONSTRAINT "supplier_payment_gst_adjustments_company_id_bill_id_fkey" FOREIGN KEY ("company_id", "bill_id") REFERENCES "supplier_bills"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- Bills are never deleted; the only change is a one-way void.
 CREATE FUNCTION jobflow_guard_supplier_bill() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -226,6 +247,8 @@ CREATE TRIGGER supplier_payments_guard BEFORE UPDATE OR DELETE ON supplier_payme
 CREATE TRIGGER supplier_payments_no_truncate BEFORE TRUNCATE ON supplier_payments
   FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
 CREATE TRIGGER supplier_payment_allocations_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON supplier_payment_allocations
+  FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
+CREATE TRIGGER supplier_payment_gst_adjustments_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON supplier_payment_gst_adjustments
   FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
 
 COMMIT;

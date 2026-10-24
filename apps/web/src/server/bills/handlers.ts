@@ -15,6 +15,7 @@ import {
   billOutstanding,
   outstandingCommitment,
   paymentCreditableGst,
+  paymentVoidAdjustment,
   paymentProblems,
 } from "@jobflow/domain";
 import { z } from "zod";
@@ -31,6 +32,7 @@ import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { companyGstStatusOn, sydneyToday, toDay } from "../company/gst";
 import { isUniqueViolation, lockRow } from "../db/locks";
+import { lockDocumentClaim } from "../documents/claim";
 import {
   abnField,
   optionalText,
@@ -238,12 +240,21 @@ export async function billBalances(
   const paidBy = new Map(
     paid.map((row) => [row.billId, row._sum.amountCents ?? 0n]),
   );
+  const adjusted = await db.supplierPaymentGstAdjustment.groupBy({
+    by: ["billId"],
+    where: { companyId, billId: { in: bills.map((bill) => bill.id) } },
+    _sum: { creditableGstCents: true },
+  });
+  // Live credit: unvoided allocations plus the adjustments their voids recorded.
   const attributedBy = new Map(
-    paid.map((row) => [
-      row.billId,
-      row._sum.creditableGstAttributedCents ?? 0n,
-    ]),
+    adjusted.map((row) => [row.billId, row._sum.creditableGstCents ?? 0n]),
   );
+  for (const row of paid)
+    attributedBy.set(
+      row.billId,
+      (attributedBy.get(row.billId) ?? 0n) +
+        (row._sum.creditableGstAttributedCents ?? 0n),
+    );
   return new Map(
     bills.map((bill) => [
       bill.id,
@@ -466,14 +477,11 @@ export function billHandlers(db: () => PrismaClient) {
           });
           let document: EvidenceDocument = null;
           if (data.documentId) {
-            const found = await tx.document.findFirst({
-              where: { id: data.documentId, companyId: actor.companyId },
-              include: {
-                expense: { select: { id: true } },
-                workEvidence: { select: { id: true } },
-                supplierBill: { select: { id: true } },
-              },
-            });
+            const found = await lockDocumentClaim(
+              tx,
+              actor.companyId,
+              data.documentId,
+            );
             if (!found || !["tax_invoice", "receipt"].includes(found.kind))
               throw refuse(
                 400,
@@ -871,9 +879,39 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
         await lockRow(tx, "supplier_payments", id);
         const before = requireSameCompany(
           actor,
-          await tx.supplierPayment.findUnique({ where: { id } }),
+          await tx.supplierPayment.findUnique({
+            where: { id },
+            include: { allocations: true },
+          }),
         );
         if (before.voidedAt) throw refuse(409, "It's already void");
+        // Under the bill locks, keep each bill's live credit at the rounded
+        // share of what stays paid: record the correction, never edit history.
+        const ids = before.allocations.map((allocation) => allocation.billId);
+        await lockBills(tx, ids);
+        const balances = await billBalances(tx, actor.companyId, ids);
+        const gstAdjustments = before.allocations
+          .map((allocation) => ({
+            billId: allocation.billId,
+            creditableGstCents: paymentVoidAdjustment(
+              {
+                amount: allocation.amountCents,
+                gst: allocation.creditableGstAttributedCents,
+              },
+              balances.get(allocation.billId)!,
+            ),
+          }))
+          .filter((adjustment) => adjustment.creditableGstCents !== 0n);
+        if (gstAdjustments.length > 0)
+          await tx.supplierPaymentGstAdjustment.createMany({
+            data: gstAdjustments.map((adjustment) => ({
+              companyId: actor.companyId,
+              paymentId: id,
+              billId: adjustment.billId,
+              creditableGstCents: adjustment.creditableGstCents,
+              adjustedOn: new Date(`${sydneyToday()}T00:00:00Z`),
+            })),
+          });
         const updated = await tx.supplierPayment.update({
           where: { id },
           data: {
@@ -888,7 +926,13 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
           actorUserId: actor.userId,
           action: "supplier_payment.voided",
           target: { type: "supplier_payment", id },
-          after: { reason: parsed.data.reason },
+          after: {
+            reason: parsed.data.reason,
+            gstAdjustments: gstAdjustments.map((adjustment) => ({
+              billId: adjustment.billId,
+              creditableGstCents: adjustment.creditableGstCents.toString(),
+            })),
+          },
         });
         return updated;
       });
