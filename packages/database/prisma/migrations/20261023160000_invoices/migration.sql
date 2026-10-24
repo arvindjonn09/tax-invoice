@@ -166,11 +166,15 @@ $$;
 CREATE TRIGGER invoices_guard BEFORE UPDATE OR DELETE ON invoices
   FOR EACH ROW EXECUTE FUNCTION jobflow_guard_invoice();
 
--- Lines change only while their invoice is a draft.
+-- Lines change only while their invoice is a draft, and never move between
+-- invoices (moving one out of an issued invoice would drop a frozen line).
 CREATE FUNCTION jobflow_guard_invoice_item() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   parent_status invoice_status;
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.invoice_id IS DISTINCT FROM OLD.invoice_id THEN
+    RAISE EXCEPTION 'invoice lines can''t move to another invoice' USING ERRCODE = '55000';
+  END IF;
   SELECT status INTO parent_status FROM invoices
     WHERE id = COALESCE(NEW.invoice_id, OLD.invoice_id);
   IF parent_status IS DISTINCT FROM 'draft' THEN
