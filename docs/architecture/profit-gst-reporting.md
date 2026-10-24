@@ -82,6 +82,17 @@ Cash adjustment timing follows the refund distinction in
 The migration brings valid legacy credited-invoice GST balances forward with a
 dated correction; immutable historical allocations remain unchanged.
 
+## Known pilot query limit
+
+The projection currently loads all company-scoped source rows inside its
+repeatable-read snapshot, then filters by date in memory. Memory and query cost
+therefore grow with company history. JSON reads stay protected and private/no-store;
+this PR does not enable bulk exports. [Follow-up #157](https://github.com/arvindjonn09/tax-invoice/issues/157)
+tracks bounded queries or materialised postings and paged drill-down for #56 and
+#58. Resolve it before enabling bulk exports or expanding report screens. Do not
+truncate totals or drop earlier credits, settlements, voids or opening balances
+when adding bounds.
+
 ## Verification and remaining work
 
 Combined fixture tests run both registered and unregistered through real stored

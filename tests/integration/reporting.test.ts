@@ -1185,6 +1185,19 @@ describe("locked GST periods and explicit amendment history", () => {
       }),
     ).toBe(true);
   });
+  it("bounds error traversal and handles a self-referencing cause", () => {
+    const cyclic: { cause?: unknown; meta?: unknown } = {};
+    cyclic.cause = cyclic;
+    expect(isLockedPeriodError(cyclic)).toBe(false);
+    const locked = { code: "55000", message: "jobflow_period_locked" };
+    // A cycle in one branch must not hide a valid adapter error in another.
+    cyclic.meta = { cause: cyclic, driverAdapterError: locked };
+    expect(isLockedPeriodError(cyclic)).toBe(true);
+    let deep: unknown = locked;
+    for (let i = 0; i < 5; i++) deep = { cause: deep };
+    expect(isLockedPeriodError(deep)).toBe(true);
+    expect(isLockedPeriodError({ cause: deep })).toBe(false);
+  });
   it("refuses to void an early non-cash settlement out of a finalised period", async () => {
     const f = await fixture(true, "non_cash");
     const receipts = receiptHandlers(() => db),

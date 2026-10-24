@@ -19,20 +19,29 @@ import { log, safeError } from "../log";
 
 /** PostgreSQL and Prisma adapter errors must carry the actual SQLSTATE. */
 export function isLockedPeriodError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const row = error as Record<string, unknown>;
-  const state = row.code ?? row.originalCode;
-  if (
-    state === "55000" &&
-    [row.message, row.originalMessage].some(
-      (value) =>
-        typeof value === "string" && value.includes("jobflow_period_locked"),
+  const visited = new WeakSet<object>();
+  const inspect = (value: unknown, depth: number): boolean => {
+    if (!value || typeof value !== "object" || visited.has(value)) return false;
+    visited.add(value);
+    const row = value as Record<string, unknown>;
+    const state = row.code ?? row.originalCode;
+    if (
+      state === "55000" &&
+      [row.message, row.originalMessage].some(
+        (message) =>
+          typeof message === "string" &&
+          message.includes("jobflow_period_locked"),
+      )
     )
-  )
-    return true;
-  return [row.meta, row.cause, row.driverAdapterError].some(
-    isLockedPeriodError,
-  );
+      return true;
+    // At most five wrapper edges; cycles and unusually deep adapter chains
+    // cannot overflow the stack inside the route's exception handler.
+    if (depth === 5) return false;
+    return [row.meta, row.cause, row.driverAdapterError].some((child) =>
+      inspect(child, depth + 1),
+    );
+  };
+  return inspect(error, 0);
 }
 
 export type PolicyDependencies = {
