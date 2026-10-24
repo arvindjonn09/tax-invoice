@@ -57,6 +57,7 @@ type BillRow = SupplierBill & {
   allocations: (SupplierPaymentAllocation & {
     payment: Pick<SupplierPayment, "voidedAt" | "paidOn">;
   })[];
+  document: { kind: string } | null;
 };
 type PaymentRow = SupplierPayment & {
   allocations: SupplierPaymentAllocation[];
@@ -130,6 +131,7 @@ const refuse = (status: 400 | 409, error: string, field?: string) =>
 
 const BILL_INCLUDE = {
   items: { orderBy: { position: "asc" } },
+  document: { select: { kind: true } },
   allocations: {
     include: { payment: { select: { voidedAt: true, paidOn: true } } },
   },
@@ -157,6 +159,8 @@ function billView(row: BillRow) {
     issuedOn: toDay(row.issuedOn),
     dueOn: row.dueOn ? toDay(row.dueOn) : null,
     documentId: row.documentId,
+    /** What the evidence is (tax invoice or receipt), so the UI never overstates it. */
+    documentKind: row.document?.kind ?? null,
     evidenceVerified: row.evidenceVerified,
     hasEvidence: row.hasEvidence,
     companyGstRegistered: row.companyGstRegistered,
@@ -328,12 +332,30 @@ export function billHandlers(db: () => PrismaClient) {
     const jobId = uuidOrNull(params.get("jobId") ?? "");
     const contractorId = uuidOrNull(params.get("contractorId") ?? "");
     const status = z
-      .enum(["live", "void", "all"])
+      .enum(["live", "owing", "void", "all"])
       .catch("live")
       .parse(params.get("status") ?? undefined);
+    // "owing": live bills not yet fully paid by live payments, filtered in
+    // the database so paging never hides an old unpaid bill.
+    const owing =
+      status === "owing"
+        ? (
+            await db().$queryRaw<{ id: string }[]>`
+              SELECT b.id FROM supplier_bills b
+              WHERE b.company_id = ${actor.companyId}::uuid
+                AND b.voided_at IS NULL
+                AND b.inclusive_cents > COALESCE((
+                  SELECT SUM(a.amount_cents)
+                  FROM supplier_payment_allocations a
+                  JOIN supplier_payments p ON p.id = a.payment_id
+                  WHERE a.bill_id = b.id AND p.voided_at IS NULL
+                ), 0)`
+          ).map((row) => row.id)
+        : null;
     const filter: Prisma.SupplierBillWhereInput = {
       ...(jobId ? { jobId } : {}),
       ...(contractorId ? { contractorId } : {}),
+      ...(owing ? { id: { in: owing } } : {}),
       ...(status === "all"
         ? {}
         : { voidedAt: status === "void" ? { not: null } : null }),

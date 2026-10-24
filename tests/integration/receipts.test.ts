@@ -170,6 +170,7 @@ const r = () => ({
   invCreate: withPolicy("invoice.write", invoices.create),
   invIssue: withPolicy("invoice.issue", invoices.issue),
   invRead: withPolicy("invoice.read", invoices.read),
+  invList: withPolicy("invoice.read", invoices.list),
   invVoid: withPolicy("invoice.issue", invoices.void),
   create: withPolicy("payment.write", receipts.create),
   read: withPolicy("payment.read", receipts.read),
@@ -271,6 +272,34 @@ describe("receipts", () => {
         where: { companyId, action: "receipt.recorded" },
       }),
     ).toBe(1);
+  });
+
+  it("lists issued invoices with their received and outstanding balances (#51)", async () => {
+    const invoiceId = await issuedInvoice();
+    expect((await receive([{ invoiceId, amountCents: "100000" }])).status).toBe(
+      201,
+    );
+    const listed = (await (
+      await r().invList(
+        new Request(
+          `${ORIGIN}/api/x?customerId=${customerId}&status=issued&pageSize=100`,
+          { headers: call("accountant", "GET").headers },
+        ),
+        undefined,
+      )
+    ).json()) as {
+      invoices: {
+        id: string;
+        receivedCents?: string;
+        outstandingCents?: string;
+      }[];
+    };
+    expect(
+      listed.invoices.find((invoice) => invoice.id === invoiceId),
+    ).toMatchObject({
+      receivedCents: "100000",
+      outstandingCents: "175000",
+    });
   });
 
   it("creates exactly one receipt for concurrent duplicate submissions", async () => {

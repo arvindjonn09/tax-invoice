@@ -206,6 +206,7 @@ const r = () => ({
 
 type Bill = {
   id: string;
+  documentKind?: string | null;
   status: string;
   jobId: string | null;
   offerId: string | null;
@@ -733,6 +734,125 @@ describe("supplier bills (#46)", () => {
       )
     ).json()) as { bills: Bill[] };
     expect(list.bills.map((bill) => bill.id)).not.toContain(outsiderBillId);
+  });
+});
+
+describe("bills owing and evidence kind (#51)", () => {
+  it("?status=owing lists only live bills with money still owing", async () => {
+    const supplier = {
+      supplierName: "Owing Sample Supplies",
+      supplierAbn: syntheticAbn("515151515"),
+      supplierGstRegistered: true,
+      issuedOn: "2026-07-15",
+      lines: [
+        {
+          description: "Synthetic fixings",
+          taxCode: "TAXABLE_10",
+          exclusiveCents: "10000",
+          gstCents: "1000",
+        },
+      ],
+    };
+    const make = async (reference: string) => {
+      const made = await record({ ...supplier, supplierReference: reference });
+      expect(made.status).toBe(201);
+      return made.body.id;
+    };
+    const [open, part, full, gone] = await Promise.all([
+      make("OW-1"),
+      make("OW-2"),
+      make("OW-3"),
+      make("OW-4"),
+    ]);
+    const settle = (billId: string, amountCents: string) =>
+      pay({
+        paidOn: "2026-07-20",
+        amountCents,
+        method: "bank_transfer",
+        allocations: [{ billId, amountCents }],
+      });
+    expect((await settle(part, "5000")).status).toBe(201);
+    expect((await settle(full, "11000")).status).toBe(201);
+    expect(
+      (
+        await r().voidBill(
+          call("accountant", "POST", { reason: "Synthetic duplicate" }),
+          one(gone),
+        )
+      ).status,
+    ).toBe(200);
+    const listed = (await (
+      await r().list(
+        call(
+          "accountant",
+          "GET",
+          undefined,
+          {},
+          "/api/bills?status=owing&pageSize=100",
+        ),
+        undefined,
+      )
+    ).json()) as { bills: { id: string; outstandingCents: string }[] };
+    const ids = listed.bills.map((bill) => bill.id);
+    expect(ids).toEqual(expect.arrayContaining([open, part]));
+    expect(ids).not.toContain(full);
+    expect(ids).not.toContain(gone);
+    expect(
+      listed.bills.every((bill) => BigInt(bill.outstandingCents) > 0n),
+    ).toBe(true);
+    // A voided payment makes its bill owing again.
+    const paid = (
+      await db.supplierPaymentAllocation.findFirstOrThrow({
+        where: { billId: full },
+      })
+    ).paymentId;
+    expect(
+      (
+        await r().voidPayment(
+          call("accountant", "POST", { reason: "Synthetic bounce" }),
+          one(paid),
+        )
+      ).status,
+    ).toBe(200);
+    const again = (await (
+      await r().list(
+        call(
+          "accountant",
+          "GET",
+          undefined,
+          {},
+          "/api/bills?status=owing&pageSize=100",
+        ),
+        undefined,
+      )
+    ).json()) as { bills: { id: string }[] };
+    expect(again.bills.map((bill) => bill.id)).toContain(full);
+  });
+
+  it("reports what kind of evidence a bill holds", async () => {
+    const small = await record({
+      supplierName: "Receipt Sample Store",
+      supplierGstRegistered: true,
+      supplierAbn: syntheticAbn("616161616"),
+      issuedOn: "2026-07-15",
+      lines: [
+        {
+          description: "Synthetic tape",
+          taxCode: "TAXABLE_10",
+          exclusiveCents: "5000",
+          gstCents: "500",
+        },
+      ],
+      documentId: await document("receipt"),
+      evidenceVerified: true,
+    });
+    expect(small.status).toBe(201);
+    expect(small.body).toMatchObject({
+      documentKind: "receipt",
+      hasEvidence: true,
+      creditableGstCents: "500",
+    });
+    expect((await readBill(small.body.id)).documentKind).toBe("receipt");
   });
 });
 
