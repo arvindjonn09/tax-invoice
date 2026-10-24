@@ -1,7 +1,7 @@
 # Database and financial rules
 
 ## Tables
-companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, supplier_payment_gst_adjustments, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, receipt_gst_adjustments, gst_adjustments, documents, audit_events, idempotency_keys.
+companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, supplier_payment_gst_adjustments, supplier_credits, supplier_credit_items, supplier_credit_gst_adjustments, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, receipt_gst_adjustments, gst_adjustments, documents, audit_events, idempotency_keys.
 
 Each company-owned entity has company_id and unique ID; human job/invoice numbers unique per company. All date-times UTC with Australia/Sydney display; AUD cents stored as integer/BigInt with bounds and explicit rounding rules.
 
@@ -17,6 +17,7 @@ Every invoice, quote, bill and expense line stores: tax code, GST rate snapshot,
 - Margin = profit / invoiced job revenue; N/A for zero.
 - Customer due = invoices (GST-inclusive) - credits - allocated receipts.
 - Supplier due = bills (GST-inclusive) - credits - allocated supplier payments.
+- Supplier credits (#140): an adjustment note against one bill. It snapshots the creditable GST it removes (a 1B decreasing adjustment on the non-cash basis), its non-creditable GST and the job cost it removes, all at the bill's own creditable share, worked out on the cumulative credited GST. It can't take the bill's ex-GST amount, its GST, or what's still owing below zero, so money already paid comes back as a supplier refund, not a credit. On the cash basis a bill's payments attribute against the net bill (incl GST − live credits). A credit, or its void, writes a dated `supplier_credit_gst_adjustments` row when that changes what's attributed. A bill with live credits can't be voided. Commitments from accepted offers follow the gross bill.
 - Draft net GST = GST on sales (1A) - creditable GST on purchases (1B) ± adjustments, attributed per the company's accounting basis. This is a liability/asset, not profit.
 - Cash movement = receipts minus payments, **not** profit.
 - Do not count both timesheet and derived cost; link underlying record to cost once.
