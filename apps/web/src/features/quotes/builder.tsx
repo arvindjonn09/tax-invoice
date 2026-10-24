@@ -28,6 +28,11 @@ type DraftLine = {
   taxCode: TaxCode;
 };
 
+/** Jobs a quote may attach to, and jobs a variation may change. */
+const QUOTE_JOBS = "draft,quoted";
+const VARIATION_JOBS =
+  "approved,assigned,in_progress,awaiting_review,completed,invoiced";
+
 const blankLine = (key: string, registered: boolean): DraftLine => ({
   key,
   description: "",
@@ -118,18 +123,27 @@ export function QuoteBuilder({
       archivedAt: string | null;
     }[];
   }>(customerId ? `/api/customers/${customerId}` : null);
+  // Eligibility is filtered server-side before pagination, so older jobs
+  // stay reachable through search and paging.
+  const [jobQuery, setJobQuery] = useState("");
+  const [jobPage, setJobPage] = useState(1);
+  const [jobLabel, setJobLabel] = useState("");
   const jobs = useRemote<{
-    jobs: { id: string; reference: string; title: string; status: string }[];
+    total: number;
+    pageSize: number;
+    jobs: { id: string; reference: string; title: string }[];
   }>(
     customerId && !saved
-      ? `/api/jobs?${new URLSearchParams({ customerId, pageSize: "100" })}`
+      ? `/api/jobs?${new URLSearchParams({
+          customerId,
+          status: kind === "variation" ? VARIATION_JOBS : QUOTE_JOBS,
+          q: jobQuery,
+          page: String(jobPage),
+          pageSize: "20",
+        })}`
       : null,
   );
-  const eligibleJobs = jobs.data?.jobs.filter((job) =>
-    kind === "variation"
-      ? !["draft", "quoted", "closed", "cancelled"].includes(job.status)
-      : ["draft", "quoted"].includes(job.status),
-  );
+  const eligibleJobs = jobs.data?.jobs;
   const touch = () => {
     setDirty(true);
     setMessage(null);
@@ -320,6 +334,7 @@ export function QuoteBuilder({
                       onChange={(event) => {
                         setKind(event.target.value as "quote" | "variation");
                         setJobId("");
+                        setJobPage(1);
                         touch();
                       }}
                     >
@@ -338,6 +353,7 @@ export function QuoteBuilder({
                   onChange={(id) => {
                     setCustomerId(id);
                     setJobId("");
+                    setJobPage(1);
                     setLocationId("");
                     touch();
                   }}
@@ -363,6 +379,12 @@ export function QuoteBuilder({
                       value={jobId}
                       disabled={!customerId}
                       onChange={(event) => {
+                        const job = eligibleJobs?.find(
+                          (row) => row.id === event.target.value,
+                        );
+                        setJobLabel(
+                          job ? `${job.reference} · ${job.title}` : "",
+                        );
                         setJobId(event.target.value);
                         touch();
                       }}
@@ -372,6 +394,12 @@ export function QuoteBuilder({
                           ? "Choose a job"
                           : "Create a job on acceptance"}
                       </option>
+                      {jobId &&
+                      !eligibleJobs?.some((job) => job.id === jobId) ? (
+                        <option value={jobId}>
+                          {jobLabel || "Selected job"}
+                        </option>
+                      ) : null}
                       {eligibleJobs?.map((job) => (
                         <option key={job.id} value={job.id}>
                           {job.reference} · {job.title}
@@ -380,6 +408,70 @@ export function QuoteBuilder({
                     </select>
                   )}
                 </Field>
+                {customerId ? (
+                  <div className="space-y-3">
+                    <TextField
+                      id="quote-job-search"
+                      label="Find job"
+                      hint="Search this customer's eligible jobs by number or title."
+                      maxLength={100}
+                      value={jobQuery}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") event.preventDefault();
+                      }}
+                      onChange={(event) => {
+                        setJobQuery(event.target.value);
+                        setJobPage(1);
+                      }}
+                    />
+                    {jobs.error ? (
+                      <div role="alert">
+                        <p>{jobs.error}</p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={jobs.reload}
+                        >
+                          Retry job search
+                        </Button>
+                      </div>
+                    ) : jobs.data ? (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <p className="text-sm text-muted-foreground">
+                          {jobs.data.total} eligible{" "}
+                          {jobs.data.total === 1 ? "job" : "jobs"} · page{" "}
+                          {jobPage} of{" "}
+                          {Math.max(
+                            1,
+                            Math.ceil(jobs.data.total / jobs.data.pageSize),
+                          )}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={jobPage === 1}
+                          onClick={() => setJobPage((value) => value - 1)}
+                          aria-label="Previous jobs"
+                        >
+                          Previous
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={
+                            jobPage * jobs.data.pageSize >= jobs.data.total
+                          }
+                          onClick={() => setJobPage((value) => value + 1)}
+                          aria-label="Next jobs"
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    ) : (
+                      <p role="status">Loading jobs…</p>
+                    )}
+                  </div>
+                ) : null}
               </>
             )}
             <Field

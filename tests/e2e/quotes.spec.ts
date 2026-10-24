@@ -127,6 +127,49 @@ test("manager drafts, sends and accepts a quote into a job", async ({
   );
 });
 
+test("a variation finds its job by search, past cancelled jobs", async ({
+  page,
+}) => {
+  await signIn(page, "manager");
+  const { name, id } = await customer(page);
+  const job = async (title: string, to: string) => {
+    const created = await write<{ id: string; reference: string }>(
+      page,
+      "/api/jobs",
+      { title, customerId: id },
+    );
+    await write(page, `/api/jobs/${created.id}/status`, { to });
+    return created;
+  };
+  const approved = await job("Synthetic variation target", "approved");
+  await job("Synthetic cancelled job", "cancelled");
+  await page.goto("/quotes/new");
+  await page.getByLabel("Type").selectOption("variation");
+  await page.getByLabel("Find customer", { exact: true }).fill(name);
+  const customerSelect = page.getByLabel("Customer (required)", {
+    exact: true,
+  });
+  await expect(customerSelect.locator("option", { hasText: name })).toHaveCount(
+    1,
+  );
+  await customerSelect.selectOption({ label: name });
+  await expect(page.getByText("1 eligible job · page 1 of 1")).toBeVisible();
+  await page.getByLabel("Find job").fill(approved.reference);
+  const jobSelect = page.getByLabel("Job (required)");
+  await expect(jobSelect.locator("option")).toHaveText([
+    "Choose a job",
+    `${approved.reference} · Synthetic variation target`,
+  ]);
+  await jobSelect.selectOption({
+    label: `${approved.reference} · Synthetic variation target`,
+  });
+  // The choice survives a search that no longer lists it.
+  await page.getByLabel("Find job").fill("no such job");
+  await expect(page.getByText("0 eligible jobs")).toBeVisible();
+  await expect(jobSelect).toHaveValue(approved.id);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
 test("a declined quote is revised into a new draft", async ({ page }) => {
   await signIn(page, "owner");
   const { id: customerId } = await customer(page);

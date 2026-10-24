@@ -374,6 +374,24 @@ describe("status machine", () => {
     ).json();
     expect(cancelled.jobs.map((j: { id: string }) => j.id)).toContain(id);
   });
+
+  it("filters by a list of statuses before paginating", async () => {
+    const draft = (await newJob()).body.id;
+    const cancelled = (await newJob()).body.id;
+    expect((await move(cancelled, "cancelled")).status).toBe(200);
+    const ids = async (query: string) =>
+      (
+        (await (
+          await r().list(call("owner", "GET", undefined, query), undefined)
+        ).json()) as { jobs: { id: string; status: string }[] }
+      ).jobs;
+    const listed = await ids("?status=draft,quoted&pageSize=100");
+    expect(listed.map((j) => j.id)).toContain(draft);
+    expect(listed.map((j) => j.id)).not.toContain(cancelled);
+    expect(listed.every((j) => ["draft", "quoted"].includes(j.status))).toBe(
+      true,
+    );
+  });
 });
 
 describe("visits", () => {
