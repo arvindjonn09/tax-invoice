@@ -54,7 +54,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
   - #48 PDF: deterministic pdf-lib rendering of the frozen issue snapshot (standard fonts only — no HTML, scripts, fonts, images or URLs fetched), stored privately once at issue in append-only `invoice_pdfs` (lazily if storage was down), 5-minute signed links via `POST /api/invoices/:id/pdf`; golden files for registered, not-registered and adjustment notes. Builder UI remains #49
 - [x] Customer receipts and allocations — #50: idempotent, transactional, no overpayment, refunds, cash-basis GST attribution per allocation
-- [ ] Financial concurrency/idempotency tests
+- [x] Financial concurrency/idempotency tests — #52: duplicate submissions, races, bad amounts, overpayment, voids, credits and refunds; every case asserts balances and job profit ([test plan](testing/money-safety.md))
 
 ## M4 Profit, GST reporting and dashboard
 - [ ] Job profitability: estimated, committed, incurred and paid costs — GST-exclusive, tested with GST fixtures
