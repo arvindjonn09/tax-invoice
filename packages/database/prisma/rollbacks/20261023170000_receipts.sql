@@ -1,6 +1,7 @@
 -- Test-only reversibility proof on an empty disposable database.
 -- NOT a production rollback command: destroys money received.
 BEGIN;
+DROP TABLE receipt_gst_adjustments;
 DROP TABLE receipt_allocations;
 DROP TABLE customer_receipts;
 DROP FUNCTION jobflow_guard_receipt();

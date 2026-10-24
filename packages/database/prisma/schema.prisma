@@ -835,7 +835,8 @@ model Invoice {
   voider            Membership?       @relation("InvoiceVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   items             InvoiceItem[]
 
-  allocations ReceiptAllocation[]
+  allocations    ReceiptAllocation[]
+  gstAdjustments ReceiptGstAdjustment[]
 
   @@unique([companyId, id])
   @@unique([companyId, kind, number])
@@ -908,6 +909,7 @@ model CustomerReceipt {
   creator        Membership          @relation("ReceiptCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   voider         Membership?         @relation("ReceiptVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   allocations    ReceiptAllocation[]
+  gstAdjustments ReceiptGstAdjustment[]
 
   @@unique([companyId, idempotencyKey])
   @@unique([companyId, id])
@@ -931,6 +933,26 @@ model ReceiptAllocation {
   @@unique([receiptId, invoiceId])
   @@index([companyId, invoiceId])
   @@map("receipt_allocations")
+}
+
+/// Cash-basis GST correction written when a receipt or refund is voided, so
+/// an invoice's live GST (unvoided allocations plus adjustments) is always the
+/// rounded share of the money still received. Append-only; dated on the void.
+model ReceiptGstAdjustment {
+  id         String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId  String          @map("company_id") @db.Uuid
+  /// The voided receipt or refund.
+  receiptId  String          @map("receipt_id") @db.Uuid
+  invoiceId  String          @map("invoice_id") @db.Uuid
+  gstCents   BigInt          @map("gst_cents")
+  adjustedOn DateTime        @map("adjusted_on") @db.Date
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  receipt    CustomerReceipt @relation(fields: [companyId, receiptId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  invoice    Invoice         @relation(fields: [companyId, invoiceId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([receiptId, invoiceId])
+  @@index([companyId, invoiceId])
+  @@map("receipt_gst_adjustments")
 }
 
 enum ExpenseCategory {

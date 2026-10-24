@@ -52,30 +52,24 @@ export function cumulativeCashGst(input: {
 }
 
 /**
- * Cash-basis GST for one settlement in a ledger whose earlier settlements can
- * be voided: what brings the live attributed GST to the rounded share once
- * `settledAfter` is settled. Voids never rewrite history, so the next
- * settlement absorbs any rounding cent a void left. Kept within 0…`amount`
- * (−`amount`…0 for a refund, `direction` −1), so a correction never flips a
- * settlement's sign; settling in full always ends at exactly `documentGst`.
+ * Cash-basis GST correction to record when a settlement is voided: brings the
+ * live attributed GST left after removing the voided settlement's share back
+ * to the rounded share of what stays settled. With it, live GST always equals
+ * `cumulativeCashGst` of the live settled amount, after every step.
  */
-export function cashGstToward(input: {
+export function voidGstAdjustment(input: {
   documentTotal: Cents;
   documentGst: Cents;
   settledAfter: Cents;
-  attributed: Cents;
-  amount: Cents;
-  direction: 1n | -1n;
+  attributedAfter: Cents;
 }): Cents {
-  const { amount, direction } = input;
-  const target = cumulativeCashGst({
-    documentTotal: input.documentTotal,
-    documentGst: input.documentGst,
-    settled: input.settledAfter,
-  });
-  const share = direction * (target - input.attributed);
-  const kept = share < 0n ? 0n : share > amount ? amount : share;
-  return direction * kept;
+  return (
+    cumulativeCashGst({
+      documentTotal: input.documentTotal,
+      documentGst: input.documentGst,
+      settled: input.settledAfter,
+    }) - input.attributedAfter
+  );
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
