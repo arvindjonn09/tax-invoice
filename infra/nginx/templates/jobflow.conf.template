@@ -1,0 +1,85 @@
+# JobFlow reverse proxy (#64). The official nginx image renders this to
+# /etc/nginx/conf.d/ with envsubst, replacing only variables set in its
+# environment (JOBFLOW_DOMAIN), so nginx's own $variables are left alone.
+
+# Sign-in and other auth endpoints: 10 requests/minute per IP, small burst.
+# Better Auth and the app throttle too; this stops floods before they reach Node.
+limit_req_zone $binary_remote_addr zone=jobflow_auth:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=jobflow_api:10m rate=20r/s;
+limit_req_status 429;
+
+upstream jobflow_web {
+    server web:3000;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${JOBFLOW_DOMAIN};
+    server_tokens off;
+
+    # Let's Encrypt HTTP-01 challenges only.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+        default_type text/plain;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${JOBFLOW_DOMAIN};
+    server_tokens off;
+
+    ssl_certificate     /etc/letsencrypt/live/${JOBFLOW_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${JOBFLOW_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:jobflow_tls:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # The app sets HSTS on its own responses; this keeps it on nginx's error
+    # pages (502 while the app restarts) without sending it twice.
+    proxy_hide_header Strict-Transport-Security;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+
+    # Documents are at most 10 MiB (MAX_DOCUMENT_BYTES); allow multipart overhead.
+    client_max_body_size 11m;
+    client_body_timeout 30s;
+    proxy_read_timeout 60s;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    # Overwrite, never append: the app trusts the first X-Forwarded-For hop
+    # (clientIp in apps/web/src/server/http/throttle.ts), so a client-sent
+    # header must not survive.
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Host $host;
+
+    location ^~ /api/auth/ {
+        limit_req zone=jobflow_auth burst=5 nodelay;
+        proxy_pass http://jobflow_web;
+    }
+
+    location ^~ /api/ {
+        limit_req zone=jobflow_api burst=40 nodelay;
+        # Private financial data: never cached by the proxy.
+        proxy_no_cache 1;
+        proxy_cache_bypass 1;
+        proxy_pass http://jobflow_web;
+    }
+
+    location / {
+        proxy_pass http://jobflow_web;
+    }
+}

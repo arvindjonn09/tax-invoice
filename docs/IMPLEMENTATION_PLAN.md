@@ -71,7 +71,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Threat-model/permission audit
 - [ ] Record retention and data export
 - [ ] Database and storage backup/restore test
-- [ ] Staging deployment (Docker, HTTPS) and smoke test with synthetic data
+- [ ] Staging deployment (Docker, HTTPS) and smoke test with synthetic data — config, image build and CI checks in #64 ([docs/ops/staging.md](ops/staging.md)); the first deploy is an owner step
 - [ ] Deployment, rollback and user documentation
 - [ ] Accountant review of GST outputs before real use
 
