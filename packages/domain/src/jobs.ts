@@ -45,6 +45,15 @@ const SYSTEM_ONLY_MOVES: readonly (readonly [JobStatus, JobStatus])[] = [
   ["invoiced", "cancelled"],
 ];
 
+/**
+ * Moves only a completion review may make (#42): approving needs evidence
+ * and rework needs a note, so neither is a bare status change.
+ */
+const REVIEW_ONLY_MOVES: readonly (readonly [JobStatus, JobStatus])[] = [
+  ["awaiting_review", "completed"],
+  ["awaiting_review", "in_progress"],
+];
+
 export function isJobStatus(value: string): value is JobStatus {
   return (JOB_STATUSES as readonly string[]).includes(value);
 }
@@ -53,13 +62,17 @@ export function nextStatuses(from: JobStatus): readonly JobStatus[] {
   return TRANSITIONS[from];
 }
 
-export type TransitionProblem = "same-status" | "not-allowed" | "system-only";
+export type TransitionProblem =
+  "same-status" | "not-allowed" | "system-only" | "review-only";
 
 /** Why `from → to` is refused for a person, or null if allowed. */
 export function transitionProblem(
   from: JobStatus,
   to: JobStatus,
-  { bySystem = false }: { bySystem?: boolean } = {},
+  {
+    bySystem = false,
+    byReview = false,
+  }: { bySystem?: boolean; byReview?: boolean } = {},
 ): TransitionProblem | null {
   if (from === to) return "same-status";
   if (!TRANSITIONS[from].includes(to)) return "not-allowed";
@@ -69,6 +82,8 @@ export function transitionProblem(
       SYSTEM_ONLY_MOVES.some(([a, b]) => a === from && b === to))
   )
     return "system-only";
+  if (!byReview && REVIEW_ONLY_MOVES.some(([a, b]) => a === from && b === to))
+    return "review-only";
   return null;
 }
 

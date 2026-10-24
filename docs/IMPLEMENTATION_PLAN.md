@@ -40,7 +40,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Employee timesheets with cost-rate snapshots
 - [ ] Expenses with GST code, creditable portion, receipts and approvals
   - #40 schema + API: job/general expenses, ex/incl entry, tax code, creditable share, receipt, settlement (paid at purchase / on account, company default), approval snapshots the cost once, decided expenses frozen, reversal corrections; screens remain #41
-- [ ] Work evidence and completion approval
+- [x] Work evidence and completion approval — #42: append-only photos/notes/signatures from workers on the job; submit → review (approve or rework) via the status machine; completion and rework only through the review, workers locked and rechecked before every write, visit-only workers kept to their visits
 
 ## M3 Quotes, bills, invoices and payments
 - [ ] Quotes with tax-coded lines and accepted variations

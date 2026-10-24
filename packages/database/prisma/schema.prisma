@@ -218,6 +218,7 @@ model Membership {
   expensesSubmitted  Expense[]        @relation("ExpenseSubmitter")
   expensesDecided    Expense[]        @relation("ExpenseDecider")
 
+  workEvidenceSubmitted WorkEvidence[]
   @@unique([companyId, userId])
   @@index([userId])
   @@index([companyId, createdBy])
@@ -425,6 +426,7 @@ model Job {
   contractorOffers          ContractorOffer[]
   expenses                  Expense[]
 
+  workEvidence               WorkEvidence[]
   @@unique([companyId, number])
   @@unique([companyId, id])
   @@index([companyId, status])
@@ -468,6 +470,7 @@ model JobVisit {
   creator     Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   assignments Assignment[]
 
+  workEvidence WorkEvidence[]
   @@unique([companyId, id])
   @@unique([companyId, jobId, id])
   @@index([companyId, jobId, startsAt])
@@ -547,6 +550,7 @@ model Document {
   creator     Membership   @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   expense     Expense?
 
+  workEvidence WorkEvidence?
   @@unique([companyId, id])
   @@index([companyId, createdBy])
   @@map("documents")
@@ -771,4 +775,35 @@ model Expense {
   @@index([companyId, submittedBy])
   @@index([companyId, decidedBy])
   @@map("expenses")
+}
+
+enum WorkEvidenceKind {
+  photo
+  note
+  signature
+
+  @@map("work_evidence_kind")
+}
+
+/// Proof of work from the workers on a job (#42): photos, notes, customer
+/// signatures. Append-only (trigger); files are private documents (#34).
+model WorkEvidence {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String           @map("company_id") @db.Uuid
+  jobId       String           @map("job_id") @db.Uuid
+  visitId     String?          @map("visit_id") @db.Uuid
+  kind        WorkEvidenceKind
+  documentId  String?          @map("document_id") @db.Uuid
+  note        String?          @db.VarChar(2000)
+  submittedBy String           @map("submitted_by") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  job         Job              @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  visit       JobVisit?        @relation(fields: [companyId, jobId, visitId], references: [companyId, jobId, id], onDelete: NoAction, onUpdate: NoAction)
+  document    Document?        @relation(fields: [companyId, documentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  submitter   Membership       @relation(fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, documentId])
+  @@index([companyId, jobId, createdAt])
+  @@index([companyId, submittedBy])
+  @@map("work_evidence")
 }
