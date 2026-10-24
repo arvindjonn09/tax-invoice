@@ -526,7 +526,7 @@ describe("races between different requests", () => {
       } else {
         // Void first: the payment is refused and nothing is owing or paid.
         expect(voided.status).toBe(200);
-        expect([400, 409]).toContain(paid.status);
+        expect(paid.status).toBe(400);
         expect(await billBalance(bill.id)).toEqual({
           paid: "0",
           outstanding: "0",
@@ -538,6 +538,45 @@ describe("races between different requests", () => {
         });
       }
     }
+  });
+
+  it("both race outcomes, in sequence: pay-then-void and void-then-pay", async () => {
+    const paidFirst = await newJob();
+    const first = await bigBill(paidFirst);
+    expect(
+      (await pay([{ billId: first.id, amountCents: "110000" }])).status,
+    ).toBe(201);
+    expect(
+      (await routes.voidBill(call({ reason: "Synthetic" }), one(first.id)))
+        .status,
+    ).toBe(409);
+    expect(await billBalance(first.id)).toEqual({
+      paid: "110000",
+      outstanding: "0",
+    });
+    expect(await profitOf(paidFirst)).toEqual({
+      revenue: "0",
+      cost: "110000",
+      profit: "-110000",
+    });
+    const voidFirst = await newJob();
+    const second = await bigBill(voidFirst);
+    expect(
+      (await routes.voidBill(call({ reason: "Synthetic" }), one(second.id)))
+        .status,
+    ).toBe(200);
+    expect(
+      (await pay([{ billId: second.id, amountCents: "110000" }])).status,
+    ).toBe(400);
+    expect(await billBalance(second.id)).toEqual({
+      paid: "0",
+      outstanding: "0",
+    });
+    expect(await profitOf(voidFirst)).toEqual({
+      revenue: "0",
+      cost: "0",
+      profit: "0",
+    });
   });
 
   it("two refunds that each fit but together exceed what was received: one wins", async () => {

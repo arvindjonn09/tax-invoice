@@ -23,7 +23,7 @@ against this oracle.
 | Area | Cases |
 |---|---|
 | Duplicate submissions | Five concurrent copies of one receipt or one supplier payment record exactly one. A reused key with a different body is refused. Missing or malformed keys are refused. |
-| Races | Three full receipts racing for one invoice, or three full payments racing for one bill: exactly one wins and nothing is overpaid. A payment racing its bill's void: exactly one wins, and the balance and cost follow the winner (three rounds). Two refunds that each fit but together exceed what was received: one is refused. |
+| Races | Three full receipts racing for one invoice, or three full payments racing for one bill: exactly one wins and nothing is overpaid. A payment racing its bill's void: exactly one wins, and the balance and cost follow the winner (three rounds, plus both orders run in sequence). Two refunds that each fit but together exceed what was received: one is refused. |
 | Amounts | Zero, negative, fractional, exponent and over-limit amounts. Totals that don't match their allocations. Empty or duplicate allocations. Negative bill lines and GST that isn't 10%. Overpayment by one cent. |
 | Corrections | Voiding a receipt restores the balance, and it can't be voided twice. An invoice with a live receipt can't be voided until the receipt is. Voiding a payment re-opens its bill, and a paid bill can't be voided before then. A credit note lowers both what's owed and revenue, and receipts can't exceed the remainder. Refunds are capped at what was received, and voiding a refund restores it. |
 
