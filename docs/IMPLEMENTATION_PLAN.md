@@ -49,6 +49,11 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Quotes with tax-coded lines and accepted variations
 - [ ] Supplier bills with creditable GST and payment allocations
   - #46 schema + API: bills from suppliers or contractors, keeping the supplier's line GST as issued (R3), linked to an accepted offer (releases the commitment once) and job; creditable GST only with verified evidence on a registered date, limited to a recorded business share; job cost (ex GST + non-creditable GST) snapshotted once; idempotent supplier payments (key + fingerprint, one transaction, locked bills, no overpayment, cash-basis 1B attribution); immutable except one-way voids. Follow-ups: #139 portal bills, #140 supplier credits, #141 on-account expenses, #142 evidence reclassification
+  - #140 supplier credits (adjustment notes) against bills. A credit lowers what's owing, the job cost and the claimable GST at the bill's creditable share. For the purchaser that's an increasing adjustment.
+    - A credit can never exceed what's owing, including under concurrency, and a supplier note is recorded once per bill.
+    - Cash-basis GST is re-based on the net bill, with corrections dated on or after the payments they re-split and the note's arrival. A correction that raises the claim needs a verified note when the adjustment is over $75.
+    - Credits are immutable, with a one-way void.
+    - API: `POST /api/bills/:id/credits`, `GET /api/supplier-credits/:id`, `POST /api/supplier-credits/:id/void`.
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
 - [x] Customer receipts and allocations — #50: idempotent, transactional, no overpayment, refunds, cash-basis GST attribution per allocation
