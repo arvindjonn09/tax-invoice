@@ -1,8 +1,9 @@
 # Profit and draft GST reporting (#54/#55, in progress)
 
-The owner requested work on M4 before every prerequisite merged. Receipts and
-bills are now on main; quote estimate integration includes the pending #144 head. It must not merge until the prerequisite fixes
-are merged, main is integrated, CI passes and the other agent reviews the head.
+Receipts, supplier bills, invoice PDFs and the quote backend (#144) are merged
+into main. This branch has merged main and contains only the #54/#55 reporting
+work. Merge still requires green current-head CI, the other agent's exact-head
+financial/security review and resolved review threads.
 
 ## Shared source of truth
 
