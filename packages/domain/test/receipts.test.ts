@@ -5,6 +5,7 @@ import {
   allocationProblems,
   jobProfit,
   receivable,
+  voidProblem,
 } from "../src/index";
 
 const invoice = (overrides: Partial<InvoiceBalance> = {}): InvoiceBalance => ({
@@ -113,5 +114,29 @@ describe("receipts (#50)", () => {
     const rest = { ...half, received: 110_000n };
     expect(allocationGst("receipt", 110_000n, rest)).toBe(10_000n);
     expect(allocationGst("refund", 110_000n, rest)).toBe(-10_000n);
+  });
+});
+
+describe("voiding receipts and refunds", () => {
+  it("a receipt void can't leave refunds returning money never received", () => {
+    const paid = invoice({ received: 60_000n });
+    expect(voidProblem("receipt", paid, 60_000n)).toBeNull();
+    expect(voidProblem("receipt", paid, 100_000n)).toMatch(
+      /void the refund first/,
+    );
+  });
+
+  it("a refund void can't overpay once a replacement receipt used the capacity", () => {
+    // $100 invoice: receipt 100, refund 100, replacement receipt 100.
+    const replaced = invoice({ inclusive: 10_000n, received: 10_000n });
+    expect(voidProblem("refund", replaced, 10_000n)).toMatch(/overpay/);
+    // Credits reduce what's due, so they count too.
+    const credited = invoice({
+      inclusive: 10_000n,
+      credited: 4_000n,
+      received: 2_000n,
+    });
+    expect(voidProblem("refund", credited, 4_000n)).toBeNull();
+    expect(voidProblem("refund", credited, 4_001n)).toMatch(/overpay/);
   });
 });

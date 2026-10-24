@@ -113,3 +113,24 @@ export function allocationGst(
     settlement: amount,
   });
 }
+
+/**
+ * Why voiding a receipt or refund of `amount` on this invoice can't happen,
+ * or null if it can. Voiding a receipt removes money received, so refunds
+ * must not then exceed it; voiding a refund restores money received, so it
+ * must not then overpay what's due after credits (for example once a
+ * replacement receipt has used that capacity).
+ */
+export function voidProblem(
+  kind: "receipt" | "refund",
+  balance: InvoiceBalance,
+  amount: Cents,
+): string | null {
+  const received =
+    kind === "receipt" ? balance.received - amount : balance.received + amount;
+  if (received < 0n)
+    return "Refunds already returned this money; void the refund first";
+  if (received > balance.inclusive - balance.credited)
+    return "Voiding this refund would overpay the invoice; void or refund the later receipt first";
+  return null;
+}

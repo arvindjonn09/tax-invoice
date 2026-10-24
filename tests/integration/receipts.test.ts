@@ -419,6 +419,48 @@ describe("refunds and voids", () => {
     ).toBe(200);
   });
 
+  it("refuses a refund void that would overpay after a replacement receipt", async () => {
+    const invoiceId = await issuedInvoice();
+    const due = (await balanceOf(invoiceId)).outstandingCents;
+    await receive([{ invoiceId, amountCents: due }]);
+    const refund = await (
+      await receive([{ invoiceId, amountCents: due }], { kind: "refund" })
+    ).json();
+    const replacement = await receive([{ invoiceId, amountCents: due }]);
+    expect(replacement.status).toBe(201);
+    const voided = await r().void(
+      call("accountant", "POST", { reason: "Refund never sent" }),
+      one(refund.id),
+    );
+    expect(voided.status).toBe(409);
+    expect((await voided.json()).error).toMatch(/overpay/);
+    expect((await balanceOf(invoiceId)).receivedCents).toBe(due);
+  });
+
+  it("never overpays when a refund void races a replacement receipt", async () => {
+    const invoiceId = await issuedInvoice();
+    const due = (await balanceOf(invoiceId)).outstandingCents;
+    await receive([{ invoiceId, amountCents: due }]);
+    const refund = await (
+      await receive([{ invoiceId, amountCents: due }], { kind: "refund" })
+    ).json();
+    const [voided, replacement] = await Promise.all([
+      r().void(
+        call("accountant", "POST", { reason: "Refund never sent" }),
+        one(refund.id),
+      ),
+      receive([{ invoiceId, amountCents: due }]),
+    ]);
+    // Exactly one of them takes the invoice back to fully paid.
+    // Either the void wins and the receipt would overpay (400), or the
+    // receipt wins and the void would (409).
+    expect([
+      [200, 400],
+      [409, 201],
+    ]).toContainEqual([voided.status, replacement.status]);
+    expect((await balanceOf(invoiceId)).receivedCents).toBe(due);
+  });
+
   it("is immutable in the database: no edits, deletes or allocation changes", async () => {
     const invoiceId = await issuedInvoice();
     const paid = await (
