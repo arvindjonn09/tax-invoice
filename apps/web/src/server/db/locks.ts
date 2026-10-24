@@ -14,6 +14,7 @@ const LOCKABLE = new Set([
   "assignments",
   "contractors",
   "contractor_offers",
+  "expenses",
   "company_gst_registrations",
 ]);
 
