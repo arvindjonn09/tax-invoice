@@ -148,6 +148,9 @@ model Company {
   supplierPayments SupplierPayment[]
 
   @@map("companies")
+  gstPeriods GstPeriod[]
+  gstManualAdjustments GstManualAdjustment[]
+
 }
 
 enum GstAccountingBasis {
@@ -241,6 +244,10 @@ model Membership {
   @@index([userId])
   @@index([companyId, createdBy])
   @@map("memberships")
+  gstPeriods GstPeriod[]
+  gstReportRevisions GstReportRevision[]
+  gstManualAdjustments GstManualAdjustment[]
+
 }
 
 model AuditEvent {
@@ -1249,4 +1256,62 @@ model SupplierPaymentGstAdjustment {
   @@unique([paymentId, billId])
   @@index([companyId, billId])
   @@map("supplier_payment_gst_adjustments")
+}
+
+/// Finalized financial period; source changes are guarded by database triggers.
+model GstPeriod {
+  id          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String                @map("company_id") @db.Uuid
+  startsOn    DateTime              @map("starts_on") @db.Date
+  endsOn      DateTime              @map("ends_on") @db.Date
+  lockedAt    DateTime              @default(now()) @map("locked_at") @db.Timestamptz(3)
+  createdBy   String                @map("created_by") @db.Uuid
+  company     Company               @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership            @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  revisions   GstReportRevision[]
+  adjustments GstManualAdjustment[]
+
+  @@unique([companyId, id])
+  @@index([companyId, startsOn])
+  @@map("gst_periods")
+}
+
+model GstReportRevision {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId String     @map("company_id") @db.Uuid
+  periodId  String     @map("period_id") @db.Uuid
+  revision  Int
+  report    Json
+  note      String     @db.VarChar(1000)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy String     @map("created_by") @db.Uuid
+  period    GstPeriod  @relation(fields: [companyId, periodId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator   Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, periodId, revision])
+  @@map("gst_report_revisions")
+}
+
+/// Explicit accountant correction; never rewrites a source document.
+model GstManualAdjustment {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String     @map("company_id") @db.Uuid
+  periodId    String?    @map("period_id") @db.Uuid
+  effectiveOn DateTime   @map("effective_on") @db.Date
+  g1          BigInt     @default(0)
+  oneA        BigInt     @default(0) @map("one_a")
+  oneB        BigInt     @default(0) @map("one_b")
+  idempotencyKey String @map("idempotency_key") @db.VarChar(200)
+  requestHash String @map("request_hash") @db.Char(64)
+  reportRevision Int? @map("report_revision")
+  reason      String     @db.VarChar(1000)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy   String     @map("created_by") @db.Uuid
+  company     Company    @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  period      GstPeriod? @relation(fields: [companyId, periodId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId,idempotencyKey])
+  @@index([companyId, effectiveOn])
+  @@map("gst_manual_adjustments")
 }

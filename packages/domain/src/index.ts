@@ -16,3 +16,4 @@ export * from "./labour";
 export * from "./invoices";
 export * from "./receipts";
 export * from "./bills";
+export * from "./reporting";

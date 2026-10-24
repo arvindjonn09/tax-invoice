@@ -54,6 +54,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Financial concurrency/idempotency tests
 
 ## M4 Profit, GST reporting and dashboard
+- [ ] #54/#55 shared backend in progress: scoped event projection, profitability/draft GST, immutable finalisation/amendments and source-period guards; [contract](architecture/profit-gst-reporting.md). Stacked dependency and review gates remain.
 - [ ] Job profitability: estimated, committed, incurred and paid costs — GST-exclusive, tested with GST fixtures
 - [ ] Draft GST/BAS summary (G1, 1A, 1B), cash/non-cash attribution, period lock and adjustments
 - [ ] AR/AP ageing, cash tracking, CSV and accountant exports

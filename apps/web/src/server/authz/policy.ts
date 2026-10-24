@@ -82,6 +82,14 @@ export function createWithPolicy(deps: PolicyDependencies) {
             { status: error.status },
           );
         }
+        if (String(error).includes("jobflow_period_locked"))
+          return privateJson(
+            {
+              error:
+                "This financial period is locked. Record an explicit correction or amendment.",
+            },
+            { status: 409 },
+          );
         const reference = crypto.randomUUID();
         log("error", "route.unhandled", {
           reference,
