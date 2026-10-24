@@ -176,6 +176,13 @@ async function newJob(body: Record<string, unknown> = {}, who: Who = "owner") {
 const move = (id: string, to: string, who: Who = "manager") =>
   r().status(call(who, "POST", { to }), one(id));
 
+/** Walk a draft job to awaiting_review, then complete it as a review would (#42). */
+async function reviewed(id: string) {
+  for (const to of ["approved", "in_progress", "awaiting_review"])
+    expect((await move(id, to)).status, to).toBe(200);
+  await db.job.update({ where: { id }, data: { status: "completed" } });
+}
+
 describe("job numbering", () => {
   it("numbers sequentially per company with the prefix snapshot", async () => {
     const first = await newJob({ agreedPriceExclusiveCents: "250000" });
@@ -268,15 +275,18 @@ describe("status machine", () => {
       "assigned",
       "in_progress",
       "awaiting_review",
-      "in_progress",
-      "awaiting_review",
-      "completed",
-      "closed",
     ]) {
       const response = await move(jobId, to);
       expect(response.status, to).toBe(200);
       expect((await response.json()).status).toBe(to);
     }
+    // Completion and rework go through the review (#42), never this route.
+    for (const to of ["completed", "in_progress"]) {
+      const refused = await move(jobId, to);
+      expect(refused.status, to).toBe(409);
+      expect((await refused.json()).error).toMatch(/review/);
+    }
+    expect((await move(jobId, "cancelled")).status).toBe(200);
     const detail = await (
       await r().read(call("owner", "GET"), one(jobId))
     ).json();
@@ -292,16 +302,13 @@ describe("status machine", () => {
       "approved→assigned",
       "assigned→in_progress",
       "in_progress→awaiting_review",
-      "awaiting_review→in_progress",
-      "in_progress→awaiting_review",
-      "awaiting_review→completed",
-      "completed→closed",
+      "awaiting_review→cancelled",
     ]);
     expect(
       await db.auditEvent.count({
         where: { companyId, action: "job.status_changed", targetId: jobId },
       }),
-    ).toBe(9);
+    ).toBe(6);
   });
 
   it("rejects illegal transitions, system-only 'invoiced' and moves out of final states", async () => {
@@ -311,19 +318,14 @@ describe("status machine", () => {
         to === "nope" ? 400 : 409,
       );
     }
-    for (const to of [
-      "approved",
-      "in_progress",
-      "awaiting_review",
-      "completed",
-    ])
-      await move(fresh, to === "in_progress" ? "in_progress" : to);
+    await reviewed(fresh);
     expect((await move(fresh, "invoiced")).status).toBe(409);
     expect((await move(jobId, "in_progress")).status).toBe(409);
     expect((await move(jobId, "cancelled")).status).toBe(409);
     expect(
       (await db.job.findUniqueOrThrow({ where: { id: fresh } })).status,
     ).toBe("completed");
+    expect((await move(fresh, "closed")).status).toBe(200);
   });
 
   it("applies only one of two concurrent moves from the same status", async () => {
@@ -346,7 +348,7 @@ describe("status machine", () => {
     await expect(
       db.jobStatusEvent.deleteMany({ where: { jobId } }),
     ).rejects.toThrow(/append-only/);
-    expect(await db.jobStatusEvent.count({ where: { jobId } })).toBe(10);
+    expect(await db.jobStatusEvent.count({ where: { jobId } })).toBe(7);
   });
 
   it("cancelled jobs stay (with their history) and can't be edited", async () => {
@@ -521,13 +523,7 @@ describe("review fixes (#111)", () => {
 
   it("cancels completed work (costs kept); an invoiced job needs the system", async () => {
     const id = (await newJob()).body.id;
-    for (const to of [
-      "approved",
-      "in_progress",
-      "awaiting_review",
-      "completed",
-    ])
-      expect((await move(id, to)).status, to).toBe(200);
+    await reviewed(id);
     expect((await move(id, "cancelled")).status).toBe(200);
 
     const invoiced = (await newJob()).body.id;
