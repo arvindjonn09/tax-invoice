@@ -24,6 +24,12 @@ Every invoice, quote, bill and expense line stores: tax code, GST rate snapshot,
   - **Credits on paid bills:** money already paid comes back as a supplier refund, which isn't built yet. Until then, a credit on a fully paid bill can't be recorded, and the accountant must adjust it on the BAS manually.
   - **Cash basis:** a bill's payments attribute against the net bill (incl GST − live credits). A credit, or its void, writes an append-only `supplier_credit_gst_adjustments` row when that changes what's attributed. The row is dated the latest of the credit's issue date, its received date and the last live payment. A void's row is dated the day of the void. A row that *raises* the claim is, for the purchaser, a decreasing adjustment (the s19-80 credit itself is increasing), and needs a verified adjustment note when that adjustment is over $75.
   - **Bills:** a bill with live credits can't be voided. Commitments from accepted offers follow the gross bill.
+  - **Reports (#54):**
+    - A credit lowers the job cost on `received_on`.
+    - On the non-cash basis, it lowers 1B on that date.
+    - On the cash basis, only its recorded adjustment rows count.
+    - A void reverses on the void day.
+    - Credits and their adjustment rows are GST sources with a `gst_source_postings` row. One dated inside a finalised period posts to the current open period, so a finalised period never changes.
 - Draft net GST = GST on sales (1A) - creditable GST on purchases (1B) ± adjustments, attributed per the company's accounting basis. This is a liability/asset, not profit.
 - Cash movement = receipts minus payments, **not** profit.
 - Do not count both timesheet and derived cost; link underlying record to cost once.

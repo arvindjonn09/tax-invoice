@@ -147,3 +147,30 @@ CREATE TRIGGER supplier_credit_gst_adjustments_append_only BEFORE UPDATE OR DELE
   FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
 
 COMMIT;
+
+-- Reporting periods (#54): a supplier credit and its cash-basis corrections
+-- are GST sources. Record their posting date like any other source, so a
+-- credit dated inside a finalised period posts to the current open period
+-- and a finalised period never changes. Its own function, not
+-- jobflow_guard_report_source, so the reporting migration stays reversible.
+CREATE FUNCTION jobflow_supplier_credit_posting() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE day date; sid uuid;
+BEGIN
+  IF TG_TABLE_NAME = 'supplier_credits' THEN
+    sid := NEW.id;
+    -- received_on >= issued_on (CHECK): the later of the two.
+    day := CASE WHEN NEW.voided_at IS NOT NULL
+      THEN (NEW.voided_at AT TIME ZONE 'Australia/Sydney')::date
+      ELSE NEW.received_on END;
+  ELSE
+    sid := NEW.credit_id;
+    day := NEW.adjusted_on;
+  END IF;
+  PERFORM jobflow_record_gst_posting(NEW.company_id, sid, day);
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER supplier_credits_reporting_period BEFORE INSERT OR UPDATE ON supplier_credits
+  FOR EACH ROW EXECUTE FUNCTION jobflow_supplier_credit_posting();
+CREATE TRIGGER supplier_credit_gst_adjustments_reporting_period BEFORE INSERT ON supplier_credit_gst_adjustments
+  FOR EACH ROW EXECUTE FUNCTION jobflow_supplier_credit_posting();

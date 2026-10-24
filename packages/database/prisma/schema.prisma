@@ -150,6 +150,11 @@ model Company {
   supplierCredits  SupplierCredit[]
 
   @@map("companies")
+  gstPeriods GstPeriod[]
+  gstManualAdjustments GstManualAdjustment[]
+  gstSourcePostings GstSourcePosting[]
+  creditCashAdjustments CreditCashAdjustment[]
+
 }
 
 enum GstAccountingBasis {
@@ -186,6 +191,7 @@ model CompanyGstRegistration {
 }
 
 model Membership {
+  creditCashAdjustments CreditCashAdjustment[]
   id                 String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId          String                   @map("company_id") @db.Uuid
   userId             String                   @map("user_id") @db.Uuid
@@ -249,6 +255,10 @@ model Membership {
   @@index([userId])
   @@index([companyId, createdBy])
   @@map("memberships")
+  gstPeriods GstPeriod[]
+  gstReportRevisions GstReportRevision[]
+  gstManualAdjustments GstManualAdjustment[]
+
 }
 
 model AuditEvent {
@@ -826,6 +836,8 @@ enum InvoicePriceEntry {
 /// assigns the number and freezes amounts, lines and party snapshots
 /// (database guard). Corrections are credit notes or a void.
 model Invoice {
+  cashAdjustments CreditCashAdjustment[] @relation("CashAdjustmentInvoice")
+  creditCashAdjustments CreditCashAdjustment[] @relation("CashAdjustmentCredit")
   id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId         String            @map("company_id") @db.Uuid
   kind              InvoiceKind       @default(invoice)
@@ -1468,4 +1480,91 @@ model SupplierCreditGstAdjustment {
   @@unique([creditId, event])
   @@index([companyId, billId])
   @@map("supplier_credit_gst_adjustments")
+}
+
+/// Finalized financial period; source changes are guarded by database triggers.
+model GstPeriod {
+  id          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String                @map("company_id") @db.Uuid
+  startsOn    DateTime              @map("starts_on") @db.Date
+  endsOn      DateTime              @map("ends_on") @db.Date
+  lockedAt    DateTime              @default(now()) @map("locked_at") @db.Timestamptz(3)
+  createdBy   String                @map("created_by") @db.Uuid
+  company     Company               @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership            @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  revisions   GstReportRevision[]
+  adjustments GstManualAdjustment[]
+
+  @@unique([companyId, id])
+  @@index([companyId, startsOn])
+  @@map("gst_periods")
+}
+
+model GstReportRevision {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId String     @map("company_id") @db.Uuid
+  periodId  String     @map("period_id") @db.Uuid
+  revision  Int
+  report    Json
+  note      String     @db.VarChar(1000)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy String     @map("created_by") @db.Uuid
+  period    GstPeriod  @relation(fields: [companyId, periodId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator   Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, periodId, revision])
+  @@map("gst_report_revisions")
+}
+
+/// Explicit accountant correction; never rewrites a source document.
+model GstManualAdjustment {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String     @map("company_id") @db.Uuid
+  periodId    String?    @map("period_id") @db.Uuid
+  effectiveOn DateTime   @map("effective_on") @db.Date
+  g1          BigInt     @default(0)
+  oneA        BigInt     @default(0) @map("one_a")
+  oneB        BigInt     @default(0) @map("one_b")
+  idempotencyKey String @map("idempotency_key") @db.VarChar(200)
+  requestHash String @map("request_hash") @db.Char(64)
+  reportRevision Int? @map("report_revision")
+  reason      String     @db.VarChar(1000)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy   String     @map("created_by") @db.Uuid
+  company     Company    @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  period      GstPeriod? @relation(fields: [companyId, periodId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId,idempotencyKey])
+  @@index([companyId, effectiveOn])
+  @@map("gst_manual_adjustments")
+}
+
+/// Immutable GST attribution dates, separate from source business dates.
+model GstSourcePosting {
+  companyId String @map("company_id") @db.Uuid
+  sourceId String @map("source_id") @db.Uuid
+  originalOn DateTime @map("original_on") @db.Date
+  effectiveOn DateTime @map("effective_on") @db.Date
+  company Company @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@id([companyId, sourceId, originalOn])
+  @@map("gst_source_postings")
+}
+
+/// Cash GST correction caused by issuing or voiding an adjustment note.
+model CreditCashAdjustment {
+ id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+ companyId String @map("company_id") @db.Uuid
+ invoiceId String @map("invoice_id") @db.Uuid
+ creditId String @map("credit_id") @db.Uuid
+ event String @db.VarChar(5)
+ adjustedOn DateTime @map("adjusted_on") @db.Date
+ gstCents BigInt @map("gst_cents")
+ createdBy String @map("created_by") @db.Uuid
+ company Company @relation(fields:[companyId],references:[id],onDelete:NoAction,onUpdate:NoAction)
+ invoice Invoice @relation("CashAdjustmentInvoice",fields:[companyId,invoiceId],references:[companyId,id],onDelete:NoAction,onUpdate:NoAction)
+ credit Invoice @relation("CashAdjustmentCredit",fields:[companyId,creditId],references:[companyId,id],onDelete:NoAction,onUpdate:NoAction)
+ creator Membership @relation(fields:[companyId,createdBy],references:[companyId,userId],onDelete:NoAction,onUpdate:NoAction)
+ @@unique([companyId,creditId,event])
+ @@map("credit_cash_adjustments")
 }

@@ -1,4 +1,8 @@
-import { createHash } from "node:crypto";
+import {
+  supplierPaymentDateProblem,
+  chronologyMessage,
+} from "../payments/chronology";
+import { createHash, randomUUID } from "node:crypto";
 import {
   type Actor,
   companyScope,
@@ -953,8 +957,29 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
               "allocations",
             );
           const payee = bills[0]!;
+          const paymentId = randomUUID(),
+            createdAt = new Date();
+          for (const allocation of allocations) {
+            if (
+              await supplierPaymentDateProblem(
+                tx,
+                actor.companyId,
+                allocation.billId,
+                balances.get(allocation.billId)!.inclusive,
+                {
+                  id: `${paymentId}:record`,
+                  date: data.paidOn,
+                  recordedAt: createdAt.toISOString(),
+                  amount: allocation.amount,
+                },
+              )
+            )
+              throw refuse(400, chronologyMessage, "paidOn");
+          }
           const created = await tx.supplierPayment.create({
             data: {
+              id: paymentId,
+              createdAt,
               companyId: actor.companyId,
               contractorId: payee.contractorId,
               payeeName: payee.supplierName,
@@ -1036,6 +1061,25 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
         const ids = before.allocations.map((allocation) => allocation.billId);
         await lockBills(tx, ids);
         const balances = await billBalances(tx, actor.companyId, ids);
+        const voidedAt = new Date(),
+          voidDay = sydneyToday(voidedAt);
+        for (const allocation of before.allocations) {
+          if (
+            await supplierPaymentDateProblem(
+              tx,
+              actor.companyId,
+              allocation.billId,
+              balances.get(allocation.billId)!.inclusive,
+              {
+                id: `${before.id}:void`,
+                date: voidDay,
+                recordedAt: voidedAt.toISOString(),
+                amount: -allocation.amountCents,
+              },
+            )
+          )
+            throw refuse(400, chronologyMessage);
+        }
         const gstAdjustments = before.allocations
           .map((allocation) => ({
             billId: allocation.billId,
@@ -1055,14 +1099,14 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
               paymentId: id,
               billId: adjustment.billId,
               creditableGstCents: adjustment.creditableGstCents,
-              adjustedOn: new Date(`${sydneyToday()}T00:00:00Z`),
+              adjustedOn: new Date(`${voidDay}T00:00:00Z`),
             })),
           });
         const updated = await tx.supplierPayment.update({
           where: { id },
           data: {
             voidReason: parsed.data.reason,
-            voidedAt: new Date(),
+            voidedAt,
             voidedBy: actor.userId,
           },
           include: { allocations: true },
