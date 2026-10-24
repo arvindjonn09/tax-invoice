@@ -1265,7 +1265,6 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
           });
           const noteProblem = cashCorrectionProblem({
             adjustment,
-            creditGst: amounts.gst,
             noteVerified: data.evidenceVerified,
           });
           if (noteProblem) throw refuse(400, noteProblem, "documentId");

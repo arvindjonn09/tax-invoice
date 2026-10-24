@@ -1336,7 +1336,7 @@ model SupplierCreditGstAdjustment {
   creditableGstCents BigInt         @map("creditable_gst_cents")
   adjustedOn         DateTime       @map("adjusted_on") @db.Date
   createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  credit             SupplierCredit @relation(fields: [companyId, creditId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  credit             SupplierCredit @relation(fields: [companyId, creditId, billId], references: [companyId, id, billId], onDelete: NoAction, onUpdate: NoAction, map: "supplier_credit_gst_adjustments_credit_fkey")
   bill               SupplierBill   @relation(fields: [companyId, billId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([creditId, event])

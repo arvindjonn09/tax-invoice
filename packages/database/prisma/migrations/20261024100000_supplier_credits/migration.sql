@@ -117,7 +117,7 @@ ALTER TABLE "supplier_credits" ADD CONSTRAINT "supplier_credits_company_id_creat
 ALTER TABLE "supplier_credits" ADD CONSTRAINT "supplier_credits_company_id_voided_by_fkey" FOREIGN KEY ("company_id", "voided_by") REFERENCES "memberships"("company_id", "user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "supplier_credit_items" ADD CONSTRAINT "supplier_credit_items_company_id_credit_id_fkey" FOREIGN KEY ("company_id", "credit_id") REFERENCES "supplier_credits"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 -- Same credit, same bill: a correction can never land on another bill.
-ALTER TABLE "supplier_credit_gst_adjustments" ADD CONSTRAINT "supplier_credit_gst_adjustments_company_id_credit_id_bill_id_fkey" FOREIGN KEY ("company_id", "credit_id", "bill_id") REFERENCES "supplier_credits"("company_id", "id", "bill_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "supplier_credit_gst_adjustments" ADD CONSTRAINT "supplier_credit_gst_adjustments_credit_fkey" FOREIGN KEY ("company_id", "credit_id", "bill_id") REFERENCES "supplier_credits"("company_id", "id", "bill_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "supplier_credit_gst_adjustments" ADD CONSTRAINT "supplier_credit_gst_adjustments_company_id_bill_id_fkey" FOREIGN KEY ("company_id", "bill_id") REFERENCES "supplier_bills"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- Credits are never deleted; the only change is a one-way void.

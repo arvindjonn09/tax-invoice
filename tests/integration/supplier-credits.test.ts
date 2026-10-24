@@ -749,27 +749,23 @@ describe("supplier credits (#140)", () => {
       ).toBe(400);
   });
 
-  it("a credit that raises the cash claim by more than $75 GST needs a verified note", async () => {
+  it("a credit that raises the cash claim by more than $75 needs a verified note", async () => {
     const job = await newJob();
-    // $1,000 + $100 taxable and $2,000 GST-free: $3,100 with $100 claimable.
+    // $1,000 + $100 taxable and $10,000 GST-free: $11,100 with $100 claimable.
     const billId = await billOf(job, [
       { taxCode: "TAXABLE_10", exclusiveCents: "100000", gstCents: "10000" },
-      { taxCode: "GST_FREE", exclusiveCents: "200000", gstCents: "0" },
+      { taxCode: "GST_FREE", exclusiveCents: "1000000", gstCents: "0" },
     ]);
-    expect((await pay(billId, "20000")).status).toBe(201);
-    expect(await cashClaim(billId)).toBe("645"); // round(200 × 100 / 3100)
+    expect((await pay(billId, "200000")).status).toBe(201);
+    expect(await cashClaim(billId)).toBe("1802"); // round(2000 × 100 / 11100)
+    // Crediting $9,000 of GST-free goods carries no GST of its own, yet the
+    // claim rises: net $2,100 with $100 claimable, round(2000 × 100 / 2100).
     const lines = [
       {
         description: "Returned stock",
         taxCode: "GST_FREE",
-        exclusiveCents: "190000",
+        exclusiveCents: "900000",
         gstCents: "0",
-      },
-      {
-        description: "Discount",
-        taxCode: "TAXABLE_10",
-        exclusiveCents: "76000",
-        gstCents: "7600",
       },
     ];
     const body = (extra: Record<string, unknown>) =>
@@ -783,20 +779,41 @@ describe("supplier credits (#140)", () => {
     expect(refused.status).toBe(400);
     expect((await refused.json()).error).toMatch(/adjustment note/);
     expect(await db.supplierCredit.count({ where: { billId } })).toBe(0);
-    // Net $364 with $24 claimable: round(200 × 24 / 364) = 1319 → +674.
+    expect(await cashClaim(billId)).toBe("1802");
     const held = await routes.credit(
       body({ documentId: await documentId("other"), evidenceVerified: true }),
       one(billId),
     );
     expect(held.status).toBe(201);
-    expect(await cashClaim(billId)).toBe("1319");
+    expect(await cashClaim(billId)).toBe("9524"); // +7722, over $75
     expect(await bill(billId)).toMatchObject({
-      creditedCents: "273600",
-      outstandingCents: "16400",
-      netCreditableGstCents: "2400",
+      creditedCents: "900000",
+      outstandingCents: "10000",
+      netCreditableGstCents: "10000",
     });
-    // Cost: $3,000 ex GST less $2,660 credited = $340.
-    expect((await profitOf(job)).cost).toBe("34000");
+    // Cost: $11,000 ex GST less $9,000 credited = $2,000.
+    expect((await profitOf(job)).cost).toBe("200000");
+  });
+
+  it("a raise of $75 or less needs no note", async () => {
+    const job = await newJob();
+    const billId = await billOf(job, [
+      { taxCode: "TAXABLE_10", exclusiveCents: "100000", gstCents: "10000" },
+      { taxCode: "GST_FREE", exclusiveCents: "200000", gstCents: "0" },
+    ]);
+    expect((await pay(billId, "20000")).status).toBe(201);
+    expect(await cashClaim(billId)).toBe("645"); // round(200 × 100 / 3100)
+    const created = await credit(
+      billId,
+      "190000",
+      "0",
+      "accountant",
+      "GST_FREE",
+    );
+    expect(created.status).toBe(201);
+    // Net $1,200 with $100 claimable: round(200 × 100 / 1200) = 1667, +$10.22.
+    expect(await cashClaim(billId)).toBe("1667");
+    expect((await profitOf(job)).cost).toBe("110000");
   });
 
   it("refuses the same supplier note twice on a bill, even concurrently", async () => {

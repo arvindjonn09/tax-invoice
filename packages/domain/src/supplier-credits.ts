@@ -11,8 +11,9 @@ import { type Purchase, calculatePurchase } from "./purchases";
 // For the purchaser its creditable GST is an increasing adjustment (s19-80:
 // input tax credit paid back) on the non-cash basis — whether or not a note
 // is held. On the cash basis the bill's live credit is re-based on the net
-// amounts; where that *raises* the credit (a decreasing adjustment, e.g. a
-// GST-free line credited on a mixed bill) the note is needed above $75 GST.
+// amounts; where that *raises* the credit (for the purchaser a decreasing
+// adjustment, e.g. a GST-free line credited on a mixed bill) a note is
+// needed when the adjustment is over $75.
 
 /** What a bill was recorded with (its snapshot). */
 export type CreditableBill = {
@@ -125,26 +126,21 @@ export function creditCashAdjustment(input: {
   );
 }
 
-/** GST at or below which no adjustment note is needed (ATO: $75). */
+/** Adjustment at or below which no adjustment note is needed (ATO: $75). */
 export const ADJUSTMENT_NOTE_THRESHOLD_CENTS = 7_500n;
 
 /**
  * Why a cash-basis correction can't be written yet, or null. A correction
- * that raises the claim is a decreasing adjustment: it needs a verified
- * adjustment note unless the credit's GST is $75 or less. A correction that
- * lowers the claim never waits for a note.
+ * that raises the claim is a decreasing adjustment for the purchaser: it
+ * needs a verified adjustment note unless the adjustment itself is $75 or
+ * less. A correction that lowers the claim never waits for a note.
  */
 export function cashCorrectionProblem(input: {
   adjustment: Cents;
-  creditGst: Cents;
   noteVerified: boolean;
 }): string | null {
-  if (
-    input.adjustment > 0n &&
-    input.creditGst > ADJUSTMENT_NOTE_THRESHOLD_CENTS &&
-    !input.noteVerified
-  )
-    return "This credit raises the GST you can claim; attach and verify the supplier's adjustment note";
+  if (input.adjustment > ADJUSTMENT_NOTE_THRESHOLD_CENTS && !input.noteVerified)
+    return "This credit raises the GST you can claim by more than $75; attach and verify the supplier's adjustment note";
   return null;
 }
 

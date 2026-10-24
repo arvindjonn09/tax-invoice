@@ -168,34 +168,18 @@ describe("supplier credits (#140)", () => {
     ).toBe(0n);
   });
 
-  it("needs a verified note only when a cash correction raises the claim above $75 GST", () => {
+  it("needs a verified note only when a cash correction raises the claim by more than $75", () => {
     expect(
-      cashCorrectionProblem({
-        adjustment: 455n,
-        creditGst: 7_501n,
-        noteVerified: false,
-      }),
+      cashCorrectionProblem({ adjustment: 7_501n, noteVerified: false }),
     ).toMatch(/adjustment note/);
     expect(
-      cashCorrectionProblem({
-        adjustment: 455n,
-        creditGst: 7_501n,
-        noteVerified: true,
-      }),
+      cashCorrectionProblem({ adjustment: 7_501n, noteVerified: true }),
     ).toBeNull();
     expect(
-      cashCorrectionProblem({
-        adjustment: 455n,
-        creditGst: 7_500n,
-        noteVerified: false,
-      }),
+      cashCorrectionProblem({ adjustment: 7_500n, noteVerified: false }),
     ).toBeNull();
     expect(
-      cashCorrectionProblem({
-        adjustment: -455n,
-        creditGst: 9_000n,
-        noteVerified: false,
-      }),
+      cashCorrectionProblem({ adjustment: -9_000n, noteVerified: false }),
     ).toBeNull();
   });
 
