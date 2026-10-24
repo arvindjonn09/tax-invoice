@@ -51,6 +51,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
   - #46 schema + API: bills from suppliers or contractors, keeping the supplier's line GST as issued (R3), linked to an accepted offer (releases the commitment once) and job; creditable GST only with verified evidence on a registered date, limited to a recorded business share; job cost (ex GST + non-creditable GST) snapshotted once; idempotent supplier payments (key + fingerprint, one transaction, locked bills, no overpayment, cash-basis 1B attribution); immutable except one-way voids. Follow-ups: #139 portal bills, #140 supplier credits, #141 on-account expenses, #142 evidence reclassification
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
+  - #48 PDF: deterministic pdf-lib rendering of the frozen issue snapshot (standard fonts only — no HTML, scripts, fonts, images or URLs fetched), stored privately once at issue in append-only `invoice_pdfs` (lazily if storage was down), 5-minute signed links via `POST /api/invoices/:id/pdf`; golden files for registered, not-registered and adjustment notes. Builder UI remains #49
 - [x] Customer receipts and allocations — #50: idempotent, transactional, no overpayment, refunds, cash-basis GST attribution per allocation
 - [ ] Financial concurrency/idempotency tests
 

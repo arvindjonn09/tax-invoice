@@ -233,6 +233,7 @@ model Membership {
   invoicesVoided        Invoice[]      @relation("InvoiceVoider")
   workEvidenceSubmitted WorkEvidence[]
 
+  invoicePdfsCreated InvoicePdf[]
   receiptsCreated CustomerReceipt[] @relation("ReceiptCreator")
   receiptsVoided  CustomerReceipt[] @relation("ReceiptVoider")
 
@@ -592,6 +593,7 @@ model Document {
 
   workEvidence WorkEvidence?
 
+  invoicePdf InvoicePdf?
   supplierBill SupplierBill?
 
   @@unique([companyId, id])
@@ -860,6 +862,7 @@ model Invoice {
   voider            Membership?       @relation("InvoiceVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   items             InvoiceItem[]
 
+  pdf InvoicePdf?
   allocations    ReceiptAllocation[]
   gstAdjustments ReceiptGstAdjustment[]
 
@@ -1112,6 +1115,26 @@ model WorkEvidence {
   @@index([companyId, jobId, createdAt])
   @@index([companyId, submittedBy])
   @@map("work_evidence")
+}
+
+/// The stored PDF of an issued invoice or credit note (#48); append-only.
+model InvoicePdf {
+  id              String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId       String     @map("company_id") @db.Uuid
+  invoiceId       String     @map("invoice_id") @db.Uuid
+  documentId      String     @map("document_id") @db.Uuid
+  sha256          String     @db.Char(64)
+  rendererVersion String     @map("renderer_version") @db.VarChar(20)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy       String     @map("created_by") @db.Uuid
+  invoice         Invoice    @relation(fields: [companyId, invoiceId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  document        Document   @relation(fields: [companyId, documentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator         Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, invoiceId])
+  @@unique([companyId, documentId])
+  @@index([companyId, createdBy])
+  @@map("invoice_pdfs")
 }
 
 /// Supplier or contractor bill (#46). Keeps the supplier's own line figures
