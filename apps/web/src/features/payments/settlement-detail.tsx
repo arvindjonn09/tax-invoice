@@ -7,6 +7,7 @@ import { FormMessage } from "@/components/form/field";
 import { formatAudCents } from "@/components/money-display";
 import { useRemote } from "@/components/data/use-remote";
 import { type Receipt, type SupplierPayment, methodLabel } from "./types";
+import { useAllPages } from "./use-all-pages";
 import { VoidButton } from "./void-dialog";
 
 const aud = (cents: string) => `${formatAudCents(BigInt(cents))} AUD`;
@@ -168,15 +169,14 @@ export function ReceiptDetail({
   const customer = useRemote<{ name: string }>(
     receipt ? `/api/customers/${receipt.customerId}` : null,
   );
-  const invoices = useRemote<{
-    invoices: { id: string; reference: string | null }[];
-  }>(
+  const invoices = useAllPages<{ id: string; reference: string | null }>(
     receipt
-      ? `/api/invoices?${new URLSearchParams({ customerId: receipt.customerId, kind: "invoice", pageSize: "100" })}`
+      ? `/api/invoices?${new URLSearchParams({ customerId: receipt.customerId, kind: "invoice" })}`
       : null,
+    "invoices",
   );
   const references = new Map(
-    (invoices.data?.invoices ?? []).map((invoice) => [
+    (invoices.rows ?? []).map((invoice) => [
       invoice.id,
       invoice.reference ?? "",
     ]),

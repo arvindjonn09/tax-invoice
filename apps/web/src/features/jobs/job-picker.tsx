@@ -7,8 +7,8 @@ import { useRemote } from "@/components/data/use-remote";
 type JobRow = { id: string; reference: string; title: string };
 
 /**
- * Searchable, paged job choice. Status and customer filters are applied by
- * the server before paging, so an older eligible job is always reachable.
+ * Searchable, paged job choice. The customer filter is applied by the
+ * server before paging, so an older job is always reachable.
  */
 export function JobPicker({
   id,
@@ -18,7 +18,6 @@ export function JobPicker({
   onChange,
   error,
   customerId,
-  statuses,
   emptyLabel,
   disabled,
 }: {
@@ -29,7 +28,6 @@ export function JobPicker({
   onChange: (id: string) => void;
   error?: string | undefined;
   customerId?: string;
-  statuses?: readonly string[];
   emptyLabel: string;
   disabled?: boolean;
 }) {
@@ -38,7 +36,6 @@ export function JobPicker({
   const [selected, setSelected] = useState("");
   const params = new URLSearchParams({ q, page: String(page), pageSize: "20" });
   if (customerId) params.set("customerId", customerId);
-  if (statuses?.length) params.set("status", statuses.join(","));
   const {
     data,
     error: failure,

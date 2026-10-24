@@ -102,6 +102,8 @@ function SettleForm({
   const touch = () => {
     setDirty(true);
     setMessage(null);
+    setErrors({});
+    setTargetErrors({});
     // A changed request is a new attempt; an unchanged retry keeps the key.
     key.current = idempotencyKey();
   };
@@ -316,7 +318,7 @@ export function SupplierPaymentForm({
   billId: string | null;
 }) {
   const router = useRouter();
-  const bills = useAllPages<Bill>("/api/bills?status=live", "bills");
+  const bills = useAllPages<Bill>("/api/bills?status=owing", "bills");
   const owing = (bills.rows ?? []).filter(
     (bill) => BigInt(bill.outstandingCents) > 0n,
   );
@@ -366,25 +368,43 @@ export function SupplierPaymentForm({
         current ? "This supplier has no bills owing." : "Choose who you paid."
       }
       before={
-        <Field id="settle-payee" label="Paid to (required)">
-          {(control) => (
-            <select
-              {...control}
-              value={current}
-              onChange={(event) => {
-                setPayee(event.target.value);
-                setState({});
-              }}
+        <>
+          {bills.truncated ? (
+            <p
+              role="status"
+              className="rounded-sm bg-warning p-3 text-warning-foreground"
             >
-              <option value="">Choose a supplier with bills owing</option>
-              {payees.map(([key, name]) => (
-                <option key={key} value={key}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
+              Showing the newest 5,000 owing bills only.
+            </p>
+          ) : null}
+          {billId && bills.rows && !preset ? (
+            <p
+              role="status"
+              className="rounded-sm bg-warning p-3 text-warning-foreground"
+            >
+              That bill has nothing owing (it’s paid or void).
+            </p>
+          ) : null}
+          <Field id="settle-payee" label="Paid to (required)">
+            {(control) => (
+              <select
+                {...control}
+                value={current}
+                onChange={(event) => {
+                  setPayee(event.target.value);
+                  setState({});
+                }}
+              >
+                <option value="">Choose a supplier with bills owing</option>
+                {payees.map(([key, name]) => (
+                  <option key={key} value={key}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+        </>
       }
       submitLabel="Record payment"
       url="/api/supplier-payments"

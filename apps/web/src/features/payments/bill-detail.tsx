@@ -265,7 +265,7 @@ export function BillDetail({
               {!bill.companyGstRegistered
                 ? "Not registered for GST on the bill date: no GST credit."
                 : bill.hasEvidence
-                  ? `Tax invoice held · ${bill.creditablePercent}% business use${bill.creditableReason ? ` (${bill.creditableReason})` : ""}.`
+                  ? `${bill.documentKind === "tax_invoice" ? "Tax invoice held" : "Receipt held ($82.50 or less)"} · ${bill.creditablePercent}% business use${bill.creditableReason ? ` (${bill.creditableReason})` : ""}.`
                   : "No verified evidence held, so none of its GST can be claimed (over $82.50 needs a tax invoice)."}
             </p>
             {bill.documentId ? (

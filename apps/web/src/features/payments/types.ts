@@ -10,6 +10,7 @@ export type Bill = {
   issuedOn: string;
   dueOn: string | null;
   documentId: string | null;
+  documentKind: "tax_invoice" | "receipt" | "photo" | "other" | null;
   evidenceVerified: boolean;
   hasEvidence: boolean;
   companyGstRegistered: boolean;

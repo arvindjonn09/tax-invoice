@@ -66,6 +66,9 @@ export function BillForm({ today }: { today: string }) {
   const [share, setShare] = useState("100");
   const [reason, setReason] = useState("");
   const [verified, setVerified] = useState(false);
+  const [documentKind, setDocumentKind] = useState<"tax_invoice" | "receipt">(
+    "tax_invoice",
+  );
   const [note, setNote] = useState("");
   const [uploaded, setUploaded] = useState<{
     id: string;
@@ -168,7 +171,7 @@ export function BillForm({ today }: { today: string }) {
       }
       const body = new FormData();
       body.set("file", chosen);
-      body.set("kind", "tax_invoice");
+      body.set("kind", documentKind);
       const response = await fetch("/api/documents", {
         method: "POST",
         body,
@@ -564,9 +567,31 @@ export function BillForm({ today }: { today: string }) {
         >
           <legend className="text-xl font-semibold">GST claim</legend>
           <Field
+            id="bill-document-kind"
+            label="Evidence type"
+            hint="GST on a bill over $82.50 incl GST is claimable only with a tax invoice; up to $82.50 a receipt is enough."
+          >
+            {(control) => (
+              <select
+                {...control}
+                value={documentKind}
+                onChange={(event) => {
+                  setDocumentKind(
+                    event.target.value as "tax_invoice" | "receipt",
+                  );
+                  setUploaded(null);
+                  touch();
+                }}
+              >
+                <option value="tax_invoice">Tax invoice</option>
+                <option value="receipt">Receipt ($82.50 or less)</option>
+              </select>
+            )}
+          </Field>
+          <Field
             id="bill-document"
-            label="Supplier's tax invoice (photo or PDF)"
-            hint="JPEG, PNG, WebP, HEIC or PDF, at most 10 MB. GST on bills over $82.50 is claimable only with a tax invoice."
+            label="Supplier's document (photo or PDF)"
+            hint="JPEG, PNG, WebP, HEIC or PDF, at most 10 MB."
             error={errors.documentId}
           >
             {(control) => (
@@ -597,8 +622,9 @@ export function BillForm({ today }: { today: string }) {
               }}
             />
             <span>
-              I checked the attached document is a valid tax invoice (supplier
-              ABN, date, GST shown).
+              I checked the attached document: it is from this supplier, is
+              dated, and shows the GST charged (a tax invoice also shows the
+              supplier’s ABN).
             </span>
           </label>
           <div className="grid gap-4 md:grid-cols-2">

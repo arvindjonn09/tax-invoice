@@ -1,5 +1,6 @@
 import {
   type Actor,
+  can,
   companyScope,
   notFound,
   requireSameCompany,
@@ -273,13 +274,16 @@ export function invoiceHandlers(db: () => PrismaClient) {
     ]);
     // Issued invoices carry what's been received and what's still owed, so
     // receipt allocation can show balances without a request per invoice.
-    const balances = await invoiceBalances(
-      db(),
-      actor.companyId,
-      rows
-        .filter((row) => row.kind === "invoice" && row.status === "issued")
-        .map((row) => row.id),
-    );
+    // Payment amounts are payment data: only for roles that may read it.
+    const balances = can(actor.role, "payment.read")
+      ? await invoiceBalances(
+          db(),
+          actor.companyId,
+          rows
+            .filter((row) => row.kind === "invoice" && row.status === "issued")
+            .map((row) => row.id),
+        )
+      : new Map();
     return privateJson({
       page,
       pageSize: take,

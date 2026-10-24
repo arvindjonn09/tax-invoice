@@ -10,7 +10,10 @@ const MAX_PAGES = 50;
  * all of a customer's invoices or a supplier's bills, not just the newest
  * page. `truncated` is true if the cap was hit.
  */
-export function useAllPages<T>(url: string | null, key: string) {
+export function useAllPages<T extends { id: string }>(
+  url: string | null,
+  key: string,
+) {
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState<{
     url: string;
@@ -36,7 +39,9 @@ export function useAllPages<T>(url: string | null, key: string) {
             total: number;
             pageSize: number;
           };
-          rows.push(...((body[key] as T[] | undefined) ?? []));
+          // Offset paging can repeat a row if one is added mid-load.
+          for (const row of (body[key] as T[] | undefined) ?? [])
+            if (!rows.some((seen) => seen.id === row.id)) rows.push(row);
           if (page * body.pageSize >= body.total) {
             setResult({ url, revision, rows, truncated: false });
             return;
