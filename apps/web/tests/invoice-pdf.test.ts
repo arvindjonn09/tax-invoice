@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { inflateSync } from "node:zlib";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import {
@@ -197,6 +198,67 @@ describe("invoice PDF content (#48 golden files)", () => {
     expect(aud(-22_000n)).toBe("-$220.00");
     expect(longDate("2026-07-15")).toBe("15 July 2026");
     expect(longDate("2027-01-01")).toBe("1 January 2027");
+  });
+});
+
+/** Every drawn text run per page: its baseline y and decoded text. */
+async function drawnText(bytes: Uint8Array) {
+  const document = await PDFDocument.load(bytes);
+  return document.getPages().map((page) => {
+    const contents = page.node.Contents();
+    const streams =
+      contents && "asArray" in contents
+        ? contents.asArray()
+        : contents
+          ? [contents]
+          : [];
+    const source = streams
+      .map((ref) => {
+        const stream = document.context.lookup(ref) as unknown as {
+          getContents(): Uint8Array;
+          dict: { toString(): string };
+        };
+        const raw = Buffer.from(stream.getContents());
+        return stream.dict.toString().includes("FlateDecode")
+          ? inflateSync(raw).toString("latin1")
+          : raw.toString("latin1");
+      })
+      .join("\n");
+    return [
+      ...source.matchAll(
+        /1 0 0 1 ([\d.]+) ([\d.-]+) Tm\s*<([0-9A-Fa-f]*)> Tj/g,
+      ),
+    ].map((match) => ({
+      y: Number(match[2]),
+      text: Buffer.from(match[3]!, "hex").toString("latin1"),
+    }));
+  });
+}
+
+describe("line descriptions taller than a page (#145 review)", () => {
+  it("continue on following pages and never draw below the margin", async () => {
+    const entries = Array.from(
+      { length: 70 },
+      (_, index) => `Entry ${index + 1}`,
+    );
+    const pages = await drawnText(
+      await renderInvoicePdf(
+        invoiceDocument({
+          ...registered,
+          lines: [{ ...registered.lines[0]!, description: entries.join("\n") }],
+        }),
+      ),
+    );
+    expect(pages.length).toBeGreaterThan(1);
+    for (const runs of pages)
+      for (const run of runs) expect(run.y).toBeGreaterThanOrEqual(50);
+    const drawn = pages.flat().map((run) => run.text);
+    for (const entry of entries) expect(drawn).toContain(entry);
+    // Continuation pages repeat the title and the table header.
+    for (const runs of pages.slice(1))
+      expect(runs.map((run) => run.text)).toContain(
+        `${registered.title} (continued)`,
+      );
   });
 });
 
