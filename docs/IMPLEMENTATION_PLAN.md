@@ -39,6 +39,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
   - #35 schema + API: contractors (ABN, GST flag, optional subcontractor login), fixed/hourly offers in GST-exclusive cents with a tax code, accept/decline with immutable acceptance snapshots and committed cost recorded once; portal screens remain #37
 - [ ] Employee timesheets with cost-rate snapshots
 - [ ] Expenses with GST code, creditable portion, receipts and approvals
+  - #40 schema + API: job/general expenses, ex/incl entry, tax code, creditable share, receipt, settlement (paid at purchase / on account, company default), approval snapshots the cost once, decided expenses frozen, reversal corrections; screens remain #41
 - [ ] Work evidence and completion approval
 
 ## M3 Quotes, bills, invoices and payments
