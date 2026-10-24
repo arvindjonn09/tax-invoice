@@ -50,3 +50,7 @@ attachment API; that test does not prove storage/backend integration.
   requires #42 plus MinIO and has not run before that dependency lands.
 - Real evidence attachment/submission remains a merge gate on #42. No schema,
   dependency or third-party component was added by #37.
+
+## Rework instructions (#147)
+
+The accepted-work evidence panel displays the authorized `reworkRequests` notes and dates returned by #42. Notes remain visible as history after resubmission, preserve line breaks, and render as escaped React text. It does not request office status history. A real note-only browser regression covers submission, office rework, visible instructions, text escaping and resubmission without mocking the evidence API or requiring object storage.
