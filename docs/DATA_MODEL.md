@@ -63,3 +63,11 @@ rather than silently repairing it; its test-only rollback removes only that inde
 - **Final once decided:** a trigger refuses deletes, any change to an approved or rejected expense, and any change to what was submitted while deciding it. A correction is an approved **reversal** row (`reverses_id`, unique) carrying the original's exact negated cents and snapshot. A reversal corrects **cost and GST only** (`settlement` null) unless an actual **refund** (paid expenses, with its date and method) or **supplier credit** (on-account expenses) is recorded with it. A cost correction never invents cash movement.
 - Employees submit only for jobs they are live-assigned to, and see their own submissions without the approval snapshot. Only the submitter edits a submitted expense.
 
+## Employee cost rates and timesheets (#38)
+
+- `employee_rate_history`: an internal hourly cost (integer cents, $0–$1m) per employee from an `effective_from` date. It's **append-only** (trigger), with one rate per start date; a correction is a new start date. There's no payroll, super or PAYG: this is a management cost rate only.
+- `timesheets`: minutes (1–1440) on a work date for a job, optionally one of its visits (composite FK, so the visit belongs to that job). Only an employee **live-assigned** to the job (or, for a visit-only assignment, to that visit) can submit, and never for a cancelled visit or a future date. Eligibility is re-checked inside the write transaction after taking #32's locks (job, then employee).
+- **Approval** snapshots the rate in effect on the work date (`rate_id`, `hourly_cost_cents`) and `cost_cents` = round(minutes × rate / 60) **once**. A rate added later, even backdated, never changes an approved timesheet. With no rate on the work date, approval is refused (409) rather than guessed. Labour carries no GST, so it enters job cost as an internal cost.
+- **Never counted twice:** a decided timesheet is frozen by a trigger (no edits, no deletes); a correction is an approved reversal with negated minutes and cost at the same snapshotted rate (unique per timesheet). Job labour is the sum of `cost_cents` over approved rows.
+- Visibility: employees see their own timesheets without rate or cost. The office list needs `timesheet.approve`; rates and costs additionally need `employee.cost_rate.read` (owner, manager).
+
