@@ -19,6 +19,7 @@ export async function lockDocumentClaim(
     include: {
       expense: { select: { id: true } },
       supplierBill: { select: { id: true } },
+      billEvidence: { select: { id: true } },
       workEvidence: { select: { id: true } },
     },
   });

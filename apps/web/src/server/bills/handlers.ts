@@ -14,6 +14,7 @@ import {
   type EvidenceDocument,
   TAX_CODES,
   billCost,
+  billEvidenceReclass,
   billLine,
   billLineProblem,
   billOutstanding,
@@ -27,6 +28,7 @@ import type {
   Prisma,
   PrismaClient,
   SupplierBill,
+  SupplierBillEvidence,
   SupplierBillItem,
   SupplierPayment,
   SupplierPaymentAllocation,
@@ -54,6 +56,7 @@ import { Refusal, inTransaction } from "../jobs/handlers";
 type IdContext = { params: Promise<{ id: string }> };
 type BillRow = SupplierBill & {
   items: SupplierBillItem[];
+  evidence: SupplierBillEvidence | null;
   allocations: (SupplierPaymentAllocation & {
     payment: Pick<SupplierPayment, "voidedAt" | "paidOn">;
   })[];
@@ -116,6 +119,12 @@ const CreatePayment = z.object({
     .max(100),
 });
 const Void = z.object({ reason: requiredText(500, "Say why it's void") });
+const Evidence = z.object({
+  /** The tax invoice that arrived; defaults to the bill's own attachment. */
+  documentId: z.uuid().nullable().optional(),
+  /** The day the evidence is held (defaults to today). */
+  heldOn: day.optional(),
+});
 
 /** Client-chosen, opaque; the same key replays the same payment. */
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{8,200}$/;
@@ -132,6 +141,7 @@ const refuse = (status: 400 | 409, error: string, field?: string) =>
 const BILL_INCLUDE = {
   items: { orderBy: { position: "asc" } },
   document: { select: { kind: true } },
+  evidence: true,
   allocations: {
     include: { payment: { select: { voidedAt: true, paidOn: true } } },
   },
@@ -172,6 +182,21 @@ function billView(row: BillRow) {
     creditableGstCents: row.creditableGstCents.toString(),
     nonCreditableGstCents: row.nonCreditableGstCents.toString(),
     jobCostCents: row.jobCostCents.toString(),
+    /** Late evidence (#142): moved GST from job cost to credit on heldOn. */
+    lateEvidence: row.evidence
+      ? {
+          documentId: row.evidence.documentId,
+          heldOn: toDay(row.evidence.adjustedOn),
+          creditableGstCents: row.evidence.creditableGstCents.toString(),
+        }
+      : null,
+    /** Current figures: the recorded snapshot plus any late evidence. */
+    currentCreditableGstCents: (
+      row.creditableGstCents + (row.evidence?.creditableGstCents ?? 0n)
+    ).toString(),
+    currentJobCostCents: (
+      row.jobCostCents - (row.evidence?.creditableGstCents ?? 0n)
+    ).toString(),
     paidCents: paid.toString(),
     outstandingCents: outstanding.toString(),
     status: row.voidedAt ? "void" : outstanding === 0n ? "paid" : "open",
@@ -232,9 +257,17 @@ export async function billBalances(
   db: Prisma.TransactionClient | PrismaClient,
   companyId: string,
   billIds: readonly string[],
-): Promise<Map<string, BillBalance & { bill: SupplierBill }>> {
+): Promise<
+  Map<
+    string,
+    BillBalance & {
+      bill: SupplierBill & { evidence: SupplierBillEvidence | null };
+    }
+  >
+> {
   const bills = await db.supplierBill.findMany({
     where: { companyId, id: { in: [...billIds] }, voidedAt: null },
+    include: { evidence: true },
   });
   const paid = await db.supplierPaymentAllocation.groupBy({
     by: ["billId"],
@@ -257,6 +290,13 @@ export async function billBalances(
   const attributedBy = new Map(
     adjusted.map((row) => [row.billId, row._sum.creditableGstCents ?? 0n]),
   );
+  // Late evidence (#142) adds credit and, on the cash basis, its catch-up.
+  for (const bill of bills)
+    if (bill.evidence)
+      attributedBy.set(
+        bill.id,
+        (attributedBy.get(bill.id) ?? 0n) + bill.evidence.cashCatchUpGstCents,
+      );
   for (const row of paid)
     attributedBy.set(
       row.billId,
@@ -269,7 +309,8 @@ export async function billBalances(
       {
         billId: bill.id,
         inclusive: bill.inclusiveCents,
-        creditableGst: bill.creditableGstCents,
+        creditableGst:
+          bill.creditableGstCents + (bill.evidence?.creditableGstCents ?? 0n),
         paid: paidBy.get(bill.id) ?? 0n,
         attributed: attributedBy.get(bill.id) ?? 0n,
         bill,
@@ -296,7 +337,12 @@ export async function jobBillCosts(
   const [bills, acceptances] = await Promise.all([
     db.supplierBill.findMany({
       where: { companyId, jobId, voidedAt: null },
-      select: { jobCostCents: true, offerId: true, exclusiveCents: true },
+      select: {
+        jobCostCents: true,
+        offerId: true,
+        exclusiveCents: true,
+        evidence: { select: { creditableGstCents: true } },
+      },
     }),
     db.contractorAcceptance.findMany({
       where: { companyId, jobId },
@@ -320,7 +366,11 @@ export async function jobBillCosts(
     0n,
   );
   return {
-    incurred: bills.reduce((total, bill) => total + bill.jobCostCents, 0n),
+    incurred: bills.reduce(
+      (total, bill) =>
+        total + bill.jobCostCents - (bill.evidence?.creditableGstCents ?? 0n),
+      0n,
+    ),
     committed,
   };
 }
@@ -696,7 +746,148 @@ export function billHandlers(db: () => PrismaClient) {
     });
   };
 
-  return { list, read, create, void: voidIt };
+  /**
+   * Record the tax invoice for a bill recorded without evidence (#142, R6):
+   * an audited reclassification moving its claimable GST from job cost to
+   * creditable GST on the day the evidence is held. The bill is not edited.
+   */
+  const evidence: PolicyHandler<IdContext> = async ({
+    actor,
+    request,
+    context,
+  }) => {
+    const parsed = Evidence.safeParse(await jsonOrNull(request));
+    if (!parsed.success) return invalid(parsed.error);
+    const heldOn = parsed.data.heldOn ?? sydneyToday();
+    if (heldOn > sydneyToday())
+      return fail(400, "The date can't be in the future", "heldOn");
+    const id = uuidOrNull((await context.params).id);
+    if (!id) throw notFound();
+    return inTransaction(async () => {
+      const row = await withAudit(db(), async (tx, audit) => {
+        await lockRow(tx, "supplier_bills", id);
+        const before = requireSameCompany(
+          actor,
+          await tx.supplierBill.findUnique({
+            where: { id },
+            include: BILL_INCLUDE,
+          }),
+        );
+        if (before.voidedAt) throw refuse(409, "It's void");
+        if (before.hasEvidence || before.evidence)
+          throw refuse(409, "This bill already has its evidence");
+        const issuedOn = toDay(before.issuedOn);
+        if (heldOn < issuedOn)
+          throw refuse(
+            400,
+            "Evidence can't be held before the bill date",
+            "heldOn",
+          );
+        const settled = before.allocations.flatMap((a) => [
+          toDay(a.payment.paidOn),
+          ...(a.payment.voidedAt ? [sydneyToday(a.payment.voidedAt)] : []),
+        ]);
+        if (settled.some((date) => date > heldOn))
+          throw refuse(
+            400,
+            "Choose a date on or after the bill's latest payment",
+            "heldOn",
+          );
+        const documentId = parsed.data.documentId ?? before.documentId;
+        if (!documentId)
+          throw refuse(400, "Attach the tax invoice", "documentId");
+        let document: EvidenceDocument;
+        if (documentId === before.documentId)
+          document = before.document!.kind as "tax_invoice" | "receipt";
+        else {
+          const found = await lockDocumentClaim(
+            tx,
+            actor.companyId,
+            documentId,
+          );
+          if (!found || !["tax_invoice", "receipt"].includes(found.kind))
+            throw refuse(
+              400,
+              "Attach an uploaded tax invoice or receipt",
+              "documentId",
+            );
+          if (
+            found.expense ||
+            found.workEvidence ||
+            found.supplierBill ||
+            found.billEvidence
+          )
+            throw refuse(
+              400,
+              "That document is already attached to another record",
+              "documentId",
+            );
+          document = found.kind as "tax_invoice" | "receipt";
+        }
+        const cash =
+          (await companyGstStatusOn(tx, actor.companyId, issuedOn)).basis ===
+          "cash";
+        const balance = (await billBalances(tx, actor.companyId, [id])).get(
+          id,
+        )!;
+        const result = billEvidenceReclass(
+          before.items.map((item) =>
+            billLine({
+              taxCode: item.taxCode as (typeof TAX_CODES)[number],
+              exclusive: item.exclusiveCents,
+              gst: item.gstCents,
+            }),
+          ),
+          {
+            companyRegistered: before.companyGstRegistered,
+            document,
+            creditableBasisPoints: BigInt(before.creditableBasisPoints),
+            recordedCreditableGst: before.creditableGstCents,
+            cash,
+            paid: balance.paid,
+            attributed: balance.attributed,
+          },
+        );
+        if ("problem" in result)
+          throw refuse(400, result.problem, "documentId");
+        const recorded = await tx.supplierBillEvidence.create({
+          data: {
+            companyId: actor.companyId,
+            billId: id,
+            documentId,
+            adjustedOn: new Date(`${heldOn}T00:00:00Z`),
+            creditableGstCents: result.creditableGst,
+            cashCatchUpGstCents: result.cashCatchUp,
+            createdBy: actor.userId,
+          },
+        });
+        await audit({
+          companyId: actor.companyId,
+          actorUserId: actor.userId,
+          action: "bill.evidence_recorded",
+          target: { type: "supplier_bill", id },
+          before: {
+            creditableGstCents: before.creditableGstCents.toString(),
+            jobCostCents: before.jobCostCents.toString(),
+          },
+          after: {
+            evidenceId: recorded.id,
+            documentId,
+            heldOn,
+            creditableGstCents: result.creditableGst.toString(),
+            cashCatchUpGstCents: result.cashCatchUp.toString(),
+          },
+        });
+        return tx.supplierBill.findUniqueOrThrow({
+          where: { id },
+          include: BILL_INCLUDE,
+        });
+      });
+      return privateJson(billView(row));
+    });
+  };
+
+  return { list, read, create, void: voidIt, evidence };
 }
 
 /** Stable fingerprint of what was asked for (keys sorted, cents as strings). */
@@ -839,6 +1030,25 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
               "allocations",
             );
           const payee = bills[0]!;
+          // Late evidence's cash catch-up covered what was paid by its day, so
+          // a cash-basis payment can't be dated before it (#142).
+          for (const bill of bills)
+            if (
+              bill.evidence &&
+              data.paidOn < toDay(bill.evidence.adjustedOn) &&
+              (
+                await companyGstStatusOn(
+                  tx,
+                  actor.companyId,
+                  toDay(bill.issuedOn),
+                )
+              ).basis === "cash"
+            )
+              throw refuse(
+                400,
+                "Choose a date on or after the day this bill's tax invoice was held",
+                "paidOn",
+              );
           const paymentId = randomUUID(),
             createdAt = new Date();
           for (const allocation of allocations) {

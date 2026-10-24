@@ -2020,24 +2020,18 @@ it("backfills GST source postings when deploying over legacy financial rows", as
   try {
     // Down/up leaves immutable source documents in place, simulating first
     // deployment of the reporting migration against a pre-reporting database.
-    await connection.query(
-      readFileSync(
-        new URL(
-          "../../packages/database/prisma/rollbacks/20261023210000_reporting_periods.sql",
-          import.meta.url,
+    // Later migrations roll back first and reapply after (newest first).
+    const sql = (path: string) =>
+      connection.query(
+        readFileSync(
+          new URL(`../../packages/database/prisma/${path}`, import.meta.url),
+          "utf8",
         ),
-        "utf8",
-      ),
-    );
-    await connection.query(
-      readFileSync(
-        new URL(
-          "../../packages/database/prisma/migrations/20261023210000_reporting_periods/migration.sql",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    );
+      );
+    await sql("rollbacks/20261024090000_bill_evidence.sql");
+    await sql("rollbacks/20261023210000_reporting_periods.sql");
+    await sql("migrations/20261023210000_reporting_periods/migration.sql");
+    await sql("migrations/20261024090000_bill_evidence/migration.sql");
   } finally {
     await connection.end();
   }

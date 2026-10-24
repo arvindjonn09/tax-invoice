@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   type BillBalance,
   billCost,
+  billEvidenceReclass,
   billLine,
   billLineProblem,
   billOutstanding,
@@ -246,5 +247,66 @@ describe("supplier bills (#46)", () => {
     expect(
       jobCostExposure({ incurred: [45_000n], commitments: [half] }),
     ).toEqual({ incurred: 45_000n, committed: 45_000n, total: 90_000n });
+  });
+});
+
+describe("late bill evidence (#142, R6)", () => {
+  // $900 + $90 GST recorded without evidence: all $90 sat in job cost.
+  const recorded = {
+    companyRegistered: true,
+    document: "tax_invoice" as const,
+    creditableBasisPoints: 10_000n,
+    recordedCreditableGst: 0n,
+    cash: false,
+    paid: 0n,
+    attributed: 0n,
+  };
+
+  it("moves the claimable GST from job cost to credit", () => {
+    expect(billEvidenceReclass(subcontractor, recorded)).toEqual({
+      creditableGst: 9_000n,
+      cashCatchUp: 0n,
+    });
+    expect(
+      billEvidenceReclass(subcontractor, {
+        ...recorded,
+        creditableBasisPoints: 5_000n,
+      }),
+    ).toEqual({ creditableGst: 4_500n, cashCatchUp: 0n });
+  });
+
+  it("on the cash basis, catches up the credit for what was already paid", () => {
+    expect(
+      billEvidenceReclass(subcontractor, {
+        ...recorded,
+        cash: true,
+        paid: 49_500n,
+      }),
+    ).toEqual({ creditableGst: 9_000n, cashCatchUp: 4_500n });
+    expect(
+      billEvidenceReclass(subcontractor, {
+        ...recorded,
+        cash: true,
+        paid: 99_000n,
+      }),
+    ).toEqual({ creditableGst: 9_000n, cashCatchUp: 9_000n });
+  });
+
+  it("refuses a receipt above $82.50 and bills with nothing claimable", () => {
+    expect(
+      billEvidenceReclass(subcontractor, { ...recorded, document: "receipt" }),
+    ).toHaveProperty("problem", expect.stringMatching(/tax invoice/));
+    expect(
+      billEvidenceReclass(subcontractor, {
+        ...recorded,
+        companyRegistered: false,
+      }),
+    ).toHaveProperty("problem", expect.stringMatching(/nothing to reclassify/));
+    expect(
+      billEvidenceReclass(subcontractor, {
+        ...recorded,
+        recordedCreditableGst: 9_000n,
+      }),
+    ).toHaveProperty("problem", expect.stringMatching(/nothing to reclassify/));
   });
 });

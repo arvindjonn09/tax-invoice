@@ -144,16 +144,15 @@ model Company {
   defaultExpenseSettlement ExpenseSettlement @default(paid_at_purchase) @map("default_expense_settlement")
   expenses                 Expense[]
 
-  quotes Quote[]
-  supplierBills    SupplierBill[]
-  supplierPayments SupplierPayment[]
-
-  @@map("companies")
-  gstPeriods GstPeriod[]
-  gstManualAdjustments GstManualAdjustment[]
-  gstSourcePostings GstSourcePosting[]
+  quotes                Quote[]
+  supplierBills         SupplierBill[]
+  supplierPayments      SupplierPayment[]
+  gstPeriods            GstPeriod[]
+  gstManualAdjustments  GstManualAdjustment[]
+  gstSourcePostings     GstSourcePosting[]
   creditCashAdjustments CreditCashAdjustment[]
 
+  @@map("companies")
 }
 
 enum GstAccountingBasis {
@@ -191,38 +190,38 @@ model CompanyGstRegistration {
 
 model Membership {
   creditCashAdjustments CreditCashAdjustment[]
-  id                 String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId          String                   @map("company_id") @db.Uuid
-  userId             String                   @map("user_id") @db.Uuid
-  role               MembershipRole
-  isActive           Boolean                  @default(true) @map("is_active")
-  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy          String                   @map("created_by") @db.Uuid
-  company            Company                  @relation("CompanyMemberships", fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  user               User                     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  creator            Membership               @relation("MembershipCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  createdMemberships Membership[]             @relation("MembershipCreator")
-  createdCompanies   Company[]                @relation("CompanyCreator")
-  auditEvents        AuditEvent[]
-  idempotencyKeys    IdempotencyKey[]
-  gstRegistrations   CompanyGstRegistration[]
-  employeesCreated   Employee[]               @relation("EmployeeCreator")
-  employeeRecords    Employee[]               @relation("EmployeeUser")
-  customersCreated   Customer[]
-  contactsCreated    CustomerContact[]
-  locationsCreated   Location[]
-  jobsCreated        Job[]
-  jobEventsCreated   JobStatusEvent[]
-  jobVisitsCreated   JobVisit[]
-  assignmentsCreated Assignment[]             @relation("AssignmentCreator")
-  assignmentsEnded   Assignment[]             @relation("AssignmentEnder")
-  documentsCreated   Document[]
-  contractorsCreated Contractor[]             @relation("ContractorCreator")
-  contractorRecords  Contractor[]             @relation("ContractorUser")
-  offersCreated      ContractorOffer[]        @relation("ContractorOfferCreator")
-  offersResponded    ContractorOffer[]        @relation("ContractorOfferResponder")
-  acceptances        ContractorAcceptance[]
+  id                    String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId             String                   @map("company_id") @db.Uuid
+  userId                String                   @map("user_id") @db.Uuid
+  role                  MembershipRole
+  isActive              Boolean                  @default(true) @map("is_active")
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy             String                   @map("created_by") @db.Uuid
+  company               Company                  @relation("CompanyMemberships", fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user                  User                     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator               Membership               @relation("MembershipCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  createdMemberships    Membership[]             @relation("MembershipCreator")
+  createdCompanies      Company[]                @relation("CompanyCreator")
+  auditEvents           AuditEvent[]
+  idempotencyKeys       IdempotencyKey[]
+  gstRegistrations      CompanyGstRegistration[]
+  employeesCreated      Employee[]               @relation("EmployeeCreator")
+  employeeRecords       Employee[]               @relation("EmployeeUser")
+  customersCreated      Customer[]
+  contactsCreated       CustomerContact[]
+  locationsCreated      Location[]
+  jobsCreated           Job[]
+  jobEventsCreated      JobStatusEvent[]
+  jobVisitsCreated      JobVisit[]
+  assignmentsCreated    Assignment[]             @relation("AssignmentCreator")
+  assignmentsEnded      Assignment[]             @relation("AssignmentEnder")
+  documentsCreated      Document[]
+  contractorsCreated    Contractor[]             @relation("ContractorCreator")
+  contractorRecords     Contractor[]             @relation("ContractorUser")
+  offersCreated         ContractorOffer[]        @relation("ContractorOfferCreator")
+  offersResponded       ContractorOffer[]        @relation("ContractorOfferResponder")
+  acceptances           ContractorAcceptance[]
 
   invitationsCreated  UserInvitation[]
   ratesCreated        EmployeeRate[]   @relation("EmployeeRateCreator")
@@ -236,26 +235,27 @@ model Membership {
   invoicesVoided        Invoice[]      @relation("InvoiceVoider")
   workEvidenceSubmitted WorkEvidence[]
 
-  quotesCreated Quote[] @relation("QuoteCreator")
-  quotesSent    Quote[] @relation("QuoteSender")
-  quotesDecided Quote[] @relation("QuoteDecider")
+  quotesCreated      Quote[]           @relation("QuoteCreator")
+  quotesSent         Quote[]           @relation("QuoteSender")
+  quotesDecided      Quote[]           @relation("QuoteDecider")
   invoicePdfsCreated InvoicePdf[]
-  receiptsCreated CustomerReceipt[] @relation("ReceiptCreator")
-  receiptsVoided  CustomerReceipt[] @relation("ReceiptVoider")
+  receiptsCreated    CustomerReceipt[] @relation("ReceiptCreator")
+  receiptsVoided     CustomerReceipt[] @relation("ReceiptVoider")
 
-  billsCreated            SupplierBill[]    @relation("BillCreator")
-  billsVoided             SupplierBill[]    @relation("BillVoider")
-  supplierPaymentsCreated SupplierPayment[] @relation("SupplierPaymentCreator")
-  supplierPaymentsVoided  SupplierPayment[] @relation("SupplierPaymentVoider")
+  billsCreated SupplierBill[] @relation("BillCreator")
+
+  billEvidenceCreated     SupplierBillEvidence[] @relation("BillEvidenceCreator")
+  billsVoided             SupplierBill[]         @relation("BillVoider")
+  supplierPaymentsCreated SupplierPayment[]      @relation("SupplierPaymentCreator")
+  supplierPaymentsVoided  SupplierPayment[]      @relation("SupplierPaymentVoider")
+  gstPeriods              GstPeriod[]
+  gstReportRevisions      GstReportRevision[]
+  gstManualAdjustments    GstManualAdjustment[]
 
   @@unique([companyId, userId])
   @@index([userId])
   @@index([companyId, createdBy])
   @@map("memberships")
-  gstPeriods GstPeriod[]
-  gstReportRevisions GstReportRevision[]
-  gstManualAdjustments GstManualAdjustment[]
-
 }
 
 model AuditEvent {
@@ -474,7 +474,7 @@ model Job {
   invoices     Invoice[]
   workEvidence WorkEvidence[]
 
-  quotes Quote[]
+  quotes        Quote[]
   supplierBills SupplierBill[]
 
   @@unique([companyId, number])
@@ -604,8 +604,9 @@ model Document {
 
   workEvidence WorkEvidence?
 
-  invoicePdf InvoicePdf?
+  invoicePdf   InvoicePdf?
   supplierBill SupplierBill?
+  billEvidence SupplierBillEvidence?
 
   @@unique([companyId, id])
   @@index([companyId, createdBy])
@@ -832,50 +833,50 @@ enum InvoicePriceEntry {
 /// assigns the number and freezes amounts, lines and party snapshots
 /// (database guard). Corrections are credit notes or a void.
 model Invoice {
-  cashAdjustments CreditCashAdjustment[] @relation("CashAdjustmentInvoice")
+  cashAdjustments       CreditCashAdjustment[] @relation("CashAdjustmentInvoice")
   creditCashAdjustments CreditCashAdjustment[] @relation("CashAdjustmentCredit")
-  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId         String            @map("company_id") @db.Uuid
-  kind              InvoiceKind       @default(invoice)
-  status            InvoiceStatus     @default(draft)
-  customerId        String            @map("customer_id") @db.Uuid
-  jobId             String?           @map("job_id") @db.Uuid
-  locationId        String?           @map("location_id") @db.Uuid
-  creditsId         String?           @map("credits_id") @db.Uuid
-  priceEntry        InvoicePriceEntry @default(exclusive) @map("price_entry")
-  customerReference String?           @map("customer_reference") @db.VarChar(100)
-  notes             String?           @db.VarChar(2000)
-  dueOn             DateTime?         @map("due_on") @db.Date
-  number            Int?
-  reference         String?           @db.VarChar(30)
-  issueDate         DateTime?         @map("issue_date") @db.Date
-  title             String?           @db.VarChar(20)
-  gstRegistered     Boolean?          @map("gst_registered")
-  supplierSnapshot  Json?             @map("supplier_snapshot")
-  customerSnapshot  Json?             @map("customer_snapshot")
-  siteSnapshot      Json?             @map("site_snapshot")
-  exclusiveCents    BigInt            @default(0) @map("exclusive_cents")
-  gstCents          BigInt            @default(0) @map("gst_cents")
-  inclusiveCents    BigInt            @default(0) @map("inclusive_cents")
-  issuedAt          DateTime?         @map("issued_at") @db.Timestamptz(3)
-  issuedBy          String?           @map("issued_by") @db.Uuid
-  voidReason        String?           @map("void_reason") @db.VarChar(500)
-  voidedAt          DateTime?         @map("voided_at") @db.Timestamptz(3)
-  voidedBy          String?           @map("voided_by") @db.Uuid
-  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy         String            @map("created_by") @db.Uuid
-  customer          Customer          @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  job               Job?              @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  location          Location?         @relation(fields: [companyId, customerId, locationId], references: [companyId, customerId, id], onDelete: NoAction, onUpdate: NoAction)
-  credits           Invoice?          @relation("CreditNote", fields: [companyId, creditsId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  creditNotes       Invoice[]         @relation("CreditNote")
-  creator           Membership        @relation("InvoiceCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  issuer            Membership?       @relation("InvoiceIssuer", fields: [companyId, issuedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  voider            Membership?       @relation("InvoiceVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  items             InvoiceItem[]
+  id                    String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId             String                 @map("company_id") @db.Uuid
+  kind                  InvoiceKind            @default(invoice)
+  status                InvoiceStatus          @default(draft)
+  customerId            String                 @map("customer_id") @db.Uuid
+  jobId                 String?                @map("job_id") @db.Uuid
+  locationId            String?                @map("location_id") @db.Uuid
+  creditsId             String?                @map("credits_id") @db.Uuid
+  priceEntry            InvoicePriceEntry      @default(exclusive) @map("price_entry")
+  customerReference     String?                @map("customer_reference") @db.VarChar(100)
+  notes                 String?                @db.VarChar(2000)
+  dueOn                 DateTime?              @map("due_on") @db.Date
+  number                Int?
+  reference             String?                @db.VarChar(30)
+  issueDate             DateTime?              @map("issue_date") @db.Date
+  title                 String?                @db.VarChar(20)
+  gstRegistered         Boolean?               @map("gst_registered")
+  supplierSnapshot      Json?                  @map("supplier_snapshot")
+  customerSnapshot      Json?                  @map("customer_snapshot")
+  siteSnapshot          Json?                  @map("site_snapshot")
+  exclusiveCents        BigInt                 @default(0) @map("exclusive_cents")
+  gstCents              BigInt                 @default(0) @map("gst_cents")
+  inclusiveCents        BigInt                 @default(0) @map("inclusive_cents")
+  issuedAt              DateTime?              @map("issued_at") @db.Timestamptz(3)
+  issuedBy              String?                @map("issued_by") @db.Uuid
+  voidReason            String?                @map("void_reason") @db.VarChar(500)
+  voidedAt              DateTime?              @map("voided_at") @db.Timestamptz(3)
+  voidedBy              String?                @map("voided_by") @db.Uuid
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy             String                 @map("created_by") @db.Uuid
+  customer              Customer               @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  job                   Job?                   @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  location              Location?              @relation(fields: [companyId, customerId, locationId], references: [companyId, customerId, id], onDelete: NoAction, onUpdate: NoAction)
+  credits               Invoice?               @relation("CreditNote", fields: [companyId, creditsId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creditNotes           Invoice[]              @relation("CreditNote")
+  creator               Membership             @relation("InvoiceCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  issuer                Membership?            @relation("InvoiceIssuer", fields: [companyId, issuedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  voider                Membership?            @relation("InvoiceVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  items                 InvoiceItem[]
 
-  pdf InvoicePdf?
+  pdf            InvoicePdf?
   allocations    ReceiptAllocation[]
   gstAdjustments ReceiptGstAdjustment[]
 
@@ -931,24 +932,24 @@ enum ReceiptMethod {
 /// Money received from (or refunded to) a customer (#50). Idempotent by
 /// (company, idempotencyKey); immutable except a one-way void.
 model CustomerReceipt {
-  id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId      String              @map("company_id") @db.Uuid
-  customerId     String              @map("customer_id") @db.Uuid
-  kind           ReceiptKind         @default(receipt)
-  receivedOn     DateTime            @map("received_on") @db.Date
-  amountCents    BigInt              @map("amount_cents")
+  id             String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String                 @map("company_id") @db.Uuid
+  customerId     String                 @map("customer_id") @db.Uuid
+  kind           ReceiptKind            @default(receipt)
+  receivedOn     DateTime               @map("received_on") @db.Date
+  amountCents    BigInt                 @map("amount_cents")
   method         ReceiptMethod
-  reference      String?             @db.VarChar(100)
-  idempotencyKey String              @map("idempotency_key") @db.VarChar(200)
-  requestHash    String              @map("request_hash") @db.Char(64)
-  voidReason     String?             @map("void_reason") @db.VarChar(500)
-  voidedAt       DateTime?           @map("voided_at") @db.Timestamptz(3)
-  voidedBy       String?             @map("voided_by") @db.Uuid
-  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy      String              @map("created_by") @db.Uuid
-  customer       Customer            @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  creator        Membership          @relation("ReceiptCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  voider         Membership?         @relation("ReceiptVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  reference      String?                @db.VarChar(100)
+  idempotencyKey String                 @map("idempotency_key") @db.VarChar(200)
+  requestHash    String                 @map("request_hash") @db.Char(64)
+  voidReason     String?                @map("void_reason") @db.VarChar(500)
+  voidedAt       DateTime?              @map("voided_at") @db.Timestamptz(3)
+  voidedBy       String?                @map("voided_by") @db.Uuid
+  createdAt      DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy      String                 @map("created_by") @db.Uuid
+  customer       Customer               @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator        Membership             @relation("ReceiptCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  voider         Membership?            @relation("ReceiptVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   allocations    ReceiptAllocation[]
   gstAdjustments ReceiptGstAdjustment[]
 
@@ -1248,48 +1249,49 @@ model InvoicePdf {
 /// (R3) and snapshots creditable GST, non-creditable GST and job cost once.
 /// Immutable except a one-way void (DB trigger). Checks in SQL.
 model SupplierBill {
-  id                    String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId             String                      @map("company_id") @db.Uuid
-  jobId                 String?                     @map("job_id") @db.Uuid
-  contractorId          String?                     @map("contractor_id") @db.Uuid
+  id                    String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId             String                         @map("company_id") @db.Uuid
+  jobId                 String?                        @map("job_id") @db.Uuid
+  contractorId          String?                        @map("contractor_id") @db.Uuid
   /// The accepted offer this bill fulfils (releases its commitment).
-  offerId               String?                     @map("offer_id") @db.Uuid
-  supplierName          String                      @map("supplier_name") @db.VarChar(200)
-  supplierAbn           String?                     @map("supplier_abn") @db.Char(11)
-  supplierGstRegistered Boolean                     @map("supplier_gst_registered")
+  offerId               String?                        @map("offer_id") @db.Uuid
+  supplierName          String                         @map("supplier_name") @db.VarChar(200)
+  supplierAbn           String?                        @map("supplier_abn") @db.Char(11)
+  supplierGstRegistered Boolean                        @map("supplier_gst_registered")
   /// One live bill per supplier reference (case-insensitive; partial unique
   /// indexes supplier_bills_live_*_reference_key in the migration).
-  supplierReference     String?                     @map("supplier_reference") @db.VarChar(100)
-  issuedOn              DateTime                    @map("issued_on") @db.Date
-  dueOn                 DateTime?                   @map("due_on") @db.Date
-  documentId            String?                     @map("document_id") @db.Uuid
-  evidenceVerified      Boolean                     @default(false) @map("evidence_verified")
-  hasEvidence           Boolean                     @map("has_evidence")
-  creditableBasisPoints Int                         @default(10000) @map("creditable_basis_points")
-  creditableReason      String?                     @map("creditable_reason") @db.VarChar(500)
-  companyGstRegistered  Boolean                     @map("company_gst_registered")
-  exclusiveCents        BigInt                      @map("exclusive_cents")
-  gstCents              BigInt                      @map("gst_cents")
-  inclusiveCents        BigInt                      @map("inclusive_cents")
-  creditableGstCents    BigInt                      @map("creditable_gst_cents")
-  nonCreditableGstCents BigInt                      @map("non_creditable_gst_cents")
-  jobCostCents          BigInt                      @map("job_cost_cents")
-  note                  String?                     @db.VarChar(500)
-  voidReason            String?                     @map("void_reason") @db.VarChar(500)
-  voidedAt              DateTime?                   @map("voided_at") @db.Timestamptz(3)
-  voidedBy              String?                     @map("voided_by") @db.Uuid
-  createdAt             DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy             String                      @map("created_by") @db.Uuid
-  company               Company                     @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  job                   Job?                        @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  contractor            Contractor?                 @relation(fields: [companyId, contractorId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  acceptance            ContractorAcceptance?       @relation(fields: [companyId, offerId, jobId, contractorId], references: [companyId, offerId, jobId, contractorId], onDelete: NoAction, onUpdate: NoAction, map: "supplier_bills_acceptance_fkey")
-  document              Document?                   @relation(fields: [companyId, documentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  creator               Membership                  @relation("BillCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  voider                Membership?                 @relation("BillVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  supplierReference     String?                        @map("supplier_reference") @db.VarChar(100)
+  issuedOn              DateTime                       @map("issued_on") @db.Date
+  dueOn                 DateTime?                      @map("due_on") @db.Date
+  documentId            String?                        @map("document_id") @db.Uuid
+  evidenceVerified      Boolean                        @default(false) @map("evidence_verified")
+  hasEvidence           Boolean                        @map("has_evidence")
+  creditableBasisPoints Int                            @default(10000) @map("creditable_basis_points")
+  creditableReason      String?                        @map("creditable_reason") @db.VarChar(500)
+  companyGstRegistered  Boolean                        @map("company_gst_registered")
+  exclusiveCents        BigInt                         @map("exclusive_cents")
+  gstCents              BigInt                         @map("gst_cents")
+  inclusiveCents        BigInt                         @map("inclusive_cents")
+  creditableGstCents    BigInt                         @map("creditable_gst_cents")
+  nonCreditableGstCents BigInt                         @map("non_creditable_gst_cents")
+  jobCostCents          BigInt                         @map("job_cost_cents")
+  note                  String?                        @db.VarChar(500)
+  voidReason            String?                        @map("void_reason") @db.VarChar(500)
+  voidedAt              DateTime?                      @map("voided_at") @db.Timestamptz(3)
+  voidedBy              String?                        @map("voided_by") @db.Uuid
+  createdAt             DateTime                       @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy             String                         @map("created_by") @db.Uuid
+  company               Company                        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  job                   Job?                           @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  contractor            Contractor?                    @relation(fields: [companyId, contractorId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  acceptance            ContractorAcceptance?          @relation(fields: [companyId, offerId, jobId, contractorId], references: [companyId, offerId, jobId, contractorId], onDelete: NoAction, onUpdate: NoAction, map: "supplier_bills_acceptance_fkey")
+  document              Document?                      @relation(fields: [companyId, documentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator               Membership                     @relation("BillCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  voider                Membership?                    @relation("BillVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   items                 SupplierBillItem[]
   allocations           SupplierPaymentAllocation[]
   gstAdjustments        SupplierPaymentGstAdjustment[]
+  evidence              SupplierBillEvidence?
 
   @@unique([companyId, id])
   @@unique([companyId, documentId])
@@ -1323,25 +1325,25 @@ model SupplierBillItem {
 /// Money paid to a supplier, allocated to bills (#46). Idempotent by
 /// (company, idempotencyKey); immutable except a one-way void.
 model SupplierPayment {
-  id             String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId      String                      @map("company_id") @db.Uuid
-  contractorId   String?                     @map("contractor_id") @db.Uuid
-  payeeName      String                      @map("payee_name") @db.VarChar(200)
-  paidOn         DateTime                    @map("paid_on") @db.Date
-  amountCents    BigInt                      @map("amount_cents")
+  id             String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String                         @map("company_id") @db.Uuid
+  contractorId   String?                        @map("contractor_id") @db.Uuid
+  payeeName      String                         @map("payee_name") @db.VarChar(200)
+  paidOn         DateTime                       @map("paid_on") @db.Date
+  amountCents    BigInt                         @map("amount_cents")
   method         ReceiptMethod
-  reference      String?                     @db.VarChar(100)
-  idempotencyKey String                      @map("idempotency_key") @db.VarChar(200)
-  requestHash    String                      @map("request_hash") @db.Char(64)
-  voidReason     String?                     @map("void_reason") @db.VarChar(500)
-  voidedAt       DateTime?                   @map("voided_at") @db.Timestamptz(3)
-  voidedBy       String?                     @map("voided_by") @db.Uuid
-  createdAt      DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy      String                      @map("created_by") @db.Uuid
-  company        Company                     @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  contractor     Contractor?                 @relation(fields: [companyId, contractorId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  creator        Membership                  @relation("SupplierPaymentCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  voider         Membership?                 @relation("SupplierPaymentVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  reference      String?                        @db.VarChar(100)
+  idempotencyKey String                         @map("idempotency_key") @db.VarChar(200)
+  requestHash    String                         @map("request_hash") @db.Char(64)
+  voidReason     String?                        @map("void_reason") @db.VarChar(500)
+  voidedAt       DateTime?                      @map("voided_at") @db.Timestamptz(3)
+  voidedBy       String?                        @map("voided_by") @db.Uuid
+  createdAt      DateTime                       @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy      String                         @map("created_by") @db.Uuid
+  company        Company                        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contractor     Contractor?                    @relation(fields: [companyId, contractorId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator        Membership                     @relation("SupplierPaymentCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  voider         Membership?                    @relation("SupplierPaymentVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   allocations    SupplierPaymentAllocation[]
   gstAdjustments SupplierPaymentGstAdjustment[]
 
@@ -1389,6 +1391,31 @@ model SupplierPaymentGstAdjustment {
   @@map("supplier_payment_gst_adjustments")
 }
 
+/// Late tax-invoice evidence for a bill recorded without it (#142, R6): an
+/// audited reclassification moving GST from job cost to creditable GST on the
+/// day the evidence is held. The bill's snapshot is never rewritten.
+model SupplierBillEvidence {
+  id                  String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId           String       @map("company_id") @db.Uuid
+  billId              String       @map("bill_id") @db.Uuid
+  documentId          String       @map("document_id") @db.Uuid
+  /// The day the evidence is held: GST moves from cost to credit on it.
+  adjustedOn          DateTime     @map("adjusted_on") @db.Date
+  /// Creditable GST added to the bill (and removed from its job cost).
+  creditableGstCents  BigInt       @map("creditable_gst_cents")
+  /// Cash basis: the credit already-paid amounts now attribute, on adjustedOn.
+  cashCatchUpGstCents BigInt       @default(0) @map("cash_catch_up_gst_cents")
+  createdBy           String       @map("created_by") @db.Uuid
+  createdAt           DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  bill                SupplierBill @relation(fields: [companyId, billId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  document            Document     @relation(fields: [companyId, documentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator             Membership   @relation("BillEvidenceCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, billId])
+  @@unique([companyId, documentId])
+  @@map("supplier_bill_evidence")
+}
+
 /// Finalized financial period; source changes are guarded by database triggers.
 model GstPeriod {
   id          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -1425,53 +1452,55 @@ model GstReportRevision {
 
 /// Explicit accountant correction; never rewrites a source document.
 model GstManualAdjustment {
-  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId   String     @map("company_id") @db.Uuid
-  periodId    String?    @map("period_id") @db.Uuid
-  effectiveOn DateTime   @map("effective_on") @db.Date
-  g1          BigInt     @default(0)
-  oneA        BigInt     @default(0) @map("one_a")
-  oneB        BigInt     @default(0) @map("one_b")
-  idempotencyKey String @map("idempotency_key") @db.VarChar(200)
-  requestHash String @map("request_hash") @db.Char(64)
-  reportRevision Int? @map("report_revision")
-  reason      String     @db.VarChar(1000)
-  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy   String     @map("created_by") @db.Uuid
-  company     Company    @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  period      GstPeriod? @relation(fields: [companyId, periodId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  creator     Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String     @map("company_id") @db.Uuid
+  periodId       String?    @map("period_id") @db.Uuid
+  effectiveOn    DateTime   @map("effective_on") @db.Date
+  g1             BigInt     @default(0)
+  oneA           BigInt     @default(0) @map("one_a")
+  oneB           BigInt     @default(0) @map("one_b")
+  idempotencyKey String     @map("idempotency_key") @db.VarChar(200)
+  requestHash    String     @map("request_hash") @db.Char(64)
+  reportRevision Int?       @map("report_revision")
+  reason         String     @db.VarChar(1000)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy      String     @map("created_by") @db.Uuid
+  company        Company    @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  period         GstPeriod? @relation(fields: [companyId, periodId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator        Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([companyId,idempotencyKey])
+  @@unique([companyId, idempotencyKey])
   @@index([companyId, effectiveOn])
   @@map("gst_manual_adjustments")
 }
 
 /// Immutable GST attribution dates, separate from source business dates.
 model GstSourcePosting {
-  companyId String @map("company_id") @db.Uuid
-  sourceId String @map("source_id") @db.Uuid
-  originalOn DateTime @map("original_on") @db.Date
+  companyId   String   @map("company_id") @db.Uuid
+  sourceId    String   @map("source_id") @db.Uuid
+  originalOn  DateTime @map("original_on") @db.Date
   effectiveOn DateTime @map("effective_on") @db.Date
-  company Company @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
   @@id([companyId, sourceId, originalOn])
   @@map("gst_source_postings")
 }
 
 /// Cash GST correction caused by issuing or voiding an adjustment note.
 model CreditCashAdjustment {
- id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
- companyId String @map("company_id") @db.Uuid
- invoiceId String @map("invoice_id") @db.Uuid
- creditId String @map("credit_id") @db.Uuid
- event String @db.VarChar(5)
- adjustedOn DateTime @map("adjusted_on") @db.Date
- gstCents BigInt @map("gst_cents")
- createdBy String @map("created_by") @db.Uuid
- company Company @relation(fields:[companyId],references:[id],onDelete:NoAction,onUpdate:NoAction)
- invoice Invoice @relation("CashAdjustmentInvoice",fields:[companyId,invoiceId],references:[companyId,id],onDelete:NoAction,onUpdate:NoAction)
- credit Invoice @relation("CashAdjustmentCredit",fields:[companyId,creditId],references:[companyId,id],onDelete:NoAction,onUpdate:NoAction)
- creator Membership @relation(fields:[companyId,createdBy],references:[companyId,userId],onDelete:NoAction,onUpdate:NoAction)
- @@unique([companyId,creditId,event])
- @@map("credit_cash_adjustments")
+  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId  String     @map("company_id") @db.Uuid
+  invoiceId  String     @map("invoice_id") @db.Uuid
+  creditId   String     @map("credit_id") @db.Uuid
+  event      String     @db.VarChar(5)
+  adjustedOn DateTime   @map("adjusted_on") @db.Date
+  gstCents   BigInt     @map("gst_cents")
+  createdBy  String     @map("created_by") @db.Uuid
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  invoice    Invoice    @relation("CashAdjustmentInvoice", fields: [companyId, invoiceId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  credit     Invoice    @relation("CashAdjustmentCredit", fields: [companyId, creditId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator    Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, creditId, event])
+  @@map("credit_cash_adjustments")
 }
