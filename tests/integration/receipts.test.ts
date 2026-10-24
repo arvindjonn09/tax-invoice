@@ -1,3 +1,4 @@
+import { sydneyToday } from "../../apps/web/src/server/company/gst";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
@@ -172,6 +173,7 @@ const r = () => ({
   invRead: withPolicy("invoice.read", invoices.read),
   invList: withPolicy("invoice.read", invoices.list),
   invVoid: withPolicy("invoice.issue", invoices.void),
+  invCredit: withPolicy("invoice.issue", invoices.credit),
   create: withPolicy("payment.write", receipts.create),
   read: withPolicy("payment.read", receipts.read),
   list: withPolicy("payment.read", receipts.list),
@@ -214,6 +216,7 @@ function receive(
     who = "accountant" as Who,
     kind = "receipt",
     customer = customerId,
+    date = "2026-07-05",
   } = {},
 ) {
   return r().create(
@@ -223,7 +226,7 @@ function receive(
       {
         customerId: customer,
         kind,
-        receivedOn: "2026-07-05",
+        receivedOn: date,
         amountCents: amount,
         method: "bank_transfer",
         allocations,
@@ -412,7 +415,7 @@ describe("refunds and voids", () => {
           one(paid.id),
         )
       ).status,
-    ).toBe(409);
+    ).toBe(400);
     expect(
       (
         await r().void(
@@ -462,7 +465,7 @@ describe("refunds and voids", () => {
       call("accountant", "POST", { reason: "Refund never sent" }),
       one(refund.id),
     );
-    expect(voided.status).toBe(409);
+    expect(voided.status).toBe(400);
     expect((await voided.json()).error).toMatch(/overpay/);
     expect((await balanceOf(invoiceId)).receivedCents).toBe(due);
   });
@@ -521,7 +524,7 @@ describe("refunds and voids", () => {
     ).toEqual([{ receiptId: middle.id, gstCents: 1n }]);
     expect(await liveGst(invoiceId)).toBe(25_000n);
     const replacement = await recorded(
-      await receive([{ invoiceId, amountCents: "1" }]),
+      await receive([{ invoiceId, amountCents: "1" }], { date: sydneyToday() }),
     );
     expect(replacement.gst).toBe(0n);
     expect(await liveGst(invoiceId)).toBe(25_000n);
@@ -589,10 +592,10 @@ describe("refunds and voids", () => {
     ]);
     // Exactly one of them takes the invoice back to fully paid.
     // Either the void wins and the receipt would overpay (400), or the
-    // receipt wins and the void would (409).
+    // receipt wins and the dated void would (400).
     expect([
       [200, 400],
-      [409, 201],
+      [400, 201],
     ]).toContainEqual([voided.status, replacement.status]);
     expect((await balanceOf(invoiceId)).receivedCents).toBe(due);
   });
@@ -665,5 +668,82 @@ describe("access", () => {
       await lockRow(tx, "customer_receipts", outsiderReceiptId);
       await expect(lockedElsewhere()).rejects.toThrow();
     });
+  });
+
+  it("refuses a cash-basis settlement dated before the invoice's latest credit (#54)", async () => {
+    // $100 + $10 GST taxable and $110 GST-free; the GST-free half is credited
+    // on 10 August, so $55 received from then on is half of $110: $5 GST.
+    const draft = await (
+      await r().invCreate(
+        call("accountant", "POST", {
+          customerId,
+          lines: [
+            {
+              description: "Install",
+              quantity: "1",
+              unitPriceCents: "10000",
+              taxCode: "TAXABLE_10",
+            },
+            {
+              description: "Exported part",
+              quantity: "1",
+              unitPriceCents: "11000",
+              taxCode: "GST_FREE",
+            },
+          ],
+        }),
+        undefined,
+      )
+    ).json();
+    const invoiceId = draft.id as string;
+    expect(
+      (
+        await r().invIssue(
+          call("accountant", "POST", { issueDate: "2026-07-01" }),
+          one(invoiceId),
+        )
+      ).status,
+    ).toBe(200);
+    const credit = await r().invCredit(
+      call("accountant", "POST", {
+        lines: [
+          {
+            description: "Part returned",
+            quantity: "1",
+            unitPriceCents: "11000",
+            taxCode: "GST_FREE",
+          },
+        ],
+      }),
+      one(invoiceId),
+    );
+    expect(credit.status).toBe(201);
+    const creditId = ((await credit.json()) as { id: string }).id;
+    expect(
+      (
+        await r().invIssue(
+          call("accountant", "POST", { issueDate: "2026-08-10" }),
+          one(creditId),
+        )
+      ).status,
+    ).toBe(200);
+
+    const early = await receive([{ invoiceId, amountCents: "5500" }], {
+      date: "2026-07-31",
+    });
+    expect(early.status).toBe(400);
+    expect((await early.json()).fields).toHaveProperty("receivedOn");
+
+    const onTime = await receive([{ invoiceId, amountCents: "5500" }], {
+      date: "2026-08-10",
+    });
+    expect(onTime.status).toBe(201);
+    expect((await onTime.json()).allocations[0].gstAttributedCents).toBe("500");
+
+    const refund = await receive([{ invoiceId, amountCents: "5500" }], {
+      kind: "refund",
+      date: "2026-08-09",
+    });
+    expect(refund.status).toBe(400);
   });
 });
