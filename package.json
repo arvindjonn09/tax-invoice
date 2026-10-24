@@ -23,6 +23,7 @@
     "db:migrate:dev": "node scripts/database/cli.mjs migrate dev",
     "db:test:reset": "node scripts/database/reset-test.mjs",
     "db:seed:demo": "tsx scripts/database/seed-demo.ts",
+    "documents:cleanup": "tsx scripts/documents/cleanup.ts",
     "test:coverage": "vitest run --project unit --coverage"
   },
   "devDependencies": {
