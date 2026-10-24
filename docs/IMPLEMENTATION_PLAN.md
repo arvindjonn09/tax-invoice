@@ -46,7 +46,8 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 
 ## M3 Quotes, bills, invoices and payments
 - [ ] Quotes with tax-coded lines and accepted variations
-  - #44 schema + API: draft → sent (prices and GST frozen on the send date) → accepted/declined once; revisions share the number and supersede the sent one; derived expiry; accepting converts — creates or approves the job with estimated revenue = quote ex GST — and variations add to it; internal per-line estimated cost gives estimated profit/margin ex GST; DB triggers keep sent and decided quotes immutable. Screens remain #45
+  - #44 schema + API: draft → sent (prices and GST frozen on the send date) → accepted/declined once; revisions share the number and supersede the sent one; derived expiry; accepting converts — creates or approves the job with estimated revenue = quote ex GST — and variations add to it; internal per-line estimated cost gives estimated profit/margin ex GST; DB triggers keep sent and decided quotes immutable.
+  - #45 screens: quote list (status, total incl GST, internal margin), draft builder (quote or variation, server-only totals with a stale flag, per-line internal estimated cost), send dialog with the send date, read-only sent/decided view with recorded acceptance/decline and Revise, and a link to the job once accepted; page titles now wrap above their actions on narrow screens
 - [ ] Supplier bills with creditable GST and payment allocations
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
