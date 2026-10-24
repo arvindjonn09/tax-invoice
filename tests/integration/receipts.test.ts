@@ -437,6 +437,41 @@ describe("refunds and voids", () => {
     expect((await balanceOf(invoiceId)).receivedCents).toBe(due);
   });
 
+  it("keeps cash GST whole after a middle receipt is voided and replaced", async () => {
+    // $2,750 invoice with $250 GST: 5c (GST 0), 1c (GST 1), the rest.
+    const invoiceId = await issuedInvoice();
+    const gstOf = async (response: Response) => {
+      const body = await response.json();
+      return {
+        id: body.id as string,
+        gst: BigInt(body.allocations[0].gstAttributedCents),
+      };
+    };
+    const first = await gstOf(await receive([{ invoiceId, amountCents: "5" }]));
+    const middle = await gstOf(
+      await receive([{ invoiceId, amountCents: "1" }]),
+    );
+    const rest = await gstOf(
+      await receive([{ invoiceId, amountCents: "274994" }]),
+    );
+    expect([first.gst, middle.gst, rest.gst]).toEqual([0n, 1n, 24_999n]);
+    expect(
+      (
+        await r().void(
+          call("accountant", "POST", { reason: "Bounced" }),
+          one(middle.id),
+        )
+      ).status,
+    ).toBe(200);
+    const replacement = await gstOf(
+      await receive([{ invoiceId, amountCents: "1" }]),
+    );
+    // The replacement recovers the cent the void removed; history is unchanged.
+    expect(replacement.gst).toBe(1n);
+    expect(first.gst + rest.gst + replacement.gst).toBe(25_000n);
+    expect((await balanceOf(invoiceId)).outstandingCents).toBe("0");
+  });
+
   it("never overpays when a refund void races a replacement receipt", async () => {
     const invoiceId = await issuedInvoice();
     const due = (await balanceOf(invoiceId)).outstandingCents;

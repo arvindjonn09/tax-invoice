@@ -15,12 +15,6 @@ export function cashAttributedGst(input: {
   settlement: Cents;
 }): Cents {
   const { documentTotal, documentGst, previouslySettled, settlement } = input;
-  if (documentTotal <= 0n) {
-    throw new RangeError("Document total must be positive");
-  }
-  if (documentGst < 0n || documentGst > documentTotal) {
-    throw new RangeError("Document GST must be between 0 and the total");
-  }
   if (previouslySettled < 0n || settlement < 0n) {
     throw new RangeError("Settlements must be >= 0");
   }
@@ -28,10 +22,33 @@ export function cashAttributedGst(input: {
     throw new RangeError("Settlements exceed the document total");
   }
   const cumulative = (settled: Cents) =>
-    divideRounded(settled * documentGst, documentTotal);
+    cumulativeCashGst({ documentTotal, documentGst, settled });
   return (
     cumulative(previouslySettled + settlement) - cumulative(previouslySettled)
   );
+}
+
+/**
+ * Cash-basis GST attributable once `settled` of the document has been paid:
+ * the rounded share of its GST. Ledgers whose earlier settlements may be
+ * voided reconcile each new settlement against this (see `allocationGst`).
+ */
+export function cumulativeCashGst(input: {
+  documentTotal: Cents;
+  documentGst: Cents;
+  settled: Cents;
+}): Cents {
+  const { documentTotal, documentGst, settled } = input;
+  if (documentTotal <= 0n) {
+    throw new RangeError("Document total must be positive");
+  }
+  if (documentGst < 0n || documentGst > documentTotal) {
+    throw new RangeError("Document GST must be between 0 and the total");
+  }
+  if (settled < 0n || settled > documentTotal) {
+    throw new RangeError("Settled must be between 0 and the document total");
+  }
+  return divideRounded(settled * documentGst, documentTotal);
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;

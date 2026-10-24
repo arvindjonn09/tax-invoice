@@ -7,6 +7,7 @@ import {
   calculatePurchase,
   calculateSupplyLine,
   cashAttributedGst,
+  cumulativeCashGst,
   divideRounded,
   draftBasSummary,
   gstRateBasisPoints,
@@ -352,6 +353,17 @@ describe("balances and attribution", () => {
     expect(() =>
       cashAttributedGst({ ...base, previouslySettled: 95n }),
     ).toThrow("exceed");
+    const cumulative = { documentTotal: 100n, documentGst: 10n };
+    expect(() => cumulativeCashGst({ ...cumulative, settled: -1n })).toThrow(
+      RangeError,
+    );
+    expect(() => cumulativeCashGst({ ...cumulative, settled: 101n })).toThrow(
+      RangeError,
+    );
+    expect(() =>
+      cumulativeCashGst({ ...cumulative, documentTotal: 0n, settled: 0n }),
+    ).toThrow("positive");
+    expect(cumulativeCashGst({ ...cumulative, settled: 55n })).toBe(6n);
   });
 
   it("non-cash attribution uses the earlier of issue and first consideration (R8)", () => {

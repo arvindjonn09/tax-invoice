@@ -1,4 +1,4 @@
-import { cashAttributedGst } from "./attribution";
+import { cumulativeCashGst } from "./attribution";
 import { type Cents, sum } from "./money";
 
 // Customer receipts and refunds (#50). Money received is allocated to issued
@@ -16,6 +16,8 @@ export type InvoiceBalance = {
   credited: Cents;
   /** Net received so far (receipts minus refunds). */
   received: Cents;
+  /** Net cash-basis GST attributed by the live (unvoided) allocations. */
+  attributed: Cents;
 };
 
 export type AllocationProblem = { field: string; message: string };
@@ -91,27 +93,26 @@ export function allocationProblems(
 
 /**
  * Cash-basis GST attributed to one allocation (positive for a receipt,
- * negative for a refund), cumulative so the invoice's GST is attributed
- * exactly once in total.
+ * negative for a refund). It brings the invoice's live attributed GST to the
+ * rounded share of what will then be received, so the invoice's GST is
+ * attributed exactly once in total. Voids never rewrite history: a void
+ * removes its allocation's GST, and the next allocation absorbs any rounding
+ * cent the void left behind (for example voiding a middle receipt).
  */
 export function allocationGst(
   kind: "receipt" | "refund",
   amount: Cents,
   balance: InvoiceBalance,
 ): Cents {
-  if (kind === "receipt")
-    return cashAttributedGst({
+  const settled =
+    kind === "receipt" ? balance.received + amount : balance.received - amount;
+  return (
+    cumulativeCashGst({
       documentTotal: balance.inclusive,
       documentGst: balance.gst,
-      previouslySettled: balance.received,
-      settlement: amount,
-    });
-  return -cashAttributedGst({
-    documentTotal: balance.inclusive,
-    documentGst: balance.gst,
-    previouslySettled: balance.received - amount,
-    settlement: amount,
-  });
+      settled,
+    }) - balance.attributed
+  );
 }
 
 /**

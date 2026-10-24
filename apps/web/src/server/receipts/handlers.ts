@@ -131,6 +131,7 @@ export async function invoiceBalances(
       select: {
         invoiceId: true,
         amountCents: true,
+        gstAttributedCents: true,
         receipt: { select: { kind: true } },
       },
     }),
@@ -139,12 +140,19 @@ export async function invoiceBalances(
     credits.map((row) => [row.creditsId!, row._sum.inclusiveCents ?? 0n]),
   );
   const received = new Map<string, bigint>();
+  const attributed = new Map<string, bigint>();
   for (const allocation of allocations) {
     const sign = allocation.receipt.kind === "refund" ? -1n : 1n;
     received.set(
       allocation.invoiceId,
       (received.get(allocation.invoiceId) ?? 0n) +
         sign * allocation.amountCents,
+    );
+    // Stored signed: refunds already carry negative GST.
+    attributed.set(
+      allocation.invoiceId,
+      (attributed.get(allocation.invoiceId) ?? 0n) +
+        allocation.gstAttributedCents,
     );
   }
   return new Map(
@@ -156,6 +164,7 @@ export async function invoiceBalances(
         gst: invoice.gstCents,
         credited: credited.get(invoice.id) ?? 0n,
         received: received.get(invoice.id) ?? 0n,
+        attributed: attributed.get(invoice.id) ?? 0n,
       },
     ]),
   );
