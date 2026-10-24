@@ -5,26 +5,28 @@ import { Button } from "@/components/ui/button";
 import { useRemote } from "@/components/data/use-remote";
 import { InvoiceBuilder } from "./builder";
 import { IssuedInvoice } from "./issued";
+import type { GstRegistrationPeriod } from "@jobflow/domain";
 import type { Invoice } from "./types";
 
 /** Loads one document, then shows the draft builder or the issued view. */
 export function InvoicePage({
   id,
-  registeredToday,
+  periods,
   today,
   canIssue,
 }: {
   id: string;
-  registeredToday: boolean;
+  periods: GstRegistrationPeriod[];
   today: string;
   canIssue: boolean;
 }) {
   const params = useSearchParams();
   const remote = useRemote<Invoice>(`/api/invoices/${id}`);
   const [issued, setIssued] = useState<Invoice | null>(null);
+  const [voided, setVoided] = useState<Invoice | null>(null);
   const { error, reload } = remote;
-  const data = issued ?? remote.data;
-  const original = useRemote<Pick<Invoice, "reference">>(
+  const data = voided ?? issued ?? remote.data;
+  const original = useRemote<Pick<Invoice, "reference" | "gstRegistered">>(
     data?.creditsId ? `/api/invoices/${data.creditsId}` : null,
   );
   if (!data)
@@ -43,7 +45,8 @@ export function InvoicePage({
     <InvoiceBuilder
       key={data.id}
       initial={data}
-      registeredToday={registeredToday}
+      periods={periods}
+      originalRegistered={original.data?.gstRegistered ?? null}
       today={today}
       canIssue={canIssue}
       creditsReference={creditsReference}
@@ -54,7 +57,11 @@ export function InvoicePage({
       key={`${data.id}:${data.status}`}
       invoice={data}
       canIssue={canIssue}
-      justIssued={issued !== null || params.get("issued") === "1"}
+      justIssued={
+        voided === null && (issued !== null || params.get("issued") === "1")
+      }
+      justVoided={voided !== null}
+      onVoided={setVoided}
       creditsReference={creditsReference}
     />
   );

@@ -194,6 +194,18 @@ test("validation keeps the draft; credit notes and void follow the rules", async
   await page.getByRole("button", { name: "Remove line 2" }).click();
   await page.getByRole("button", { name: "Save draft" }).first().click();
   await expect(page.getByText("Draft saved.", { exact: true })).toBeVisible();
+  // Switching entry mode keeps the amount: only its representation changes.
+  await page.getByLabel("Incl GST", { exact: true }).check();
+  await expect(page.getByLabel("Unit price (incl GST)")).toHaveValue(
+    // Unregistered: no GST, so the price stands as typed.
+    registered ? "88.00" : "80",
+  );
+  await page.getByLabel("Ex GST", { exact: true }).check();
+  await expect(page.getByLabel("Unit price (ex GST)")).toHaveValue(
+    registered ? "80.00" : "80",
+  );
+  await page.getByRole("button", { name: "Save draft" }).first().click();
+  await expect(page.getByText("Draft saved.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Review and issue" }).click();
   await page
     .getByRole("dialog")
@@ -214,6 +226,7 @@ test("validation keeps the draft; credit notes and void follow the rules", async
     .click();
   await expect(page).toHaveURL(/issued=1/);
   await expect(page.getByText(/Credits invoice/)).toBeVisible();
+  const creditUrl = page.url().replace(/\?.*$/, "");
 
   // An invoice with an issued credit note can't be voided: the server says why.
   await page.goto(invoiceUrl);
@@ -225,6 +238,16 @@ test("validation keeps the draft; credit notes and void follow the rules", async
   await expect(
     page.getByText(/credit notes; credit the rest instead of voiding/),
   ).toBeVisible();
+
+  // A successful void updates the page at once: status, reason, no actions.
+  await page.goto(creditUrl);
+  await page.getByRole("button", { name: /^Void / }).click();
+  const voidCredit = page.getByRole("dialog", { name: /^Void / });
+  await voidCredit.getByLabel("Reason (required)").fill("Issued in error");
+  await voidCredit.getByRole("button", { name: /^Void / }).click();
+  await expect(page.getByText(/ is void\.$/)).toBeVisible();
+  await expect(page.getByText("Void — Issued in error")).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Void / })).toHaveCount(0);
 });
 
 test("roles: manager reads invoices only; workers can't open them", async ({
@@ -236,7 +259,8 @@ test("roles: manager reads invoices only; workers can't open them", async ({
     page.getByRole("heading", { name: "Invoices", level: 1 }),
   ).toBeVisible();
   await page.getByLabel("Status").selectOption("void");
-  await page.getByLabel("Type").selectOption("credit_note");
+  // The void flow above voids a credit note; no spec voids an invoice.
+  await page.getByLabel("Type").selectOption("invoice");
   await expect(
     page.getByRole("heading", { name: "No matching invoices" }),
   ).toBeVisible();

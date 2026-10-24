@@ -14,7 +14,13 @@ import { useRemote } from "@/components/data/use-remote";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
 import { formatAudCents } from "@/components/money-display";
 import { EntityPicker } from "@/features/jobs/picker";
+import {
+  type GstRegistrationPeriod,
+  gstStatusOn,
+  isIsoDate,
+} from "@jobflow/domain";
 import { audInput, parseAudInput } from "@/lib/aud-input";
+import { convertEntryMode } from "./entry-mode";
 import { Totals } from "./totals";
 import {
   type Invoice,
@@ -47,14 +53,18 @@ const blankLine = (key: string, registered: boolean): DraftLine => ({
  */
 export function InvoiceBuilder({
   initial,
-  registeredToday,
+  periods,
+  originalRegistered = null,
   today,
   canIssue,
   creditsReference,
   onIssued,
 }: {
   initial: Invoice | null;
-  registeredToday: boolean;
+  /** Company registration periods: the issue date decides the GST. */
+  periods: GstRegistrationPeriod[];
+  /** A credit note reverses its original under the original's registration. */
+  originalRegistered?: boolean | null;
   today: string;
   canIssue: boolean;
   creditsReference: string | null;
@@ -62,6 +72,17 @@ export function InvoiceBuilder({
   onIssued?: (issued: Invoice) => void;
 }) {
   const router = useRouter();
+  const isCredit = initial?.kind === "credit_note";
+  const registeredOn = (date: string) =>
+    isCredit
+      ? originalRegistered === true
+      : gstStatusOn(periods, isIsoDate(date) ? date : today).registered;
+  const registeredToday = registeredOn(today);
+  // Taxable lines can be drafted when some issue date up to today would be
+  // registered; the server re-checks against the actual issue date.
+  const canChargeGst = isCredit
+    ? originalRegistered === true
+    : periods.some((period) => period.startsOn <= today);
   const [saved, setSaved] = useState<Invoice | null>(initial);
   const [customerId, setCustomerId] = useState(initial?.customerId ?? "");
   const [jobId, setJobId] = useState(initial?.jobId ?? "");
@@ -112,7 +133,6 @@ export function InvoiceBuilder({
     requestAnimationFrame(() => summary.current?.focus());
   const cancelIssue = useRef<HTMLButtonElement>(null);
 
-  const isCredit = initial?.kind === "credit_note";
   const customer = useRemote<{
     name: string;
     locations: {
@@ -130,11 +150,12 @@ export function InvoiceBuilder({
       ? `/api/jobs?${new URLSearchParams({ customerId, pageSize: "100" })}`
       : null,
   );
+  const registeredOnIssue = registeredOn(issueDate);
   const title = isCredit
-    ? registeredToday
+    ? registeredOnIssue
       ? "Adjustment Note"
       : "Credit Note"
-    : registeredToday
+    : registeredOnIssue
       ? "Tax Invoice"
       : "Invoice";
   const touch = () => {
@@ -443,6 +464,26 @@ export function InvoiceBuilder({
                     value={mode}
                     checked={priceEntry === mode}
                     onChange={() => {
+                      // Keep each line's amount; only its representation changes.
+                      const { lines: converted, changed } = convertEntryMode(
+                        lines,
+                        priceEntry,
+                        mode,
+                        canChargeGst,
+                      );
+                      if (
+                        changed.length > 0 &&
+                        !window.confirm(
+                          `Converting prices rounds ${changed.length === 1 ? "1 line total" : `${changed.length} line totals`}: ${changed
+                            .map(
+                              (c) =>
+                                `line ${c.index + 1} ${formatAudCents(c.before)} → ${formatAudCents(c.after)}`,
+                            )
+                            .join(", ")} incl GST. Switch anyway?`,
+                        )
+                      )
+                        return;
+                      setLines(converted);
                       setPriceEntry(mode);
                       touch();
                     }}
@@ -451,10 +492,16 @@ export function InvoiceBuilder({
                 </label>
               ))}
             </fieldset>
-            {!registeredToday ? (
+            {!canChargeGst ? (
               <p className="text-sm text-muted-foreground">
-                Not registered for GST today: no line can be Taxable, and no GST
-                is charged.
+                {isCredit
+                  ? "The original invoice charged no GST, so no line of this credit note can be Taxable."
+                  : "Not registered for GST: no line can be Taxable, and no GST is charged."}
+              </p>
+            ) : !registeredToday && !isCredit ? (
+              <p className="text-sm text-muted-foreground">
+                Not registered for GST today. Taxable lines can be issued only
+                with an issue date in a registered period.
               </p>
             ) : null}
             <ol className="space-y-4">
@@ -531,7 +578,7 @@ export function InvoiceBuilder({
                                   value={option.value}
                                   disabled={
                                     option.value === "TAXABLE_10" &&
-                                    !registeredToday
+                                    !canChargeGst
                                   }
                                 >
                                   {option.label}
@@ -679,7 +726,7 @@ export function InvoiceBuilder({
           <Totals
             totals={saved}
             stale={dirty && Boolean(saved)}
-            registered={registeredToday}
+            registered={registeredOnIssue}
           />
         </aside>
       </div>

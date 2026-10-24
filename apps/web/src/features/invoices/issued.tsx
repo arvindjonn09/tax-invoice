@@ -28,12 +28,17 @@ export function IssuedInvoice({
   invoice,
   canIssue,
   justIssued,
+  justVoided = false,
   creditsReference,
+  onVoided,
 }: {
   invoice: Invoice;
   canIssue: boolean;
   justIssued: boolean;
+  justVoided?: boolean;
   creditsReference: string | null;
+  /** Show the void document the API returned (status, reason, actions). */
+  onVoided?: (voided: Invoice) => void;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -41,12 +46,14 @@ export function IssuedInvoice({
     kind: "error" | "success";
     text: string;
   } | null>(
-    justIssued
-      ? {
-          kind: "success",
-          text: `${invoice.title} ${invoice.reference} issued. It can no longer be edited.`,
-        }
-      : null,
+    justVoided
+      ? { kind: "success", text: `${invoice.reference} is void.` }
+      : justIssued
+        ? {
+            kind: "success",
+            text: `${invoice.title} ${invoice.reference} issued. It can no longer be edited.`,
+          }
+        : null,
   );
   const [link, setLink] = useState<{ url: string; expiresAt: string } | null>(
     null,
@@ -286,7 +293,10 @@ export function IssuedInvoice({
               kind: "success",
               text: `${invoice.reference} is void.`,
             });
-            router.refresh();
+            // The page's fetched copy wouldn't change on refresh: hand the
+            // returned void document up so status and actions update now.
+            if (onVoided) onVoided(result.body as Invoice);
+            else router.refresh();
           }}
         >
           <h2 id="void-heading" className="text-xl font-semibold">

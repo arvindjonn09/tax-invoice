@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { can } from "@jobflow/authz";
 import { requireActor } from "@/server/authz";
 import { getDatabase } from "@/server/auth";
-import { companyGstStatusOn, sydneyToday } from "@/server/company/gst";
+import { companyGstPeriods, sydneyToday } from "@/server/company/gst";
 import { uuidOrNull } from "@/server/http/fields";
 import { InvoicePage } from "@/features/invoices/page";
 export const dynamic = "force-dynamic";
@@ -24,15 +24,11 @@ export default async function InvoiceDetailPage({
   )
     notFound();
   const today = sydneyToday();
-  const { registered } = await companyGstStatusOn(
-    getDatabase(),
-    actor.companyId,
-    today,
-  );
+  const periods = await companyGstPeriods(getDatabase(), actor.companyId);
   return (
     <InvoicePage
       id={id}
-      registeredToday={registered}
+      periods={periods}
       today={today}
       canIssue={can(actor.role, "invoice.issue")}
     />
