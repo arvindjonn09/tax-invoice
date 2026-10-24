@@ -595,6 +595,43 @@ describe("supplier bills (#46)", () => {
     const again = await record({ ...ok, supplierReference: "SS-1" });
     expect(again.status).toBe(409);
     expect(again.body.fields).toHaveProperty("supplierReference");
+    // Name and reference compare case-insensitively.
+    expect(
+      (
+        await record({
+          ...ok,
+          supplierName: "sample SUPPLIES",
+          supplierReference: "ss-1",
+        })
+      ).status,
+    ).toBe(409);
+    // Concurrent copies record exactly one bill (the database decides).
+    for (const reference of ["SS-2", "SS-3", "SS-4"]) {
+      const racing = await Promise.all([
+        record({ ...ok, supplierReference: reference }),
+        record({
+          ...ok,
+          supplierName: "SAMPLE SUPPLIES",
+          supplierReference: reference.toLowerCase(),
+        }),
+      ]);
+      expect(racing.map((result) => result.status).sort()).toEqual([201, 409]);
+      expect(
+        racing.find((result) => result.status === 409)!.body.fields,
+      ).toHaveProperty("supplierReference");
+    }
+    // Voiding the bill frees its reference.
+    expect(
+      (
+        await r().voidBill(
+          call("accountant", "POST", { reason: "Entered twice" }),
+          one(first.body.id),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await record({ ...ok, supplierReference: "SS-1" })).status).toBe(
+      201,
+    );
     // A supplier's figures are kept as issued: one cent of rounding is fine.
     const rounded = await record({
       ...ok,

@@ -1097,6 +1097,8 @@ model SupplierBill {
   supplierName          String                      @map("supplier_name") @db.VarChar(200)
   supplierAbn           String?                     @map("supplier_abn") @db.Char(11)
   supplierGstRegistered Boolean                     @map("supplier_gst_registered")
+  /// One live bill per supplier reference (case-insensitive; partial unique
+  /// indexes supplier_bills_live_*_reference_key in the migration).
   supplierReference     String?                     @map("supplier_reference") @db.VarChar(100)
   issuedOn              DateTime                    @map("issued_on") @db.Date
   dueOn                 DateTime?                   @map("due_on") @db.Date

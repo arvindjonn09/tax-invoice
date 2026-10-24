@@ -17,6 +17,7 @@ const balance = (overrides: Partial<BillBalance> = {}): BillBalance => ({
   inclusive: 99_000n,
   creditableGst: 9_000n,
   paid: 0n,
+  attributed: 0n,
   ...overrides,
 });
 const balances = (...list: BillBalance[]) =>
@@ -190,7 +191,7 @@ describe("supplier bills (#46)", () => {
     let paid = 0n;
     let attributed = 0n;
     for (const amount of [40_000n, 33_333n, 25_667n]) {
-      attributed += paymentCreditableGst(amount, balance({ paid }));
+      attributed += paymentCreditableGst(amount, balance({ paid, attributed }));
       paid += amount;
     }
     expect(paid).toBe(99_000n);
@@ -205,6 +206,23 @@ describe("supplier bills (#46)", () => {
       paymentCreditableGst(0n, balance({ inclusive: 0n, creditableGst: 0n })),
     ).toBe(0n);
     expect(billOutstanding(balance({ paid: 100_000n }))).toBe(0n);
+  });
+
+  it("a replacement for a voided middle payment recovers its credit cent", () => {
+    // $0.11 bill with $0.01 creditable GST: payments 5c, 1c, 5c → 0, 1, 0.
+    const tiny = { inclusive: 11n, creditableGst: 1n };
+    const pay = (paid: bigint, attributed: bigint, amount: bigint) =>
+      paymentCreditableGst(amount, balance({ ...tiny, paid, attributed }));
+    expect([pay(0n, 0n, 5n), pay(5n, 0n, 1n), pay(6n, 1n, 5n)]).toEqual([
+      0n,
+      1n,
+      0n,
+    ]);
+    // Void the 1c payment (history unchanged), then pay it again.
+    expect(pay(10n, 0n, 1n)).toBe(1n);
+    // Voiding the first 5c leaves 1c attributed on 6c paid: the next payment
+    // attributes nothing rather than a negative credit.
+    expect(pay(1n, 1n, 1n)).toBe(0n);
   });
 
   it("a bill linked to an acceptance releases the commitment, never double counting", () => {

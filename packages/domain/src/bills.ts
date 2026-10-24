@@ -1,4 +1,4 @@
-import { cashAttributedGst } from "./attribution";
+import { cashGstToward } from "./attribution";
 import { type EvidenceDocument, hasPurchaseEvidence } from "./expenses";
 import { type GstLine, type TaxCode, gstRateBasisPoints } from "./gst";
 import { type Cents, sum } from "./money";
@@ -98,10 +98,14 @@ export type BillBalance = {
   creditableGst: Cents;
   /** Paid so far by live (non-void) payments. */
   paid: Cents;
+  /** Creditable GST attributed by those live payments. */
+  attributed: Cents;
 };
 
 /** What is still owed on a bill (never negative). */
-export function billOutstanding(balance: BillBalance): Cents {
+export function billOutstanding(
+  balance: Pick<BillBalance, "inclusive" | "paid">,
+): Cents {
   const due = balance.inclusive - balance.paid;
   return due < 0n ? 0n : due;
 }
@@ -166,19 +170,22 @@ export function paymentProblems(
 }
 
 /**
- * Cash-basis input tax credit attributed to one payment allocation (R7):
- * cumulative over the bill's creditable GST, so full payment attributes it
- * exactly once in total. Non-creditable GST is cost and is never attributed.
+ * Cash-basis input tax credit attributed to one payment allocation (R7),
+ * reconciled against what live payments already attributed, so full payment
+ * attributes the bill's creditable GST exactly once in total, even after
+ * voids. Non-creditable GST is cost and is never attributed.
  */
 export function paymentCreditableGst(
   amount: Cents,
   balance: BillBalance,
 ): Cents {
   if (balance.inclusive === 0n) return 0n;
-  return cashAttributedGst({
+  return cashGstToward({
     documentTotal: balance.inclusive,
     documentGst: balance.creditableGst,
-    previouslySettled: balance.paid,
-    settlement: amount,
+    settledAfter: balance.paid + amount,
+    attributed: balance.attributed,
+    amount,
+    direction: 1n,
   });
 }

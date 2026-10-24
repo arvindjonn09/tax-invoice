@@ -141,6 +141,13 @@ CREATE TABLE "supplier_payment_allocations" (
 -- CreateIndex
 CREATE UNIQUE INDEX "supplier_bills_company_id_id_key" ON "supplier_bills"("company_id", "id");
 CREATE UNIQUE INDEX "supplier_bills_company_id_document_id_key" ON "supplier_bills"("company_id", "document_id");
+-- One live bill per supplier invoice, so concurrent duplicates can't both count:
+-- a contractor's reference, or a named supplier's (name and reference compared
+-- case-insensitively). Voided bills free the reference.
+CREATE UNIQUE INDEX "supplier_bills_live_contractor_reference_key" ON "supplier_bills"("company_id", "contractor_id", lower("supplier_reference"))
+  WHERE "voided_at" IS NULL AND "supplier_reference" IS NOT NULL AND "contractor_id" IS NOT NULL;
+CREATE UNIQUE INDEX "supplier_bills_live_supplier_reference_key" ON "supplier_bills"("company_id", lower("supplier_name"), lower("supplier_reference"))
+  WHERE "voided_at" IS NULL AND "supplier_reference" IS NOT NULL AND "contractor_id" IS NULL;
 CREATE INDEX "supplier_bills_company_id_job_id_idx" ON "supplier_bills"("company_id", "job_id");
 CREATE INDEX "supplier_bills_company_id_contractor_id_idx" ON "supplier_bills"("company_id", "contractor_id");
 CREATE INDEX "supplier_bills_company_id_offer_id_idx" ON "supplier_bills"("company_id", "offer_id");
