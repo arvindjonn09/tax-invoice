@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import {
   createBackup,
   decryptBuffer,
   encryptBuffer,
+  pgConnection,
   prunePlan,
   restoreBackup,
   verifyBackup,
@@ -125,7 +126,7 @@ describe("encrypted backups (#63)", () => {
       key,
     );
     expect(manifest).toMatchObject({
-      format: 1,
+      format: 2,
       appEnv: "test",
       objects: { count: 2 },
     });
@@ -142,6 +143,10 @@ describe("encrypted backups (#63)", () => {
     }
     expect((await readdir(join(dir, "one", "objects"))).length).toBe(2);
     expect(await verifyBackup(join(dir, "one"))).toEqual(manifest);
+    expect(await verifyBackup(join(dir, "one"), key)).toMatchObject({
+      id: manifest.id,
+      index: { objects: [{ bytes: DOCUMENT.length }, { bytes: 4096 }] },
+    });
     // Never into a directory that already holds files.
     await expect(
       createBackup(
@@ -195,24 +200,42 @@ describe("encrypted backups (#63)", () => {
     ).rejects.toThrow(/empty database/);
   });
 
-  it("refuses a tampered file or the wrong key, restoring nothing", async () => {
+  it("refuses a tampered or swapped file, or the wrong key, restoring nothing", async () => {
     const tampered = join(dir, "tampered");
     await createBackup(
       { databaseUrl: database.url, store, ...pg },
       tampered,
       key,
     );
-    const object = join(tampered, "objects", "000001.enc");
-    const bytes = await readFile(object);
-    bytes[bytes.length - 20]! ^= 0xff;
-    await writeFile(object, bytes);
-    await expect(verifyBackup(tampered)).rejects.toThrow(
-      /doesn't match the manifest/,
-    );
-    // Even with the manifest rewritten, authentication still fails.
-    expect(() => decryptBuffer(key, bytes)).toThrow();
+    const manifestPath = join(tampered, "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      id: string;
+      database: { file: string; sha256: string };
+      files: Record<string, string>;
+    };
+    // 1. A changed dump byte, with the manifest hash forged to match: the
+    //    sealed hash and the GCM tag still refuse it before pg_restore runs.
+    const dumpPath = join(tampered, manifest.database.file);
+    const dump = await readFile(dumpPath);
+    dump[dump.length - 40]! ^= 0xff;
+    await writeFile(dumpPath, dump);
+    manifest.database.sha256 = createHash("sha256").update(dump).digest("hex");
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await expect(verifyBackup(tampered)).resolves.toBeTruthy(); // hashes "match"
+    await expect(verifyBackup(tampered, key)).rejects.toThrow();
     await emptyDatabase(async (url) => {
       const target = new MemoryStore();
+      await expect(
+        restoreBackup(
+          tampered,
+          { databaseUrl: url, store: target, ...pg },
+          key,
+          isEmpty(url),
+        ),
+      ).rejects.toThrow();
+      expect(await isEmpty(url)()).toBe(true);
+      expect(target.objects.size).toBe(0);
+      // 2. The wrong key.
       await expect(
         restoreBackup(
           join(dir, "one"),
@@ -224,12 +247,44 @@ describe("encrypted backups (#63)", () => {
       expect(await isEmpty(url)()).toBe(true);
       expect(target.objects.size).toBe(0);
     });
+    // 3. A document file swapped in from another backup (manifest forged):
+    //    each file is bound to its backup id and name.
+    const swapped = join(dir, "swapped");
+    await createBackup(
+      { databaseUrl: database.url, store, ...pg },
+      swapped,
+      key,
+    );
+    const foreign = await readFile(join(dir, "one", "objects", "000001.enc"));
+    await writeFile(join(swapped, "objects", "000001.enc"), foreign);
+    const swappedManifest = JSON.parse(
+      await readFile(join(swapped, "manifest.json"), "utf8"),
+    ) as { files: Record<string, string> };
+    swappedManifest.files["objects/000001.enc"] = createHash("sha256")
+      .update(foreign)
+      .digest("hex");
+    await writeFile(
+      join(swapped, "manifest.json"),
+      JSON.stringify(swappedManifest),
+    );
+    await expect(verifyBackup(swapped, key)).rejects.toThrow();
+    // 4. Paths outside the backup layout are refused.
+    manifest.database.file = "../../etc/passwd";
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await expect(verifyBackup(tampered)).rejects.toThrow(/Unexpected file/);
   });
 
-  it("round-trips buffers and only accepts a 32-byte base64 key", () => {
-    const sealed = encryptBuffer(key, Buffer.from("x"));
-    expect(decryptBuffer(key, sealed).toString()).toBe("x");
-    expect(() => decryptBuffer(key, sealed.subarray(0, 10))).toThrow(
+  it("round-trips buffers bound to their place and only accepts a 32-byte base64 key", () => {
+    const at = { id: "backup-1", file: "objects/000001.enc" };
+    const sealed = encryptBuffer(key, Buffer.from("x"), at);
+    expect(decryptBuffer(key, sealed, at).toString()).toBe("x");
+    expect(() =>
+      decryptBuffer(key, sealed, { ...at, file: "objects/000002.enc" }),
+    ).toThrow();
+    expect(() =>
+      decryptBuffer(key, sealed, { ...at, id: "backup-2" }),
+    ).toThrow();
+    expect(() => decryptBuffer(key, sealed.subarray(0, 10), at)).toThrow(
       /truncated/,
     );
     expect(backupKey(key.toString("base64"))).toEqual(key);
@@ -237,6 +292,19 @@ describe("encrypted backups (#63)", () => {
     expect(() => backupKey(randomBytes(16).toString("base64"))).toThrow(
       /32 bytes/,
     );
+  });
+
+  it("keeps passwords and other secrets out of pg_dump's arguments and environment", () => {
+    const connection = pgConnection(
+      "postgresql://backup:s3cr%40t@db.example:5432/jobflow",
+    );
+    expect(connection.args.join(" ")).not.toContain("s3cr");
+    expect(connection.env.PGPASSWORD).toBe("s3cr@t");
+    expect(Object.keys(connection.env).sort()).toEqual(
+      expect.arrayContaining(["PATH", "PGPASSWORD"]),
+    );
+    expect(connection.env).not.toHaveProperty("BACKUP_ENCRYPTION_KEY");
+    expect(connection.env).not.toHaveProperty("DATABASE_URL");
   });
 
   it("keeps the newest backup of each recent day and month; ignores anything else", () => {

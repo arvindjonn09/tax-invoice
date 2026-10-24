@@ -119,7 +119,7 @@ async function drill(env: NodeJS.ProcessEnv, recordDir: string | null) {
     );
     timings.backupSeconds = seconds(start);
     start = performance.now();
-    await verifyBackup(join(dir, "backup"));
+    await verifyBackup(join(dir, "backup"), key);
     timings.verifySeconds = seconds(start);
     await withClient(sourceUrl, (client) =>
       client.query(
@@ -228,7 +228,11 @@ async function main() {
       `Backup written: ${manifest.database.bytes} bytes of database, ${manifest.objects.count} documents.`,
     );
   } else if (command === "verify") {
-    const manifest = await verifyBackup(rest[0] ?? "");
+    // With the key: every file is decrypted and authenticated.
+    const manifest = await verifyBackup(
+      rest[0] ?? "",
+      backupKey(env.BACKUP_ENCRYPTION_KEY),
+    );
     console.log(
       `Backup ${manifest.createdAt} verified (${manifest.objects.count} documents).`,
     );

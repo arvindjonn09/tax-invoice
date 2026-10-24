@@ -10,22 +10,26 @@ A backup is a directory named by its UTC time, for example `2026-10-25T021500Z/`
 
 | File | Contents |
 |---|---|
-| `manifest.json` | Format, time, sizes, counts and the SHA-256 of every encrypted file. It holds no data, no object keys and no secrets. |
-| `database.dump.enc` | `pg_dump --format=custom --no-owner --no-privileges`, encrypted while it streams, so plaintext never reaches the disk. |
-| `objects.json.enc` | An encrypted index: object key → file, size and SHA-256. |
+| `manifest.json` | Format, backup id, time, sizes, counts and the SHA-256 of every encrypted file. It holds no data, no object keys and no secrets. |
+| `database.dump.enc` | `pg_dump --format=custom --no-owner --no-privileges`, encrypted while it streams, so plaintext never reaches the disk while backing up. |
+| `objects.json.enc` | An encrypted index: the dump's plaintext SHA-256, and for each document its key, file, size and SHA-256. |
 | `objects/NNNNNN.enc` | One encrypted file per stored document. |
 
 **Encryption:**
 - AES-256-GCM, with a 32-byte key from `BACKUP_ENCRYPTION_KEY` (base64).
 - Every file gets its own random IV and an authentication tag.
-- A changed byte, a truncated file or a wrong key fails the restore. It never restores wrong data.
+- Every file is bound, as additional authenticated data, to its backup id and file name. A file swapped in from another backup or position fails, even if someone rewrites the manifest.
+- A changed byte, a truncated or substituted file, or a wrong key fails the restore. It never restores wrong data.
+- **Restore order:** before `pg_restore` reads anything, the dump is decrypted to a private temporary file (0600, in a 0700 directory) and checked against the hash sealed in the index. Every document is authenticated before the first one is written.
+- **Passwords:** they never appear on the command line. `pg_dump` and `pg_restore` get the password as `PGPASSWORD`, in a minimal environment that holds neither the encryption key nor the storage secrets.
+- **What isn't hidden:** the plaintext manifest and the encrypted file sizes reveal how many documents there are, their approximate sizes, the total database size and `APP_ENV`. Nothing else is visible.
 - Code: `apps/web/src/server/backup/backup.ts`. CLI: `scripts/backup/cli.ts`.
 
 ## Commands
 
 ```sh
 pnpm backup:create <new-dir>          # encrypted backup of DATABASE_URL + document storage
-pnpm backup:verify <dir>              # checks every file against the manifest
+pnpm backup:verify <dir>              # checks every file against the manifest, then decrypts and authenticates each one (needs the key)
 pnpm backup:restore <dir>             # into RESTORE_DATABASE_URL (must be empty) and RESTORE_S3_BUCKET
 pnpm backup:prune <root> --keep-daily 30 --keep-monthly 12
 pnpm backup:drill --record docs/ops/restore-drills
@@ -89,10 +93,14 @@ systemctl list-timers jobflow-backup.timer
 5. Switch over: point the app's `DATABASE_URL` and `S3_BUCKET` at the restored copies, and restart.
 6. Record what happened in an incident note: the time, the backup used, and anything lost since it was taken.
 
+If a restore fails part-way, the target may be partly restored. This can happen when `pg_restore` errors, or when a document write fails after the database was restored. Drop that database (`dropdb jobflow_restored`), empty the restore bucket, and start again from step 2. The live database and bucket are never touched.
+
 ## Restore drills
 
-- **Command:** `pnpm backup:drill` backs up the configured database and storage, then verifies them. It restores into a fresh disposable database and bucket, compares every table's row count and every document byte for byte, records the timings, and cleans up.
+- **Command:** `pnpm backup:drill` backs up the configured database and storage, then verifies and authenticates them with the key. It restores into a fresh disposable database and bucket, compares every table's row count and every document byte for byte, records the timings, and cleans up.
 - **Recording:** `--record docs/ops/restore-drills` writes the dated result. Commit it.
+- **Permissions:** the drill creates and drops a scratch database, so it needs a role with `CREATEDB`. Run it as an operator, not with the nightly read-only backup role.
+- **Scratch bucket:** the drill restores documents into a scratch bucket named `<bucket>-drill-<time>`. It deletes the documents afterwards, but the empty bucket stays. In production, create that bucket in advance with the same encryption and access policy as the live bucket, or run the drill on staging.
 - **How often:** every month, and after any change to the schema or storage. Run on staging with production-like (synthetic) volume.
 - **Tests:** `tests/integration/backup.test.ts` covers the round trip in CI, along with:
   - no plaintext data or object keys in any file
