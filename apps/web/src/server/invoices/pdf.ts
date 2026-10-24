@@ -437,7 +437,10 @@ export async function renderInvoicePdf(
       drawable(regular, row[0]!),
       descriptionWidth,
     );
-    ensure(description.length * 12 + 6);
+    // Keep a row together when it fits on a page; a taller description
+    // starts here and continues on following pages under a repeated header.
+    const height = description.length * 12 + 6;
+    ensure(height <= A4[1] - MARGIN * 2 - 90 ? height : 30);
     if (y > A4[1] - MARGIN - 40) header();
     const rowTop = y;
     row.slice(1).forEach((cell, index) => {
@@ -446,6 +449,10 @@ export async function renderInvoicePdf(
     });
     y = rowTop;
     for (const part of description) {
+      if (y - 12 < MARGIN + 30) {
+        newPage();
+        header();
+      }
       text(part, MARGIN);
       y -= 12;
     }
