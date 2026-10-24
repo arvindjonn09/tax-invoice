@@ -2,17 +2,11 @@ import { randomUUID } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect, type Page } from "@playwright/test";
 import { requireAccounts, signIn } from "./accounts";
+import { sharedEmployee } from "./shared-employee";
 test.setTimeout(120_000);
 test.beforeEach(() => {
   requireAccounts();
 });
-
-type Employee = {
-  id: string;
-  name: string;
-  userId: string | null;
-  isActive: boolean;
-};
 
 async function send<T>(
   page: Page,
@@ -38,35 +32,6 @@ async function write<T>(
   return body;
 }
 
-/** The employee record linked to the shared employee login (any name). */
-async function linkedEmployee(page: Page): Promise<Employee> {
-  const accounts = requireAccounts();
-  const users = (await (
-    await page.request.get(
-      `/api/users?q=${encodeURIComponent(accounts.emails.employee)}`,
-    )
-  ).json()) as { members: { userId: string; role: string }[] };
-  const userId = users.members.find(
-    (member) => member.role === "employee",
-  )!.userId;
-  const { employees } = (await (
-    await page.request.get("/api/employees?status=all&pageSize=100")
-  ).json()) as { employees: Employee[] };
-  let employee = employees.find((row) => row.userId === userId);
-  employee ??= await write<Employee>(page, "/api/employees", {
-    name: "Synthetic Rate Employee",
-    userId,
-  });
-  if (!employee.isActive)
-    employee = await write<Employee>(
-      page,
-      `/api/employees/${employee.id}`,
-      { isActive: true },
-      "PATCH",
-    );
-  return employee;
-}
-
 function dayBefore(day: string): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000)
     .toISOString()
@@ -79,7 +44,7 @@ test("manager adds a cost rate, then approves a timesheet refused for lacking on
 }) => {
   // The owner reads user accounts to find the shared employee login.
   await signIn(page, "owner");
-  const employee = await linkedEmployee(page);
+  const employee = await sharedEmployee(page, "Synthetic Rate Employee");
   const suffix = randomUUID().slice(0, 8);
   const customer = await write<{ id: string }>(page, "/api/customers", {
     name: `Synthetic rates client ${suffix}`,
