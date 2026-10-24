@@ -24,6 +24,19 @@ async function main() {
     ),
     "utf8",
   );
+  const password = process.env.RUNTIME_DATABASE_PASSWORD;
+  // A deployed environment always needs the web login role.
+  if (
+    !password &&
+    ["staging", "production"].includes(process.env.APP_ENV ?? "")
+  ) {
+    throw new UsageError(
+      "Set RUNTIME_DATABASE_PASSWORD: the web app logs in as jobflow_web",
+    );
+  }
+  if (password && password.length < 24) {
+    throw new UsageError("RUNTIME_DATABASE_PASSWORD must be 24+ characters");
+  }
   const client = new Client({
     connectionString: url,
     connectionTimeoutMillis: 5000,
@@ -34,16 +47,6 @@ async function main() {
     // The web app's LOGIN role, a member of jobflow_app. The password comes
     // from the deploy environment and is quoted by PostgreSQL (%L), never
     // interpolated here.
-    const password = process.env.RUNTIME_DATABASE_PASSWORD;
-    // A deployed environment always needs the web login role.
-    if (
-      !password &&
-      ["staging", "production"].includes(process.env.APP_ENV ?? "")
-    ) {
-      throw new UsageError(
-        "Set RUNTIME_DATABASE_PASSWORD: the web app logs in as jobflow_web",
-      );
-    }
     if (password) {
       if (password.length < 24) {
         throw new UsageError(
