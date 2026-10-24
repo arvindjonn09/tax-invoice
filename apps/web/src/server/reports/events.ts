@@ -522,7 +522,7 @@ export async function financialEvents(
           credit.jobCostCents,
         );
       if (status.basis !== "non_cash") continue;
-      if (registered(creditDay))
+      if (registered(taxDay(credit.id, creditDay)))
         emit(
           `${credit.id}:credit-gst`,
           credit.id,
@@ -532,7 +532,7 @@ export async function financialEvents(
           "gst_purchases",
           -credit.creditableGstCents,
         );
-      if (voidDay && registered(voidDay))
+      if (voidDay && registered(taxDay(credit.id, voidDay)))
         emit(
           `${credit.id}:credit-gst-void`,
           credit.id,
@@ -547,7 +547,7 @@ export async function financialEvents(
       for (const a of supplierCreditAdjustments.filter(
         (a) => a.billId === row.id,
       ))
-        if (registered(toDay(a.adjustedOn)))
+        if (registered(taxDay(a.creditId, toDay(a.adjustedOn))))
           emit(
             a.id,
             a.creditId,

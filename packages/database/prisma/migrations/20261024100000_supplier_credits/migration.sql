@@ -146,7 +146,6 @@ CREATE TRIGGER supplier_credit_items_append_only BEFORE UPDATE OR DELETE OR TRUN
 CREATE TRIGGER supplier_credit_gst_adjustments_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON supplier_credit_gst_adjustments
   FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
 
-COMMIT;
 
 -- Reporting periods (#54): a supplier credit and its cash-basis corrections
 -- are GST sources. Record their posting date like any other source, so a
@@ -157,6 +156,11 @@ CREATE FUNCTION jobflow_supplier_credit_posting() RETURNS trigger LANGUAGE plpgs
 DECLARE day date; sid uuid;
 BEGIN
   IF TG_TABLE_NAME = 'supplier_credits' THEN
+    -- A credit is recorded live and voided later, so both dates post.
+    IF TG_OP = 'INSERT' AND NEW.voided_at IS NOT NULL THEN
+      RAISE EXCEPTION 'A supplier credit must be recorded before it is voided'
+        USING ERRCODE = '23514';
+    END IF;
     sid := NEW.id;
     -- received_on >= issued_on (CHECK): the later of the two.
     day := CASE WHEN NEW.voided_at IS NOT NULL
@@ -174,3 +178,5 @@ CREATE TRIGGER supplier_credits_reporting_period BEFORE INSERT OR UPDATE ON supp
   FOR EACH ROW EXECUTE FUNCTION jobflow_supplier_credit_posting();
 CREATE TRIGGER supplier_credit_gst_adjustments_reporting_period BEFORE INSERT ON supplier_credit_gst_adjustments
   FOR EACH ROW EXECUTE FUNCTION jobflow_supplier_credit_posting();
+
+COMMIT;

@@ -264,7 +264,7 @@ const pay = (billId: string, amountCents: string) =>
     call(
       "accountant",
       {
-        paidOn: "2026-07-18",
+        paidOn: "2026-07-20",
         amountCents,
         method: "bank_transfer",
         allocations: [{ billId, amountCents }],

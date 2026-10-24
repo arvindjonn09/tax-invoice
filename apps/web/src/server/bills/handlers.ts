@@ -1,6 +1,7 @@
 import {
   supplierPaymentDateProblem,
   chronologyMessage,
+  latestBillAdjustmentDay,
 } from "../payments/chronology";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -957,6 +958,31 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
               "allocations",
             );
           const payee = bills[0]!;
+          // Cash basis: attribution uses the bill's current credits, so a
+          // payment can't be dated before them (as receipts, #54).
+          for (const bill of bills) {
+            if (
+              (
+                await companyGstStatusOn(
+                  tx,
+                  actor.companyId,
+                  toDay(bill.issuedOn),
+                )
+              ).basis !== "cash"
+            )
+              continue;
+            const latest = await latestBillAdjustmentDay(
+              tx,
+              actor.companyId,
+              bill.id,
+            );
+            if (latest && data.paidOn < latest)
+              throw refuse(
+                400,
+                "Choose a date on or after the bill's latest supplier credit or adjustment date",
+                "paidOn",
+              );
+          }
           const paymentId = randomUUID(),
             createdAt = new Date();
           for (const allocation of allocations) {
@@ -1342,17 +1368,23 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
           });
           if (noteProblem) throw refuse(400, noteProblem, "documentId");
           if (adjustment !== 0n) {
-            // Dated no earlier than the note arrived or the payments it
-            // re-splits, so it never lands in an earlier period.
-            const lastPaid = await tx.supplierPaymentAllocation.findFirst({
-              where: {
-                companyId: actor.companyId,
-                billId,
-                payment: { voidedAt: null },
-              },
-              orderBy: { payment: { paidOn: "desc" } },
-              select: { payment: { select: { paidOn: true } } },
-            });
+            // Dated no earlier than the note arrived or the GST posting of
+            // the payments it re-splits (a late payment posts to the open
+            // period), so it never lands in an earlier period.
+            const [lastPaid] = await tx.$queryRaw<{ day: Date | null }[]>`
+              SELECT max(COALESCE(g.effective_on, p.paid_on)) AS day
+              FROM supplier_payment_allocations a
+              JOIN supplier_payments p ON p.id = a.payment_id AND p.company_id = a.company_id
+              LEFT JOIN gst_source_postings g
+                ON g.company_id = p.company_id AND g.source_id = p.id AND g.original_on = p.paid_on
+              WHERE a.company_id = ${actor.companyId}::uuid AND a.bill_id = ${billId}::uuid
+                AND p.voided_at IS NULL`;
+            // ...nor before a correction already recorded on this bill.
+            const corrected = await latestBillAdjustmentDay(
+              tx,
+              actor.companyId,
+              billId,
+            );
             await tx.supplierCreditGstAdjustment.create({
               data: {
                 companyId: actor.companyId,
@@ -1364,7 +1396,8 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
                   `${adjustmentDate([
                     data.issuedOn,
                     receivedOn,
-                    lastPaid ? toDay(lastPaid.payment.paidOn) : null,
+                    lastPaid?.day ? toDay(lastPaid.day) : null,
+                    corrected,
                   ])}T00:00:00Z`,
                 ),
               },
@@ -1444,11 +1477,13 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
         ).get(before.billId);
         // Bills with live credits can't be voided, so the bill is live.
         if (!balance) throw refuse(409, "Its bill is void");
+        // One clock read: the void and its cash correction share a day.
+        const voidedAt = new Date();
         await tx.supplierCredit.update({
           where: { id },
           data: {
             voidReason: parsed.data.reason,
-            voidedAt: new Date(),
+            voidedAt,
             voidedBy: actor.userId,
           },
         });
@@ -1466,7 +1501,7 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
               billId: before.billId,
               event: "voided",
               creditableGstCents: adjustment,
-              adjustedOn: new Date(`${sydneyToday()}T00:00:00Z`),
+              adjustedOn: new Date(`${sydneyToday(voidedAt)}T00:00:00Z`),
             },
           });
         await audit({
