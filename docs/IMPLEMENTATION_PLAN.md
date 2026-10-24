@@ -52,7 +52,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
 - [x] Customer receipts and allocations — #50: idempotent, transactional, no overpayment, refunds, cash-basis GST attribution per allocation
-- [ ] Financial concurrency/idempotency tests
+- [x] Financial concurrency/idempotency tests — #52: duplicate submissions, races, bad amounts, overpayment, voids, credits and refunds; every case asserts balances and job profit ([test plan](testing/money-safety.md))
 
 ## M4 Profit, GST reporting and dashboard
 - [ ] Job profitability: estimated, committed, incurred and paid costs — GST-exclusive, tested with GST fixtures
