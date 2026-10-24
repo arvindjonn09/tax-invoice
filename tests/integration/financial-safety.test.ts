@@ -322,11 +322,8 @@ async function draftInvoice(jobId: string, exclusive = "250000") {
   return ((await response.json()) as { id: string }).id;
 }
 
-const issue = (id: string) =>
-  r().invIssue(
-    call("accountant", "POST", { issueDate: "2026-07-01" }),
-    one(id),
-  );
+const issue = (id: string, issueDate = "2026-07-01") =>
+  r().invIssue(call("accountant", "POST", { issueDate }), one(id));
 
 /** An issued $2,500 + $250 GST invoice on the job. */
 async function issuedInvoice(jobId: string) {
@@ -463,9 +460,10 @@ describe("financial safety (#52)", () => {
     });
 
     // A $500 + $50 credit after full payment: revenue drops, the customer
-    // is owed $550 back, and nothing more can be received.
+    // is owed $550 back, and nothing more can be received. Dated with the
+    // receipts: settlement history is chronological (#54).
     const creditId = await draftCredit(invoiceId, "50000");
-    expect((await issue(creditId)).status).toBe(200);
+    expect((await issue(creditId, "2026-07-05")).status).toBe(200);
     expect(await invoiceBalance(invoiceId)).toMatchObject({
       credited: 55_000n,
       outstanding: 0n,

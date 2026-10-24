@@ -29,13 +29,18 @@ import { withAudit } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { companyGstStatusOn, sydneyToday, toDay } from "../company/gst";
+import { latestAdjustmentDay } from "../payments/chronology";
 import { lockRow } from "../db/locks";
 import { nextNumber } from "../db/numbering";
 import { optionalText, requiredText, uuidOrNull } from "../http/fields";
 import { parsePage } from "../http/guards";
 import { log, safeError } from "../log";
 import { Refusal, inTransaction } from "../jobs/handlers";
-import { invoiceBalances, invoiceMoney } from "../receipts/handlers";
+import {
+  invoiceBalances,
+  invoiceMoney,
+  reconcileCreditCashGst,
+} from "../receipts/handlers";
 
 // #47. Office roles read (invoice.read); owner/manager/accountant draft
 // (invoice.write); owner/accountant issue, credit and void (invoice.issue).
@@ -552,6 +557,37 @@ export function invoiceHandlers(
               fail(409, "Only an issued invoice can be credited"),
             );
         }
+        if (
+          original?.issueDate &&
+          (
+            await companyGstStatusOn(
+              tx,
+              actor.companyId,
+              toDay(original.issueDate),
+            )
+          ).basis === "cash"
+        ) {
+          const [allocations, latest] = await Promise.all([
+            tx.receiptAllocation.findMany({
+              where: { companyId: actor.companyId, invoiceId: original.id },
+              include: { receipt: true },
+            }),
+            latestAdjustmentDay(tx, actor.companyId, original.id),
+          ]);
+          const dates = allocations.flatMap((a) => [
+            toDay(a.receipt.receivedOn),
+            ...(a.receipt.voidedAt ? [sydneyToday(a.receipt.voidedAt)] : []),
+          ]);
+          if (latest) dates.push(latest);
+          if (dates.some((date) => date > issueDate))
+            throw new Refusal(
+              fail(
+                400,
+                "Choose a credit note date on or after the latest receipt, refund or adjustment date",
+                "issueDate",
+              ),
+            );
+        }
         // Issued invoices always carry their registration (DB-checked).
         const registered = original?.gstRegistered ?? status.registered;
         const items = [...before.items].sort((a, b) => a.position - b.position);
@@ -587,7 +623,7 @@ export function invoiceHandlers(
         if (original) {
           const issuedCredits = await tx.invoice.findMany({
             where: { creditsId: original.id, status: "issued" },
-            select: { inclusiveCents: true },
+            select: { inclusiveCents: true, gstCents: true, items: true },
           });
           const remaining = creditableRemaining(
             original.inclusiveCents,
@@ -598,6 +634,40 @@ export function invoiceHandlers(
               fail(
                 400,
                 `Credits can't exceed what's left on the invoice (${dollars(remaining)})`,
+                "lines",
+              ),
+            );
+        }
+        if (original) {
+          const originalItems = await tx.invoiceItem.findMany({
+            where: { invoiceId: original.id },
+          });
+          const previous = await tx.invoice.findMany({
+            where: { creditsId: original.id, status: "issued" },
+            include: { items: true },
+          });
+          const exceeds = TAX_CODES.some((code) => {
+            const allowed = originalItems
+              .filter((item) => item.taxCode === code)
+              .reduce((sum, item) => sum + item.inclusiveCents, 0n);
+            const credited = previous
+              .flatMap((credit) => credit.items)
+              .filter((item) => item.taxCode === code)
+              .reduce((sum, item) => sum + item.inclusiveCents, 0n);
+            const requested = amounts
+              .filter((item) => item.taxCode === code)
+              .reduce((sum, item) => sum + item.inclusive, 0n);
+            return requested + credited > allowed;
+          });
+          const creditedGst = previous.reduce(
+            (sum, credit) => sum + credit.gstCents,
+            0n,
+          );
+          if (exceeds || totals.gst + creditedGst > original.gstCents)
+            throw new Refusal(
+              fail(
+                400,
+                "Credits can't exceed the original amounts for each tax treatment",
                 "lines",
               ),
             );
@@ -676,6 +746,16 @@ export function invoiceHandlers(
           },
           include: { items: true },
         });
+        const cashGstAdjustment = original
+          ? await reconcileCreditCashGst(
+              tx,
+              actor,
+              original.id,
+              updated.id,
+              "issue",
+              issueDate,
+            )
+          : 0n;
         if (kind === "invoice" && updated.jobId) {
           await lockRow(tx, "jobs", updated.jobId);
           const job = await tx.job.findUniqueOrThrow({
@@ -710,6 +790,7 @@ export function invoiceHandlers(
             exclusiveCents: totals.exclusive,
             gstCents: totals.gst,
             inclusiveCents: totals.inclusive,
+            cashGstAdjustment,
           },
         });
         return updated;
@@ -846,6 +927,7 @@ export function invoiceHandlers(
               "Money has been received against this invoice; credit it, or void the receipts first",
             ),
           );
+        if (before.creditsId) await lockRow(tx, "invoices", before.creditsId);
         const updated = await tx.invoice.update({
           where: { id: before.id },
           data: {
@@ -856,6 +938,16 @@ export function invoiceHandlers(
           },
           include: { items: true },
         });
+        const cashGstAdjustment = before.creditsId
+          ? await reconcileCreditCashGst(
+              tx,
+              actor,
+              before.creditsId,
+              before.id,
+              "void",
+              sydneyToday(),
+            )
+          : 0n;
         await audit({
           companyId: actor.companyId,
           actorUserId: actor.userId,
@@ -863,7 +955,11 @@ export function invoiceHandlers(
             before.kind === "invoice" ? "invoice.voided" : "credit_note.voided",
           target: { type: "invoice", id: before.id },
           before: { status: "issued" },
-          after: { status: "void", reason: parsed.data.reason },
+          after: {
+            status: "void",
+            reason: parsed.data.reason,
+            cashGstAdjustment,
+          },
         });
         return updated;
       });
