@@ -157,6 +157,8 @@ const TRANSITION_MESSAGES = {
   "not-allowed": "That status change isn't allowed from the current status",
   "system-only":
     "That change happens through invoicing: a job becomes invoiced when an invoice is issued, and an invoiced job is cancelled with its credit note",
+  "review-only":
+    "Submitted work is approved or sent back for rework from the job's review",
 } as const;
 
 async function ownJob(db: PrismaClient, actor: Actor, id: string) {

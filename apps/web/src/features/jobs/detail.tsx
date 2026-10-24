@@ -9,7 +9,12 @@ import { FormMessage } from "@/components/form/field";
 import { hasUnsavedChanges } from "@/components/form/use-unsaved-changes";
 import { useRemote } from "@/components/data/use-remote";
 import { JobEditor } from "./editor";
-import { AssignmentsPanel, StatusForm, VisitsPanel } from "./actions";
+import {
+  AssignmentsPanel,
+  ReviewForm,
+  StatusForm,
+  VisitsPanel,
+} from "./actions";
 import { day, time, statusLabel, type Job } from "./types";
 export function JobDetail({
   id,
@@ -197,6 +202,26 @@ export function JobDetail({
                       <SiteDetails site={data.site} />
                     </div>
                   )}
+                  {editable && data.status === "awaiting_review" ? (
+                    <section
+                      aria-label="Review submitted work"
+                      className="space-y-4 border-t pt-6"
+                    >
+                      <h3 className="text-lg font-semibold">
+                        Review submitted work
+                      </h3>
+                      <ReviewForm
+                        job={data}
+                        saved={() => {
+                          setMessage({
+                            kind: "success",
+                            text: "Review saved.",
+                          });
+                          reload();
+                        }}
+                      />
+                    </section>
+                  ) : null}
                   {editable ? (
                     <section
                       aria-label="Change job status"

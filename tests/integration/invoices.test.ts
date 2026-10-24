@@ -479,7 +479,9 @@ describe("credit notes and voids", () => {
       await r().credit(call("accountant", "POST", {}), one(invoice.id))
     ).json();
     expect(full.inclusiveCents).toBe("275000");
-    expect((await issue(full.id)).status).toBe(400);
+    const over = await issue(full.id);
+    expect(over.status).toBe(400);
+    expect((await over.json()).fields.lines).toContain("($1,650.00)");
     // Voiding an invoice that has issued credits is refused.
     expect(
       (
@@ -536,6 +538,81 @@ describe("credit notes and voids", () => {
         )
       ).status,
     ).toBe(409);
+  });
+});
+
+describe("credit note review fixes", () => {
+  it("reverses the original GST after the registration ends", async () => {
+    const invoice = (await draft()).body;
+    await issue(invoice.id, "accountant", { issueDate: "2026-01-15" });
+    await db.companyGstRegistration.updateMany({
+      where: { companyId },
+      data: { endsOn: new Date("2026-03-31T00:00:00Z") },
+    });
+    try {
+      const full = await (
+        await r().credit(call("accountant", "POST", {}), one(invoice.id))
+      ).json();
+      const issued = await issue(full.id);
+      expect(issued.status).toBe(200);
+      expect(await issued.json()).toMatchObject({
+        title: "Adjustment Note",
+        gstRegistered: true,
+        gstCents: "25000",
+        inclusiveCents: "275000",
+      });
+    } finally {
+      await db.companyGstRegistration.updateMany({
+        where: { companyId },
+        data: { endsOn: null },
+      });
+    }
+  });
+
+  it("refuses a credit note whose original was voided, even concurrently", async () => {
+    const invoice = (await draft()).body;
+    await issue(invoice.id);
+    const credit = await (
+      await r().credit(call("accountant", "POST", {}), one(invoice.id))
+    ).json();
+    const [issued, voided] = await Promise.all([
+      issue(credit.id),
+      r().void(
+        call("accountant", "POST", { reason: "Wrong customer" }),
+        one(invoice.id),
+      ),
+    ]);
+    // Exactly one correction path wins.
+    expect([issued.status, voided.status].sort()).toEqual([200, 409]);
+    const second = await (
+      await r().credit(call("accountant", "POST", {}), one(invoice.id))
+    ).json();
+    if (voided.status === 200) {
+      expect(second.id).toBeUndefined();
+      expect(
+        (await db.invoice.findUniqueOrThrow({ where: { id: credit.id } }))
+          .status,
+      ).toBe("draft");
+    }
+  });
+
+  it("never moves a line between invoices in the database", async () => {
+    const issuedInvoice = (await draft()).body;
+    await issue(issuedInvoice.id);
+    const empty = (await draft()).body;
+    await expect(
+      db.invoiceItem.updateMany({
+        where: { invoiceId: issuedInvoice.id },
+        data: { invoiceId: empty.id },
+      }),
+    ).rejects.toThrow(/can't move/);
+    const other = (await draft()).body;
+    await expect(
+      db.invoiceItem.updateMany({
+        where: { invoiceId: other.id },
+        data: { invoiceId: empty.id },
+      }),
+    ).rejects.toThrow(/can't move/);
   });
 });
 

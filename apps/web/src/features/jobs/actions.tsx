@@ -83,6 +83,72 @@ export function StatusForm({ job, saved }: { job: Job; saved: () => void }) {
     </form>
   );
 }
+/** Approve submitted work or send it back with a note (#42). */
+export function ReviewForm({ job, saved }: { job: Job; saved: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<Message>(null);
+  const [noteError, setNoteError] = useState<string>();
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (busy) return;
+        const submitter = (event.nativeEvent as SubmitEvent).submitter;
+        const decision =
+          submitter?.getAttribute("value") === "rework" ? "rework" : "approve";
+        const note =
+          String(new FormData(event.currentTarget).get("note") ?? "").trim() ||
+          null;
+        if (decision === "rework" && !note) {
+          setNoteError("Say what needs redoing");
+          return;
+        }
+        setNoteError(undefined);
+        setBusy(true);
+        const result = await sendJson(`/api/jobs/${job.id}/review`, "POST", {
+          decision,
+          note,
+        });
+        setBusy(false);
+        if (!result.ok) {
+          setNoteError(result.fields.note);
+          setMessage({ kind: "error", text: result.message });
+          return;
+        }
+        setMessage(null);
+        saved();
+      }}
+    >
+      <fieldset disabled={busy} className="space-y-4">
+        <legend className="sr-only">Review submitted work</legend>
+        <TextField
+          id="job-review-note"
+          name="note"
+          label="Review note"
+          hint="Required when sending the work back"
+          maxLength={500}
+          error={noteError}
+        />
+      </fieldset>
+      <FormMessage message={message} />
+      <div className="flex flex-wrap gap-3">
+        <Button type="submit" name="decision" value="approve" disabled={busy}>
+          {busy ? "Saving…" : "Approve completion"}
+        </Button>
+        <Button
+          type="submit"
+          name="decision"
+          value="rework"
+          variant="outline"
+          disabled={busy}
+        >
+          Request rework
+        </Button>
+      </div>
+    </form>
+  );
+}
 function localInput(value: string | null | undefined) {
   if (!value) return "";
   const date = new Date(value);

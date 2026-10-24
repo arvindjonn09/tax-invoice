@@ -140,7 +140,9 @@ model Company {
   documents        Document[]
   contractors      Contractor[]
 
-  userInvitations UserInvitation[]
+  userInvitations          UserInvitation[]
+  defaultExpenseSettlement ExpenseSettlement @default(paid_at_purchase) @map("default_expense_settlement")
+  expenses                 Expense[]
 
   @@map("companies")
 }
@@ -212,13 +214,21 @@ model Membership {
   offersResponded    ContractorOffer[]        @relation("ContractorOfferResponder")
   acceptances        ContractorAcceptance[]
 
-  invitationsCreated UserInvitation[]
+  invitationsCreated  UserInvitation[]
+  ratesCreated        EmployeeRate[]   @relation("EmployeeRateCreator")
+  timesheetsSubmitted Timesheet[]      @relation("TimesheetSubmitter")
+  timesheetsDecided   Timesheet[]      @relation("TimesheetDecider")
+  expensesSubmitted   Expense[]        @relation("ExpenseSubmitter")
+  expensesDecided     Expense[]        @relation("ExpenseDecider")
 
-  invoicesCreated       Invoice[] @relation("InvoiceCreator")
-  invoicesIssued        Invoice[] @relation("InvoiceIssuer")
-  invoicesVoided        Invoice[] @relation("InvoiceVoider")
-  receiptsCreated       CustomerReceipt[] @relation("ReceiptCreator")
-  receiptsVoided        CustomerReceipt[] @relation("ReceiptVoider")
+  invoicesCreated       Invoice[]      @relation("InvoiceCreator")
+  invoicesIssued        Invoice[]      @relation("InvoiceIssuer")
+  invoicesVoided        Invoice[]      @relation("InvoiceVoider")
+  workEvidenceSubmitted WorkEvidence[]
+
+  receiptsCreated CustomerReceipt[] @relation("ReceiptCreator")
+  receiptsVoided  CustomerReceipt[] @relation("ReceiptVoider")
+
   @@unique([companyId, userId])
   @@index([userId])
   @@index([companyId, createdBy])
@@ -265,20 +275,22 @@ model IdempotencyKey {
 /// An employee who can be assigned to jobs (#30). No payroll data.
 /// Optionally linked to a user account of the same company.
 model Employee {
-  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId   String       @map("company_id") @db.Uuid
-  userId      String?      @map("user_id") @db.Uuid
-  name        String       @db.VarChar(200)
-  email       String?      @db.VarChar(320)
-  phone       String?      @db.VarChar(30)
-  isActive    Boolean      @default(true) @map("is_active")
-  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy   String       @map("created_by") @db.Uuid
-  company     Company      @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  user        Membership?  @relation("EmployeeUser", fields: [companyId, userId], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  creator     Membership   @relation("EmployeeCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String         @map("company_id") @db.Uuid
+  userId      String?        @map("user_id") @db.Uuid
+  name        String         @db.VarChar(200)
+  email       String?        @db.VarChar(320)
+  phone       String?        @db.VarChar(30)
+  isActive    Boolean        @default(true) @map("is_active")
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy   String         @map("created_by") @db.Uuid
+  company     Company        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user        Membership?    @relation("EmployeeUser", fields: [companyId, userId], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  creator     Membership     @relation("EmployeeCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   assignments Assignment[]
+  rates       EmployeeRate[]
+  timesheets  Timesheet[]
 
   @@unique([companyId, id])
   @@unique([companyId, userId])
@@ -311,8 +323,9 @@ model Customer {
   locations    Location[]
   jobs         Job[]
 
-  invoices     Invoice[]
-  receipts     CustomerReceipt[]
+  invoices Invoice[]
+  receipts CustomerReceipt[]
+
   @@unique([companyId, id])
   @@index([companyId, archivedAt, name])
   @@index([companyId, createdBy])
@@ -362,7 +375,8 @@ model Location {
   creator      Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   jobs         Job[]
 
-  invoices     Invoice[]
+  invoices Invoice[]
+
   @@unique([companyId, id])
   @@unique([companyId, customerId, id])
   @@index([companyId, customerId])
@@ -427,8 +441,12 @@ model Job {
   visits                    JobVisit[]
   assignments               Assignment[]
   contractorOffers          ContractorOffer[]
+  timesheets                Timesheet[]
+  expenses                  Expense[]
 
-  invoices                   Invoice[]
+  invoices     Invoice[]
+  workEvidence WorkEvidence[]
+
   @@unique([companyId, number])
   @@unique([companyId, id])
   @@index([companyId, status])
@@ -471,6 +489,9 @@ model JobVisit {
   job         Job            @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
   creator     Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   assignments Assignment[]
+  timesheets  Timesheet[]
+
+  workEvidence WorkEvidence[]
 
   @@unique([companyId, id])
   @@unique([companyId, jobId, id])
@@ -549,10 +570,83 @@ model Document {
   createdBy   String       @map("created_by") @db.Uuid
   company     Company      @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   creator     Membership   @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  expense     Expense?
+
+  workEvidence WorkEvidence?
 
   @@unique([companyId, id])
   @@index([companyId, createdBy])
   @@map("documents")
+}
+
+enum TimesheetStatus {
+  submitted
+  approved
+  rejected
+
+  @@map("timesheet_status")
+}
+
+/// Effective-dated internal cost rate (#38). Append-only (SQL trigger).
+model EmployeeRate {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId       String      @map("company_id") @db.Uuid
+  employeeId      String      @map("employee_id") @db.Uuid
+  effectiveFrom   DateTime    @map("effective_from") @db.Date
+  hourlyCostCents BigInt      @map("hourly_cost_cents")
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy       String      @map("created_by") @db.Uuid
+  employee        Employee    @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator         Membership  @relation("EmployeeRateCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  timesheets      Timesheet[]
+
+  @@unique([companyId, id])
+  @@unique([companyId, employeeId, effectiveFrom], map: "employee_rate_history_employee_from_key")
+  @@index([companyId, createdBy])
+  @@map("employee_rate_history")
+}
+
+/// Time on a job or visit (#38). Cost is incurred once, on approval, from the
+/// snapshot; a SQL trigger freezes decided timesheets and a correction is an
+/// approved reversal (reversesId) with negated minutes and cost.
+model Timesheet {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId       String          @map("company_id") @db.Uuid
+  employeeId      String          @map("employee_id") @db.Uuid
+  jobId           String          @map("job_id") @db.Uuid
+  visitId         String?         @map("visit_id") @db.Uuid
+  workDate        DateTime        @map("work_date") @db.Date
+  minutes         Int
+  note            String?         @db.VarChar(500)
+  status          TimesheetStatus @default(submitted)
+  decisionNote    String?         @map("decision_note") @db.VarChar(500)
+  decidedAt       DateTime?       @map("decided_at") @db.Timestamptz(3)
+  decidedBy       String?         @map("decided_by") @db.Uuid
+  rateId          String?         @map("rate_id") @db.Uuid
+  hourlyCostCents BigInt?         @map("hourly_cost_cents")
+  costCents       BigInt?         @map("cost_cents")
+  reversesId      String?         @map("reverses_id") @db.Uuid
+  submittedBy     String          @map("submitted_by") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  employee        Employee        @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  job             Job             @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  visit           JobVisit?       @relation(fields: [companyId, jobId, visitId], references: [companyId, jobId, id], onDelete: NoAction, onUpdate: NoAction)
+  rate            EmployeeRate?   @relation(fields: [companyId, rateId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  reverses        Timesheet?      @relation("TimesheetReversal", fields: [companyId, reversesId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  reversedBy      Timesheet?      @relation("TimesheetReversal")
+  submitter       Membership      @relation("TimesheetSubmitter", fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  decider         Membership?     @relation("TimesheetDecider", fields: [companyId, decidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@unique([companyId, reversesId])
+  @@index([companyId, jobId])
+  @@index([companyId, employeeId, workDate])
+  @@index([companyId, status])
+  @@index([companyId, submittedBy])
+  @@index([companyId, decidedBy])
+  @@index([companyId, rateId])
+  @@map("timesheets")
 }
 
 enum ContractorRateType {
@@ -740,7 +834,8 @@ model Invoice {
   voider            Membership?       @relation("InvoiceVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   items             InvoiceItem[]
 
-  allocations       ReceiptAllocation[]
+  allocations ReceiptAllocation[]
+
   @@unique([companyId, id])
   @@unique([companyId, kind, number])
   @@index([companyId, status, issueDate])
@@ -835,4 +930,138 @@ model ReceiptAllocation {
   @@unique([receiptId, invoiceId])
   @@index([companyId, invoiceId])
   @@map("receipt_allocations")
+}
+
+enum ExpenseCategory {
+  materials
+  travel
+  parking
+  equipment
+  misc
+
+  @@map("expense_category")
+}
+
+enum PriceEntry {
+  exclusive
+  inclusive
+
+  @@map("price_entry")
+}
+
+enum ExpenseSettlement {
+  paid_at_purchase
+  on_account
+
+  @@map("expense_settlement")
+}
+
+enum PaymentMethod {
+  card
+  cash
+  bank_transfer
+  other
+
+  @@map("payment_method")
+}
+
+enum ExpenseStatus {
+  submitted
+  approved
+  rejected
+
+  @@map("expense_status")
+}
+
+/// A job or general expense (#40). Cost is incurred once, on approval, from
+/// the snapshot columns; a SQL trigger freezes decided expenses and a
+/// correction is an approved reversal (reversesId) with negated cents.
+model Expense {
+  id                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId             String             @map("company_id") @db.Uuid
+  jobId                 String?            @map("job_id") @db.Uuid
+  category              ExpenseCategory
+  description           String             @db.VarChar(500)
+  supplierName          String?            @map("supplier_name") @db.VarChar(200)
+  purchasedOn           DateTime           @map("purchased_on") @db.Date
+  priceEntry            PriceEntry         @map("price_entry")
+  enteredAmountCents    BigInt             @map("entered_amount_cents")
+  taxCode               TaxCode            @map("tax_code")
+  gstRateBasisPoints    Int                @map("gst_rate_basis_points")
+  exclusiveCents        BigInt             @map("exclusive_cents")
+  gstCents              BigInt             @map("gst_cents")
+  inclusiveCents        BigInt             @map("inclusive_cents")
+  creditableBasisPoints Int                @default(10000) @map("creditable_basis_points")
+  receiptDocumentId     String?            @map("receipt_document_id") @db.Uuid
+  settlement            ExpenseSettlement?
+  paidOn                DateTime?          @map("paid_on") @db.Date
+  paymentMethod         PaymentMethod?     @map("payment_method")
+  status                ExpenseStatus      @default(submitted)
+  decisionNote          String?            @map("decision_note") @db.VarChar(500)
+  decidedAt             DateTime?          @map("decided_at") @db.Timestamptz(3)
+  decidedBy             String?            @map("decided_by") @db.Uuid
+  companyGstRegistered  Boolean?           @map("company_gst_registered")
+  evidenceVerified      Boolean?           @map("evidence_verified")
+  hasEvidence           Boolean?           @map("has_evidence")
+  creditableGstCents    BigInt?            @map("creditable_gst_cents")
+  nonCreditableGstCents BigInt?            @map("non_creditable_gst_cents")
+  jobCostCents          BigInt?            @map("job_cost_cents")
+  reversesId            String?            @map("reverses_id") @db.Uuid
+  /// A correction of a cost-only-reversed expense; reuses its settlement.
+  correctsId            String?            @map("corrects_id") @db.Uuid
+  submittedBy           String             @map("submitted_by") @db.Uuid
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  company               Company            @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  job                   Job?               @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  receipt               Document?          @relation(fields: [companyId, receiptDocumentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  reverses              Expense?           @relation("ExpenseReversal", fields: [companyId, reversesId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  reversedBy            Expense?           @relation("ExpenseReversal")
+  corrects              Expense?           @relation("ExpenseCorrection", fields: [companyId, correctsId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  /// Corrections of this expense: at most one live (submitted/approved);
+  /// rejected ones are kept (partial unique index in the migration).
+  corrections           Expense[]          @relation("ExpenseCorrection")
+  submitter             Membership         @relation("ExpenseSubmitter", fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  decider               Membership?        @relation("ExpenseDecider", fields: [companyId, decidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@unique([companyId, receiptDocumentId])
+  @@unique([companyId, reversesId])
+  @@index([companyId, correctsId])
+  @@index([companyId, jobId])
+  @@index([companyId, status, purchasedOn])
+  @@index([companyId, submittedBy])
+  @@index([companyId, decidedBy])
+  @@map("expenses")
+}
+
+enum WorkEvidenceKind {
+  photo
+  note
+  signature
+
+  @@map("work_evidence_kind")
+}
+
+/// Proof of work from the workers on a job (#42): photos, notes, customer
+/// signatures. Append-only (trigger); files are private documents (#34).
+model WorkEvidence {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId   String           @map("company_id") @db.Uuid
+  jobId       String           @map("job_id") @db.Uuid
+  visitId     String?          @map("visit_id") @db.Uuid
+  kind        WorkEvidenceKind
+  documentId  String?          @map("document_id") @db.Uuid
+  note        String?          @db.VarChar(2000)
+  submittedBy String           @map("submitted_by") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  job         Job              @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  visit       JobVisit?        @relation(fields: [companyId, jobId, visitId], references: [companyId, jobId, id], onDelete: NoAction, onUpdate: NoAction)
+  document    Document?        @relation(fields: [companyId, documentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  submitter   Membership       @relation(fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, documentId])
+  @@index([companyId, jobId, createdAt])
+  @@index([companyId, submittedBy])
+  @@map("work_evidence")
 }

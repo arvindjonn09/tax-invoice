@@ -239,6 +239,12 @@ async function partiesProblem(
 const refuse = (problem: [string, string]) =>
   new Refusal(fail(400, problem[1], problem[0]));
 
+/** Integer cents as "$1,234.56" for messages; never via floating point. */
+function dollars(cents: bigint): string {
+  const whole = new Intl.NumberFormat("en-AU").format(cents / 100n);
+  return `$${whole}.${(cents % 100n).toString().padStart(2, "0")}`;
+}
+
 export function invoiceHandlers(db: () => PrismaClient) {
   const list: PolicyHandler<unknown> = async ({ actor, request }) => {
     const params = new URL(request.url).searchParams;
@@ -495,6 +501,22 @@ export function invoiceHandlers(db: () => PrismaClient) {
             : Promise.resolve(null),
           companyGstStatusOn(tx, actor.companyId, issueDate),
         ]);
+        // A credit note reverses the original supply, so it takes the
+        // original's GST treatment. Lock before reading so a concurrent
+        // void is seen.
+        let original: Invoice | null = null;
+        if (before.kind === "credit_note") {
+          await lockRow(tx, "invoices", before.creditsId!);
+          original = await tx.invoice.findUniqueOrThrow({
+            where: { id: before.creditsId! },
+          });
+          if (original.status !== "issued")
+            throw new Refusal(
+              fail(409, "Only an issued invoice can be credited"),
+            );
+        }
+        // Issued invoices always carry their registration (DB-checked).
+        const registered = original?.gstRegistered ?? status.registered;
         const items = [...before.items].sort((a, b) => a.position - b.position);
         const inputs = items.map((item) => ({
           description: item.description,
@@ -503,7 +525,7 @@ export function invoiceHandlers(db: () => PrismaClient) {
           taxCode: item.taxCode,
         }));
         const problems = issueProblems({
-          registered: status.registered,
+          registered,
           supplier: { legalName: company.legalName, abn: company.abn },
           recipient: { name: customer.name, abn: customer.abn },
           lines: inputs,
@@ -521,22 +543,11 @@ export function invoiceHandlers(db: () => PrismaClient) {
               { status: 400 },
             ),
           );
-        // Re-price against the registration on the issue date.
-        const amounts = invoiceLines(
-          inputs,
-          before.priceEntry,
-          status.registered,
-        );
+        // Re-price against the registration on the issue date (or, for a
+        // credit note, the original invoice's).
+        const amounts = invoiceLines(inputs, before.priceEntry, registered);
         const totals = documentTotals(amounts);
-        if (before.kind === "credit_note") {
-          const original = await tx.invoice.findUniqueOrThrow({
-            where: { id: before.creditsId! },
-          });
-          await lockRow(tx, "invoices", original.id);
-          if (original.status !== "issued")
-            throw new Refusal(
-              fail(409, "Only an issued invoice can be credited"),
-            );
+        if (original) {
           const issuedCredits = await tx.invoice.findMany({
             where: { creditsId: original.id, status: "issued" },
             select: { inclusiveCents: true },
@@ -549,7 +560,7 @@ export function invoiceHandlers(db: () => PrismaClient) {
             throw new Refusal(
               fail(
                 400,
-                `Credits can't exceed what's left on the invoice ($${(Number(remaining) / 100).toFixed(2)})`,
+                `Credits can't exceed what's left on the invoice (${dollars(remaining)})`,
                 "lines",
               ),
             );
@@ -575,8 +586,8 @@ export function invoiceHandlers(db: () => PrismaClient) {
         const prefix = kind === "invoice" ? company.invoicePrefix : "CN-";
         const title =
           kind === "invoice"
-            ? invoiceTitle(status.registered)
-            : status.registered
+            ? invoiceTitle(registered)
+            : registered
               ? "Adjustment Note"
               : "Credit Note";
         const updated = await tx.invoice.update({
@@ -587,7 +598,7 @@ export function invoiceHandlers(db: () => PrismaClient) {
             reference: `${prefix}${String(number).padStart(4, "0")}`,
             issueDate: new Date(`${issueDate}T00:00:00Z`),
             title,
-            gstRegistered: status.registered,
+            gstRegistered: registered,
             supplierSnapshot: {
               name: company.name,
               legalName: company.legalName,
@@ -658,7 +669,7 @@ export function invoiceHandlers(db: () => PrismaClient) {
           after: {
             reference: updated.reference,
             title,
-            gstRegistered: status.registered,
+            gstRegistered: registered,
             exclusiveCents: totals.exclusive,
             gstCents: totals.gst,
             inclusiveCents: totals.inclusive,
