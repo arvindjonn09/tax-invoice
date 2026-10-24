@@ -1,7 +1,7 @@
 # Database and financial rules
 
 ## Tables
-companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, supplier_payment_gst_adjustments, supplier_credits, supplier_credit_items, supplier_credit_gst_adjustments, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, receipt_gst_adjustments, gst_adjustments, documents, audit_events, idempotency_keys.
+companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, supplier_payment_gst_adjustments, supplier_credits, supplier_credit_items, supplier_credit_gst_adjustments, supplier_payment_expense_allocations, supplier_payment_expense_gst_adjustments, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, receipt_gst_adjustments, gst_adjustments, documents, audit_events, idempotency_keys.
 
 Each company-owned entity has company_id and unique ID; human job/invoice numbers unique per company. All date-times UTC with Australia/Sydney display; AUD cents stored as integer/BigInt with bounds and explicit rounding rules.
 
@@ -17,6 +17,11 @@ Every invoice, quote, bill and expense line stores: tax code, GST rate snapshot,
 - Margin = profit / invoiced job revenue; N/A for zero.
 - Customer due = invoices (GST-inclusive) - credits - allocated receipts.
 - Supplier due = bills (GST-inclusive) - credits - allocated supplier payments.
+- On-account expenses (#141): an approved original expense settled "on account" owes its supplier its GST-inclusive total, less live supplier payments allocated to it.
+  - A supplier payment settles either bills or on-account expenses, never both in one payment, and pays one supplier: the same contractor, or the same supplier name.
+  - The rules match bills: an idempotency key, no overpayment, cash-basis input tax credit attributed per allocation, and append-only corrections (`supplier_payment_expense_gst_adjustments`) when a payment is voided.
+  - A supplier-credit reversal cancels the balance. It's refused while live payments are allocated, so void them first. Payments and reversals take the same expense row lock, so whichever comes first wins.
+  - A cost-only reversal leaves the supplier balance payable.
 - Supplier credits (#140): an adjustment note against one bill. It snapshots the creditable GST it takes back, its non-creditable GST and the job cost it removes, all at the bill's own creditable share and worked out on the cumulative credited GST.
   - **Non-cash basis:** for the purchaser, the creditable GST taken back is an *increasing* adjustment (s19-80; ATO "reduction in purchase price"). It's made whether or not a note is held, and is dated the later of the issue date and `received_on`.
   - **Voids:** voiding a credit is a reversal dated on the void (`voided_at`, in Sydney time). It never rewrites the earlier period.

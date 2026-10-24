@@ -167,9 +167,34 @@ function ownView(row: Expense) {
 }
 
 type OfficeRow = Expense & {
-  reversedBy: { id: string } | null;
+  reversedBy: { id: string; settlement: Expense["settlement"] } | null;
   corrections: { id: string; status: string }[];
+  supplierPaymentAllocations: { amountCents: bigint }[];
 };
+
+/**
+ * What is still owed to the supplier on an approved on-account expense
+ * (#141), or null when nothing is owed on account (paid at purchase,
+ * reversals, not yet approved, or cancelled by a supplier credit).
+ */
+function supplierBalance(row: OfficeRow) {
+  if (
+    row.status !== "approved" ||
+    row.settlement !== "on_account" ||
+    row.reversesId ||
+    row.reversedBy?.settlement === "on_account"
+  )
+    return null;
+  const paid = row.supplierPaymentAllocations.reduce(
+    (total, allocation) => total + allocation.amountCents,
+    0n,
+  );
+  const owing = row.inclusiveCents - paid;
+  return {
+    paidCents: paid.toString(),
+    outstandingCents: (owing < 0n ? 0n : owing).toString(),
+  };
+}
 
 /** Office view: adds who submitted/decided and the approval snapshot. */
 function officeView(row: OfficeRow) {
@@ -178,6 +203,7 @@ function officeView(row: OfficeRow) {
     submittedBy: row.submittedBy,
     decidedBy: row.decidedBy,
     reversedById: row.reversedBy?.id ?? null,
+    supplierBalance: supplierBalance(row),
     correctsId: row.correctsId,
     correctedById:
       row.corrections.find((c) => c.status !== "rejected")?.id ?? null,
@@ -196,8 +222,12 @@ function officeView(row: OfficeRow) {
 }
 
 const OFFICE_INCLUDE = {
-  reversedBy: { select: { id: true } },
+  reversedBy: { select: { id: true, settlement: true } },
   corrections: { select: { id: true, status: true } },
+  supplierPaymentAllocations: {
+    where: { payment: { voidedAt: null } },
+    select: { amountCents: true },
+  },
 } as const;
 
 type Draft = {
@@ -847,6 +877,26 @@ export function expenseHandlers(db: () => PrismaClient) {
               fail(
                 400,
                 "Only an expense on account gets a supplier credit",
+                "settlement",
+              ),
+            );
+          // A supplier credit cancels what's owed; money already paid on
+          // account can't be credited away (#141). The expense row lock is
+          // the one supplier payments take, so the two can't race.
+          if (
+            effect === "supplier_credit" &&
+            (await tx.supplierPaymentExpenseAllocation.count({
+              where: {
+                companyId: actor.companyId,
+                expenseId: original.id,
+                payment: { voidedAt: null },
+              },
+            })) > 0
+          )
+            throw new Refusal(
+              fail(
+                409,
+                "Supplier payments are allocated to this expense; void them first",
                 "settlement",
               ),
             );
