@@ -1,4 +1,8 @@
-import { receiptDateProblem, chronologyMessage } from "../payments/chronology";
+import {
+  chronologyMessage,
+  latestAdjustmentDay,
+  receiptDateProblem,
+} from "../payments/chronology";
 import { createHash, randomUUID } from "node:crypto";
 import {
   type Actor,
@@ -25,7 +29,7 @@ import type {
 import { withAudit } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
-import { sydneyToday, toDay } from "../company/gst";
+import { companyGstStatusOn, sydneyToday, toDay } from "../company/gst";
 import { isUniqueViolation, lockRow } from "../db/locks";
 import { optionalText, requiredText, uuidOrNull } from "../http/fields";
 import { parsePage } from "../http/guards";
@@ -341,7 +345,36 @@ export function receiptHandlers(db: () => PrismaClient) {
             );
           const receiptId = randomUUID(),
             createdAt = new Date();
+          const issued = await tx.invoice.findMany({
+            where: { companyId: actor.companyId, id: { in: ids } },
+            select: { id: true, issueDate: true },
+          });
           for (const allocation of allocations) {
+            // Attribution uses the invoice's current credits, so on the cash
+            // basis a settlement can't be dated before its latest credit or
+            // adjustment (the credit side refuses the reverse).
+            const issueDate = issued.find(
+              (i) => i.id === allocation.invoiceId,
+            )?.issueDate;
+            if (
+              issueDate &&
+              (await companyGstStatusOn(tx, actor.companyId, toDay(issueDate)))
+                .basis === "cash"
+            ) {
+              const latest = await latestAdjustmentDay(
+                tx,
+                actor.companyId,
+                allocation.invoiceId,
+              );
+              if (latest && data.receivedOn < latest)
+                throw new Refusal(
+                  fail(
+                    400,
+                    "Choose a date on or after the invoice's latest credit note or adjustment date",
+                    "receivedOn",
+                  ),
+                );
+            }
             const problem = await receiptDateProblem(
               tx,
               actor.companyId,
@@ -447,6 +480,7 @@ export function receiptHandlers(db: () => PrismaClient) {
         // Under the invoice locks, the money left after this void must stay
         // between nothing and what's due, for receipts and refunds alike.
         const balances = await invoiceBalances(tx, actor.companyId, ids);
+        // A void is dated today, never before an existing credit or adjustment.
         const voidedAt = new Date(),
           voidDay = sydneyToday(voidedAt);
         for (const allocation of before.allocations) {

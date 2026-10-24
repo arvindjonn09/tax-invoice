@@ -29,6 +29,7 @@ import { withAudit } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
 import { companyGstStatusOn, sydneyToday, toDay } from "../company/gst";
+import { latestAdjustmentDay } from "../payments/chronology";
 import { lockRow } from "../db/locks";
 import { nextNumber } from "../db/numbering";
 import { optionalText, requiredText, uuidOrNull } from "../http/fields";
@@ -566,45 +567,18 @@ export function invoiceHandlers(
             )
           ).basis === "cash"
         ) {
-          const [allocations, credits, rounding, corrections] =
-            await Promise.all([
-              tx.receiptAllocation.findMany({
-                where: { companyId: actor.companyId, invoiceId: original.id },
-                include: { receipt: true },
-              }),
-              tx.invoice.aggregate({
-                where: {
-                  companyId: actor.companyId,
-                  creditsId: original.id,
-                  status: "issued",
-                },
-                _max: { issueDate: true },
-              }),
-              tx.receiptGstAdjustment.aggregate({
-                where: { companyId: actor.companyId, invoiceId: original.id },
-                _max: { adjustedOn: true },
-              }),
-              tx.creditCashAdjustment.aggregate({
-                where: { companyId: actor.companyId, invoiceId: original.id },
-                _max: { adjustedOn: true },
-              }),
-            ]);
+          const [allocations, latest] = await Promise.all([
+            tx.receiptAllocation.findMany({
+              where: { companyId: actor.companyId, invoiceId: original.id },
+              include: { receipt: true },
+            }),
+            latestAdjustmentDay(tx, actor.companyId, original.id),
+          ]);
           const dates = allocations.flatMap((a) => [
             toDay(a.receipt.receivedOn),
-            ...(a.receipt.voidedAt
-              ? [
-                  new Intl.DateTimeFormat("en-CA", {
-                    timeZone: "Australia/Sydney",
-                  }).format(a.receipt.voidedAt),
-                ]
-              : []),
+            ...(a.receipt.voidedAt ? [sydneyToday(a.receipt.voidedAt)] : []),
           ]);
-          for (const date of [
-            credits._max.issueDate,
-            rounding._max.adjustedOn,
-            corrections._max.adjustedOn,
-          ])
-            if (date) dates.push(toDay(date));
+          if (latest) dates.push(latest);
           if (dates.some((date) => date > issueDate))
             throw new Refusal(
               fail(

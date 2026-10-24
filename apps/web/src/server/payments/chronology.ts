@@ -66,6 +66,37 @@ export function supplierPaymentHistory(
       : []),
   ]);
 }
+/**
+ * The latest issued credit note or cash GST adjustment day on an invoice, or
+ * null. Receipt attribution uses the invoice's current credits, so on the
+ * cash basis neither side may be dated before the other's latest entry.
+ */
+export async function latestAdjustmentDay(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  invoiceId: string,
+): Promise<string | null> {
+  const [credits, rounding, corrections] = await Promise.all([
+    tx.invoice.aggregate({
+      where: { companyId, creditsId: invoiceId, status: "issued" },
+      _max: { issueDate: true },
+    }),
+    tx.receiptGstAdjustment.aggregate({
+      where: { companyId, invoiceId },
+      _max: { adjustedOn: true },
+    }),
+    tx.creditCashAdjustment.aggregate({
+      where: { companyId, invoiceId },
+      _max: { adjustedOn: true },
+    }),
+  ]);
+  const days = [
+    credits._max.issueDate,
+    rounding._max.adjustedOn,
+    corrections._max.adjustedOn,
+  ].flatMap((date) => (date ? [toDay(date)] : []));
+  return days.length > 0 ? days.sort().at(-1)! : null;
+}
 /** Call only while holding the invoice/bill locks used for money allocation. */
 export async function receiptDateProblem(
   tx: Prisma.TransactionClient,
