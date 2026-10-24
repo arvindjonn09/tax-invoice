@@ -1,0 +1,65 @@
+{
+  "title": "Invoice",
+  "details": [
+    [
+      "Invoice number",
+      "INV-0043"
+    ],
+    [
+      "Date",
+      "15 July 2026"
+    ],
+    [
+      "Due",
+      "14 August 2026"
+    ],
+    [
+      "Your reference",
+      "PO-7781"
+    ]
+  ],
+  "from": [
+    "Sample Sparks Pty Ltd",
+    "Trading as Sample Sparks",
+    "ABN 61 484 848 484",
+    "1 Example Street",
+    "Sampleville NSW 2000"
+  ],
+  "to": [
+    "Acme Sample Co",
+    "ABN 31 484 848 490",
+    "2 Sample Road",
+    "Level 3",
+    "Testtown VIC 3000",
+    "accounts@example.invalid"
+  ],
+  "site": null,
+  "columns": [
+    "Description",
+    "Qty",
+    "Unit price",
+    "Amount"
+  ],
+  "rows": [
+    [
+      "Office electrical fit-out",
+      "1",
+      "$2,500.00",
+      "$2,500.00"
+    ]
+  ],
+  "totals": [
+    [
+      "Total",
+      "$2,500.00"
+    ]
+  ],
+  "notes": null,
+  "footer": [
+    "No GST has been charged. The supplier is not registered for GST."
+  ],
+  "metadata": {
+    "title": "Invoice INV-0043",
+    "date": "2026-07-15"
+  }
+}

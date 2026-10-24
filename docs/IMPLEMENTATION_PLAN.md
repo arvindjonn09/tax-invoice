@@ -49,6 +49,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Supplier bills with creditable GST and payment allocations
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
+  - #48 PDF: deterministic pdf-lib rendering of the frozen issue snapshot (standard fonts only — no HTML, scripts, fonts, images or URLs fetched), stored privately once at issue in append-only `invoice_pdfs` (lazily if storage was down), 5-minute signed links via `POST /api/invoices/:id/pdf`; golden files for registered, not-registered and adjustment notes. Builder UI remains #49
 - [ ] Customer receipts and allocations
 - [ ] Financial concurrency/idempotency tests
 
