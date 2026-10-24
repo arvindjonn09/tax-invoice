@@ -30,14 +30,16 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [x] Employee records — #30: optional same-company user link, active/inactive, audited; no payroll
 - [x] Per-company job numbers, detail, status timeline, visits — #31: atomic per-company numbering, status machine with immutable history, visits; GST-exclusive cents price
 - [x] Assignment to employee and authorisation tests — #32 merged via PR #115; visit scoping and locked employee eligibility; [API contract](architecture/assignments.md)
-- [ ] Job screens — #33 directory, role-scoped detail tabs, visits, assignments and status timeline; [verification](testing/job-screens.md); pending CI/cross-review
+- [x] Job screens — #33 directory, role-scoped detail tabs, visits, assignments and status timeline; [verification](testing/job-screens.md); merged via PR #118
 
 ## M2 Contractors, timesheets and job expenses
+- [ ] Contractor directory and offer screens — #36; [verification](testing/contractor-screens.md); pending CI/cross-review
 - [ ] Subcontractor portal — #37 own offers/accepted work, redacted direct reads and evidence UI; [contract](architecture/subcontractor-portal.md); pending #42 integration, CI and cross-review
 - [x] Private document storage with signed URLs — #34: app-mediated upload with content sniffing, random keys, 5-minute HMAC download links after authz
 - [ ] Contractors, offers, approvals and acceptance history; restricted contractor portal
   - #35 schema + API: contractors (ABN, GST flag, optional subcontractor login), fixed/hourly offers in GST-exclusive cents with a tax code, accept/decline with immutable acceptance snapshots and committed cost recorded once; portal screens remain #37
 - [ ] Employee timesheets with cost-rate snapshots
+  - #38 schema + API: append-only effective-dated employee cost rates; timesheets per job/visit by live-assigned employees (re-checked under job→employee locks); approval snapshots the rate on the work date and the cost once; decided timesheets frozen, reversal corrections; rates/costs only with employee.cost_rate.read; screens remain #39
 - [ ] Expenses with GST code, creditable portion, receipts and approvals
   - #40 schema + API: job/general expenses, ex/incl entry, tax code, creditable share, receipt, settlement (paid at purchase / on account, company default), approval snapshots the cost once, decided expenses frozen, reversal corrections; screens remain #41
 - [x] Work evidence and completion approval — #42: append-only photos/notes/signatures from workers on the job; submit → review (approve or rework) via the status machine; completion and rework only through the review, workers locked and rechecked before every write, visit-only workers kept to their visits
@@ -45,7 +47,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 ## M3 Quotes, bills, invoices and payments
 - [ ] Quotes with tax-coded lines and accepted variations
 - [ ] Supplier bills with creditable GST and payment allocations
-- [ ] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids
+- [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
 - [ ] Customer receipts and allocations
 - [ ] Financial concurrency/idempotency tests

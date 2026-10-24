@@ -13,6 +13,7 @@ const BUILT_MODULES = new Set([
   "customers",
   "jobs",
   "offers",
+  "contractors",
   "expenses",
 ]);
 export function generateStaticParams() {
