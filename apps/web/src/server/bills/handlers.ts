@@ -279,9 +279,13 @@ export async function billBalances(
 }
 
 /** Lock bill rows in a fixed order (no deadlocks between payments). */
-async function lockBills(tx: Prisma.TransactionClient, ids: readonly string[]) {
+async function lockBills(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  ids: readonly string[],
+) {
   for (const id of [...new Set(ids)].sort())
-    await lockRow(tx, "supplier_bills", id);
+    await lockRow(tx, "supplier_bills", id, companyId);
 }
 
 /**
@@ -657,7 +661,7 @@ export function billHandlers(db: () => PrismaClient) {
     if (!id) throw notFound();
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        await lockRow(tx, "supplier_bills", id);
+        await lockRow(tx, "supplier_bills", id, actor.companyId);
         const before = requireSameCompany(
           actor,
           await tx.supplierBill.findUnique({
@@ -804,7 +808,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
           const ids = data.allocations.map((a) => a.billId);
-          await lockBills(tx, ids);
+          await lockBills(tx, actor.companyId, ids);
           // A concurrent duplicate may have committed while we waited for the
           // bill locks: replay it rather than judging it as an overpayment.
           const duplicate = await replay(tx, actor, key, hash);
@@ -929,7 +933,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
     if (!id) throw notFound();
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        await lockRow(tx, "supplier_payments", id);
+        await lockRow(tx, "supplier_payments", id, actor.companyId);
         const before = requireSameCompany(
           actor,
           await tx.supplierPayment.findUnique({
@@ -941,7 +945,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
         // Under the bill locks, keep each bill's live credit at the rounded
         // share of what stays paid: record the correction, never edit history.
         const ids = before.allocations.map((allocation) => allocation.billId);
-        await lockBills(tx, ids);
+        await lockBills(tx, actor.companyId, ids);
         const balances = await billBalances(tx, actor.companyId, ids);
         const voidedAt = new Date(),
           voidDay = sydneyToday(voidedAt);
