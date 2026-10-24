@@ -403,6 +403,7 @@ describe("duplicate submissions (idempotency)", () => {
     const job = await newJob();
     const invoiceId = await issuedInvoice(job);
     const bill = await bigBill(job);
+    const before = await profitOf(job);
     const key = `reuse-${randomUUID()}`;
     expect(
       (await receive([{ invoiceId, amountCents: "1000" }], { key })).status,
@@ -410,8 +411,7 @@ describe("duplicate submissions (idempotency)", () => {
     const changed = await receive([{ invoiceId, amountCents: "2000" }], {
       key,
     });
-    expect(changed.status).toBeGreaterThanOrEqual(400);
-    expect(changed.status).toBeLessThan(500);
+    expect(changed.status).toBe(409);
     const payKey = `reuse-${randomUUID()}`;
     expect(
       (await pay([{ billId: bill.id, amountCents: "1000" }], { key: payKey }))
@@ -420,8 +420,7 @@ describe("duplicate submissions (idempotency)", () => {
     const payChanged = await pay([{ billId: bill.id, amountCents: "2000" }], {
       key: payKey,
     });
-    expect(payChanged.status).toBeGreaterThanOrEqual(400);
-    expect(payChanged.status).toBeLessThan(500);
+    expect(payChanged.status).toBe(409);
     expect(await invoiceBalance(invoiceId)).toEqual({
       received: "1000",
       outstanding: "274000",
@@ -430,11 +429,18 @@ describe("duplicate submissions (idempotency)", () => {
       paid: "1000",
       outstanding: "109000",
     });
+    expect(before).toEqual({
+      revenue: "250000",
+      cost: "110000",
+      profit: "140000",
+    });
+    expect(await profitOf(job)).toEqual(before);
   });
 
   it("refuses a missing or malformed idempotency key", async () => {
     const job = await newJob();
     const invoiceId = await issuedInvoice(job);
+    const before = await profitOf(job);
     for (const key of ["", "short", "has spaces in it", "x".repeat(201)])
       expect(
         (await receive([{ invoiceId, amountCents: "100" }], { key })).status,
@@ -443,6 +449,8 @@ describe("duplicate submissions (idempotency)", () => {
       received: "0",
       outstanding: "275000",
     });
+    expect(await profitOf(job)).toEqual(before);
+    expect(before).toEqual({ revenue: "250000", cost: "0", profit: "250000" });
   });
 });
 
@@ -482,34 +490,76 @@ describe("races between different requests", () => {
     expect(
       responses.filter((response) => response.status === 201),
     ).toHaveLength(1);
+    expect(
+      responses
+        .filter((response) => response.status !== 201)
+        .every((response) => response.status === 400),
+    ).toBe(true);
     expect(await billBalance(bill.id)).toEqual({
       paid: "110000",
       outstanding: "0",
     });
+    expect(before).toEqual({ revenue: "0", cost: "110000", profit: "-110000" });
     expect(await profitOf(job)).toEqual(before);
   });
 
-  it("a payment racing the bill's void never leaves money on a void bill", async () => {
+  it("a payment racing its bill's void: exactly one wins, and balance and cost follow it", async () => {
+    for (let round = 0; round < 3; round += 1) {
+      const job = await newJob();
+      const bill = await bigBill(job);
+      const [paid, voided] = await Promise.all([
+        pay([{ billId: bill.id, amountCents: "110000" }]),
+        routes.voidBill(call({ reason: "Synthetic duplicate" }), one(bill.id)),
+      ]);
+      if (paid.status === 201) {
+        // Payment first: a paid bill can't be voided.
+        expect(voided.status).toBe(409);
+        expect(await billBalance(bill.id)).toEqual({
+          paid: "110000",
+          outstanding: "0",
+        });
+        expect(await profitOf(job)).toEqual({
+          revenue: "0",
+          cost: "110000",
+          profit: "-110000",
+        });
+      } else {
+        // Void first: the payment is refused and nothing is owing or paid.
+        expect(voided.status).toBe(200);
+        expect([400, 409]).toContain(paid.status);
+        expect(await billBalance(bill.id)).toEqual({
+          paid: "0",
+          outstanding: "0",
+        });
+        expect(await profitOf(job)).toEqual({
+          revenue: "0",
+          cost: "0",
+          profit: "0",
+        });
+      }
+    }
+  });
+
+  it("two refunds that each fit but together exceed what was received: one wins", async () => {
     const job = await newJob();
-    const bill = await bigBill(job);
-    const [paid, voided] = await Promise.all([
-      pay([{ billId: bill.id, amountCents: "110000" }]),
-      routes.voidBill(call({ reason: "Synthetic duplicate" }), one(bill.id)),
+    const invoiceId = await issuedInvoice(job);
+    expect((await receive([{ invoiceId, amountCents: "100000" }])).status).toBe(
+      201,
+    );
+    const before = await profitOf(job);
+    const responses = await Promise.all([
+      receive([{ invoiceId, amountCents: "60000" }], { kind: "refund" }),
+      receive([{ invoiceId, amountCents: "60000" }], { kind: "refund" }),
     ]);
-    const live = await db.supplierPaymentAllocation.count({
-      where: { companyId, billId: bill.id, payment: { voidedAt: null } },
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      201, 400,
+    ]);
+    expect(await invoiceBalance(invoiceId)).toEqual({
+      received: "40000",
+      outstanding: "235000",
     });
-    const isVoid =
-      (await db.supplierBill.findUniqueOrThrow({ where: { id: bill.id } }))
-        .voidedAt !== null;
-    // Either the payment landed first (and the void was refused), or the void
-    // landed first (and the payment was refused) — never both.
-    expect([paid.status === 201, voided.status === 200]).not.toEqual([
-      true,
-      true,
-    ]);
-    expect(live > 0 && isVoid).toBe(false);
-    expect((await profitOf(job)).cost).toBe(isVoid ? "0" : "110000");
+    expect(await profitOf(job)).toEqual(before);
+    expect(before).toEqual({ revenue: "250000", cost: "0", profit: "250000" });
   });
 });
 

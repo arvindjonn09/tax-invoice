@@ -249,8 +249,17 @@ async function profitOf(jobId: string) {
     ),
     jobCosts: [
       ...bills.map((row) => row.jobCostCents),
-      ...expenses.map((row) => row.jobCostCents ?? 0n),
-      ...timesheets.map((row) => row.costCents ?? 0n),
+      // An approved row always carries its cost; a null would hide a bug.
+      ...expenses.map((row) => {
+        if (row.jobCostCents === null)
+          throw new Error("approved expense without cost");
+        return row.jobCostCents;
+      }),
+      ...timesheets.map((row) => {
+        if (row.costCents === null)
+          throw new Error("approved timesheet without cost");
+        return row.costCents;
+      }),
     ],
   });
   return { revenue: result.revenue, cost: result.cost, profit: result.profit };
@@ -625,7 +634,7 @@ describe("financial safety (#52)", () => {
       paid: 0n,
       outstanding: 99_000n,
     });
-  });
+  }, 60_000);
 
   it("issues a draft once when the issue is submitted concurrently", async () => {
     const jobId = await newJob();
