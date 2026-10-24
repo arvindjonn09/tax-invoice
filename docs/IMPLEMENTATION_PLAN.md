@@ -47,6 +47,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 
 ## M3 Quotes, bills, invoices and payments
 - [ ] Quotes with tax-coded lines and accepted variations
+  - #44 schema + API: draft → sent (prices and GST frozen on the send date) → accepted/declined once; revisions share the number and supersede the sent one; derived expiry; accepting converts — creates or approves the job with estimated revenue = quote ex GST — and variations add to it; internal per-line estimated cost gives estimated profit/margin ex GST; DB triggers keep sent and decided quotes immutable. Screens remain #45
 - [ ] Supplier bills with creditable GST and payment allocations
   - #46 schema + API: bills from suppliers or contractors, keeping the supplier's line GST as issued (R3), linked to an accepted offer (releases the commitment once) and job; creditable GST only with verified evidence on a registered date, limited to a recorded business share; job cost (ex GST + non-creditable GST) snapshotted once; idempotent supplier payments (key + fingerprint, one transaction, locked bills, no overpayment, cash-basis 1B attribution); immutable except one-way voids. Follow-ups: #139 portal bills, #140 supplier credits, #141 on-account expenses, #142 evidence reclassification
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47

@@ -144,6 +144,7 @@ model Company {
   defaultExpenseSettlement ExpenseSettlement @default(paid_at_purchase) @map("default_expense_settlement")
   expenses                 Expense[]
 
+  quotes Quote[]
   supplierBills    SupplierBill[]
   supplierPayments SupplierPayment[]
 
@@ -229,6 +230,9 @@ model Membership {
   invoicesVoided        Invoice[]      @relation("InvoiceVoider")
   workEvidenceSubmitted WorkEvidence[]
 
+  quotesCreated Quote[] @relation("QuoteCreator")
+  quotesSent    Quote[] @relation("QuoteSender")
+  quotesDecided Quote[] @relation("QuoteDecider")
   invoicePdfsCreated InvoicePdf[]
   receiptsCreated CustomerReceipt[] @relation("ReceiptCreator")
   receiptsVoided  CustomerReceipt[] @relation("ReceiptVoider")
@@ -335,6 +339,8 @@ model Customer {
   invoices Invoice[]
   receipts CustomerReceipt[]
 
+  quotes Quote[]
+
   @@unique([companyId, id])
   @@index([companyId, archivedAt, name])
   @@index([companyId, createdBy])
@@ -385,6 +391,8 @@ model Location {
   jobs         Job[]
 
   invoices Invoice[]
+
+  quotes Quote[]
 
   @@unique([companyId, id])
   @@unique([companyId, customerId, id])
@@ -456,6 +464,7 @@ model Job {
   invoices     Invoice[]
   workEvidence WorkEvidence[]
 
+  quotes Quote[]
   supplierBills SupplierBill[]
 
   @@unique([companyId, number])
@@ -1107,6 +1116,100 @@ model WorkEvidence {
   @@index([companyId, jobId, createdAt])
   @@index([companyId, submittedBy])
   @@map("work_evidence")
+}
+
+enum QuoteKind {
+  quote
+  variation
+
+  @@map("quote_kind")
+}
+
+enum QuoteStatus {
+  draft
+  sent
+  accepted
+  declined
+  superseded
+
+  @@map("quote_status")
+}
+
+/// Quote or variation (#44). Frozen when sent; the decision is recorded once
+/// and an accepted quote links once to its job (DB trigger). A revision is a
+/// new row sharing `number`. Checks in SQL.
+model Quote {
+  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId          String            @map("company_id") @db.Uuid
+  kind               QuoteKind         @default(quote)
+  status             QuoteStatus       @default(draft)
+  number             Int
+  revision           Int               @default(1)
+  revisesId          String?           @map("revises_id") @db.Uuid
+  customerId         String            @map("customer_id") @db.Uuid
+  locationId         String?           @map("location_id") @db.Uuid
+  jobId              String?           @map("job_id") @db.Uuid
+  title              String            @db.VarChar(200)
+  scope              String?           @db.VarChar(4000)
+  priceEntry         InvoicePriceEntry @default(exclusive) @map("price_entry")
+  validUntil         DateTime?         @map("valid_until") @db.Date
+  notes              String?           @db.VarChar(2000)
+  gstRegistered      Boolean?          @map("gst_registered")
+  exclusiveCents     BigInt            @default(0) @map("exclusive_cents")
+  gstCents           BigInt            @default(0) @map("gst_cents")
+  inclusiveCents     BigInt            @default(0) @map("inclusive_cents")
+  estimatedCostCents BigInt            @default(0) @map("estimated_cost_cents")
+  sentOn             DateTime?         @map("sent_on") @db.Date
+  sentAt             DateTime?         @map("sent_at") @db.Timestamptz(3)
+  sentBy             String?           @map("sent_by") @db.Uuid
+  decidedAt          DateTime?         @map("decided_at") @db.Timestamptz(3)
+  decidedBy          String?           @map("decided_by") @db.Uuid
+  decisionNote       String?           @map("decision_note") @db.VarChar(500)
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy          String            @map("created_by") @db.Uuid
+  company            Company           @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  customer           Customer          @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  location           Location?         @relation(fields: [companyId, customerId, locationId], references: [companyId, customerId, id], onDelete: NoAction, onUpdate: NoAction)
+  job                Job?              @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  revises            Quote?            @relation("QuoteRevision", fields: [companyId, revisesId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  revisedBy          Quote?            @relation("QuoteRevision")
+  creator            Membership        @relation("QuoteCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  sender             Membership?       @relation("QuoteSender", fields: [companyId, sentBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  decider            Membership?       @relation("QuoteDecider", fields: [companyId, decidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  items              QuoteItem[]
+
+  @@unique([companyId, id])
+  @@unique([companyId, number, revision])
+  @@unique([companyId, revisesId])
+  @@index([companyId, status])
+  @@index([companyId, customerId])
+  @@index([companyId, jobId])
+  @@index([companyId, createdBy])
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id                 String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId          String  @map("company_id") @db.Uuid
+  quoteId            String  @map("quote_id") @db.Uuid
+  position           Int
+  description        String  @db.VarChar(500)
+  quantity           String  @db.VarChar(20)
+  unit               String? @db.VarChar(20)
+  unitPriceCents     BigInt  @map("unit_price_cents")
+  taxCode            TaxCode @map("tax_code")
+  gstRateBasisPoints Int     @map("gst_rate_basis_points")
+  exclusiveCents     BigInt  @map("exclusive_cents")
+  gstCents           BigInt  @map("gst_cents")
+  inclusiveCents     BigInt  @map("inclusive_cents")
+  /// Internal estimate; never shown to the customer.
+  estimatedCostCents BigInt  @default(0) @map("estimated_cost_cents")
+  quote              Quote   @relation(fields: [companyId, quoteId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([quoteId, position])
+  @@index([companyId, quoteId])
+  @@map("quote_items")
 }
 
 /// The stored PDF of an issued invoice or credit note (#48); append-only.
