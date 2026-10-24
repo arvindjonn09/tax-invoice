@@ -8,13 +8,24 @@ export const dynamic = "force-dynamic";
  * Says only ready / not ready — never which part failed or how it is set up,
  * so the probe can be public behind the proxy.
  */
+const TIMEOUT_MS = 3000;
+
 export async function GET() {
   let ready = storeFromEnvironment() !== null;
   if (ready) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await getDatabase().$queryRaw`SELECT 1`;
+      // A stalled database is "not ready" within 3 s, not a hung probe.
+      await Promise.race([
+        getDatabase().$queryRaw`SELECT 1`,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("timeout")), TIMEOUT_MS);
+        }),
+      ]);
     } catch {
       ready = false;
+    } finally {
+      clearTimeout(timer);
     }
   }
   return Response.json(

@@ -13,3 +13,8 @@
 **/.env.*
 docs
 infra/staging/env/*.env
+**/*.pem
+**/*.key
+**/.npmrc
+infra/staging/env/*
+!infra/staging/env/*.env.example

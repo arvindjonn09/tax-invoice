@@ -1,8 +1,11 @@
 #!/bin/sh
-# Staging host deploy entry point (#64). Install as the SSH forced command for
-# the CI deploy key, so that key can do exactly one thing:
-#   command="/opt/jobflow/infra/staging/deploy.sh",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA… ci-staging
-# It deploys only a commit that is already on origin/main.
+# Staging host deploy entry point (#64). Install a root-owned copy OUTSIDE the
+# checkout, so a deploy can't replace its own gate:
+#   sudo install -o root -g root -m 0755 infra/staging/deploy.sh /usr/local/sbin/jobflow-deploy
+# and make it the SSH forced command for the CI deploy key:
+#   restrict,command="/usr/local/sbin/jobflow-deploy" ssh-ed25519 AAAA… ci-staging
+# It deploys only the commit that is the current tip of origin/main: never
+# an older one (rollbacks are a revert commit, or done by the owner on the host).
 set -euf
 
 REPO=${JOBFLOW_REPO:-/opt/jobflow}
@@ -19,7 +22,7 @@ esac
 
 cd "$REPO"
 git fetch --quiet origin main
-git merge-base --is-ancestor "$SHA" origin/main || { echo "commit is not on main" >&2; exit 65; }
+[ "$SHA" = "$(git rev-parse origin/main)" ] || { echo "commit is not the tip of main" >&2; exit 65; }
 git -c advice.detachedHead=false checkout --quiet --detach "$SHA"
 
 compose() {

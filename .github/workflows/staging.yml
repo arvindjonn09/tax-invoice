@@ -1,6 +1,7 @@
-# Staging configuration checks (#64). Builds the images and validates the
-# Compose and nginx files. It never deploys: deploying to staging is a manual
-# owner step (docs/ops/staging.md) and needs no credentials in CI.
+# Staging configuration checks (#64). Builds the images, runs the migrate
+# image against a database with no route out, and validates the Compose and
+# nginx files. The deploy job is off until the owner enables it
+# (docs/ops/staging.md); only that job uses credentials.
 name: Staging config
 on:
   push:
@@ -20,6 +21,22 @@ jobs:
         run: docker build -f apps/web/Dockerfile --target runtime -t jobflow-web:ci .
       - name: Build the migrate image
         run: docker build -f apps/web/Dockerfile --target migrate -t jobflow-migrate:ci .
+      - name: Migrate image runs offline as non-root against an empty database
+        run: |
+          docker network create --internal jobflow-ci-data
+          docker run -d --name db --network jobflow-ci-data \
+            -e POSTGRES_USER=jobflow_owner -e POSTGRES_PASSWORD=ci-owner-password -e POSTGRES_DB=jobflow \
+            postgres:16.15-bookworm
+          for i in $(seq 1 30); do
+            docker exec db pg_isready -U jobflow_owner -d jobflow && break
+            sleep 2
+          done
+          docker run --rm --network jobflow-ci-data -e APP_ENV=staging \
+            -e DATABASE_URL=postgresql://jobflow_owner:ci-owner-password@db:5432/jobflow \
+            -e RUNTIME_DATABASE_PASSWORD="$(openssl rand -hex 32)" jobflow-migrate:ci
+          docker exec db psql -U jobflow_owner -d jobflow -tAc \
+            "SELECT pg_has_role('jobflow_web','jobflow_app','member')" | grep -qx t
+          docker rm -f db
       - name: Runtime image runs as non-root and holds no source, tests or env files
         run: |
           test "$(docker run --rm --entrypoint id jobflow-web:ci -u)" != "0"
@@ -83,9 +100,10 @@ jobs:
           install -m 0700 -d ~/.ssh
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           printf '%s\n' "$SSH_KEY" > ~/.ssh/staging && chmod 0600 ~/.ssh/staging
-          # The host's forced command (docs/ops/staging.md) checks out exactly
-          # this commit and runs `docker compose up -d --build`.
-          ssh -i ~/.ssh/staging -o IdentitiesOnly=yes "$SSH_TARGET" "deploy $SHA"
+          # The host's forced command (infra/staging/deploy.sh) checks out
+          # exactly this commit (the tip of main), builds, migrates, restarts.
+          ssh -i ~/.ssh/staging -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes "$SSH_TARGET" "deploy $SHA"
       - name: Smoke test
         env:
           STAGING_URL: ${{ vars.STAGING_URL }}

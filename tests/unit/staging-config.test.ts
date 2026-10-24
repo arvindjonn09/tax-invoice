@@ -108,7 +108,51 @@ describe("nginx (#64)", () => {
   });
 });
 
+describe("nginx upstream and unknown hosts (#64)", () => {
+  it("re-resolves the app after a deploy recreates it", () => {
+    expect(nginx).toMatch(/resolver 127\.0\.0\.11 /);
+    expect(nginx).toMatch(/zone jobflow_web 64k;\n\s+server web:3000 resolve;/);
+    expect(nginx).toMatch(/keepalive_timeout 4s;/);
+  });
+
+  it("drops requests for other host names before they reach the app", () => {
+    expect(nginx).toMatch(/listen 80 default_server;[\s\S]*?return 444;/);
+    expect(nginx).toMatch(
+      /listen 443 ssl default_server;[\s\S]*?ssl_reject_handshake on;/,
+    );
+    expect(nginx).toMatch(/proxy_set_header Host \$server_name;/);
+    expect(service("nginx")).toMatch(
+      /nginx\/default\.conf:\/etc\/nginx\/conf\.d\/default\.conf:ro/,
+    );
+  });
+});
+
+describe("deploy gate (#64)", () => {
+  const deploy = read("infra/staging/deploy.sh");
+  it("deploys only the current tip of main, with globbing off", () => {
+    expect(deploy).toMatch(/^set -euf$/m);
+    expect(deploy).toMatch(
+      /\[ "\$SHA" = "\$\(git rev-parse origin\/main\)" \]/,
+    );
+    expect(deploy).not.toMatch(/--is-ancestor/);
+    expect(deploy).toMatch(/\/usr\/local\/sbin\/jobflow-deploy/);
+    // Migrations run before the new app replaces the old one.
+    expect(deploy.indexOf("run --rm migrate")).toBeLessThan(
+      deploy.indexOf("up -d --no-deps"),
+    );
+  });
+});
+
 describe("Dockerfile (#64)", () => {
+  it("lets the non-root migrate job use pnpm without a download", () => {
+    expect(dockerfile).toMatch(/COREPACK_HOME=\/corepack/);
+    const migrate = dockerfile
+      .split(/^FROM .* AS migrate$/m)[1]!
+      .split(/^FROM /m)[0]!;
+    expect(migrate).toMatch(/node scripts\/database\/cli\.mjs migrate deploy/);
+    expect(migrate).not.toMatch(/CMD .*pnpm/);
+  });
+
   it("runs the server as a non-root user from the standalone output", () => {
     const runtime = dockerfile.split(/^FROM .* AS runtime$/m)[1]!;
     expect(runtime).toMatch(/^USER node$/m);

@@ -19,7 +19,7 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
 
 **Hardening:**
 - **Image:** the web image holds the standalone server only, with no source, tests or `.env` files, and it runs as `node`, not root.
-- **Container:** read-only filesystem, all capabilities dropped, `no-new-privileges`.
+- **Container:** the `web` container has a read-only filesystem, drops all capabilities, sets `no-new-privileges`, and has memory and process limits. Every service sets `no-new-privileges`. Postgres and nginx keep their image defaults, so tightening their capabilities is a follow-up.
 - **Database roles:**
   - The app connects as `jobflow_web`, a member of `jobflow_app`. That role reads and writes rows only. It can't run DDL, disable triggers, or change or delete the audit log (`packages/database/prisma/roles/runtime-role.sql`, tested in `tests/integration/runtime-role.test.ts`).
   - Only the `migrate` job uses the owner role.
@@ -40,19 +40,20 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
 - **App logs:** the app writes redacted JSON lines to stdout (`apps/web/src/server/log.ts`).
 - **Rotation:** Docker keeps 5 × 10 MB per container.
 - **Reading logs:** `docker compose -f infra/staging/compose.yml logs -f web`.
-- **Alerts:** point an external uptime monitor at `https://<staging>/api/health/ready`, checking every minute and alerting after 3 failures. Alert the owner too when the nightly backup unit fails (`systemctl --failed`, see [backups.md](backups.md)).
+- **Alerts:** point an external uptime monitor at `https://<staging>/api/health/ready`, checking every minute and alerting after 3 failures. Alert the owner too when the nightly backup unit fails (`systemctl --failed`; see `docs/ops/backups.md` from #63).
 
 ## First-time setup (owner)
 
 1. **Server:** a small Linux VM in an Australian region with Docker Engine and the Compose plugin.
    - Open only ports 22 (restricted), 80 and 443.
+   - Publish IPv4 only and create no AAAA record until Docker IPv6 is set up. Without it, every IPv6 client reaches nginx from the same bridge address and shares one rate limit.
    - Create a `deploy` user in the `docker` group.
 2. **DNS:** `staging.<domain>` → the server.
 3. **Bucket:** a private bucket in `ap-southeast-2`, with public access blocked, default encryption on and versioning on. Create an access key that can reach **this bucket only**.
 4. **Code and secrets on the host:**
-   - Clone the repo to `/opt/jobflow`.
+   - Clone the repo to `/opt/jobflow` **as the `deploy` user**, so `deploy.sh` can fetch and check out.
    - For each file in `infra/staging/env/*.env.example`, copy it to the same name without `.example`.
-   - Fill in **new random values**: `openssl rand -base64 32`. The owner and runtime database passwords must differ.
+   - Fill in **new random values**: `openssl rand -hex 32`. The owner and runtime database passwords must differ.
    - Make the files private: `chmod 600 infra/staging/env/*.env`. They're git-ignored; never commit them.
    - Staging keys are never production keys.
 5. **First certificate**, before nginx is running:
@@ -63,13 +64,19 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
      run --rm -p 80:80 certbot certonly --standalone -d staging.<domain> --email <ops email> --agree-tos --no-eff-email
    ```
 
-6. **Start:** `sudo -u deploy SSH_ORIGINAL_COMMAND="deploy $(git rev-parse origin/main)" infra/staging/deploy.sh`.
+6. **Install the deploy gate** as a root-owned copy outside the checkout, so a deploy can't replace it:
+
+   ```sh
+   sudo install -o root -g root -m 0755 infra/staging/deploy.sh /usr/local/sbin/jobflow-deploy
+   ```
+
+   Re-install it whenever `infra/staging/deploy.sh` changes. Then start the stack: `sudo -u deploy SSH_ORIGINAL_COMMAND="deploy $(git rev-parse origin/main)" /usr/local/sbin/jobflow-deploy`.
 7. **Renewal:** a weekly cron job on the host:
 
    ```sh
-   docker compose -f infra/staging/compose.yml --env-file infra/staging/env/compose.env --profile certbot \
+   cd /opt/jobflow && docker compose -f infra/staging/compose.yml --env-file infra/staging/env/compose.env --profile certbot \
      run --rm certbot renew --webroot -w /var/www/acme \
-   && docker compose -f infra/staging/compose.yml exec nginx nginx -s reload
+   && docker compose -f /opt/jobflow/infra/staging/compose.yml exec nginx nginx -s reload
    ```
 
 8. **Synthetic data:** load the flagged demo data, which carries the "Demo Data" indicator. Never load an export of real data.
@@ -78,7 +85,7 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
    docker compose -f infra/staging/compose.yml run --rm -e DEMO_SEED=yes -e DEMO_PASSWORD=<12+ chars> migrate pnpm db:seed:demo
    ```
 
-9. **Backups:** install the nightly backup timer with a **staging-only** `BACKUP_ENCRYPTION_KEY` ([backups.md](backups.md)).
+9. **Backups:** install the nightly backup timer with a **staging-only** `BACKUP_ENCRYPTION_KEY` (`docs/ops/backups.md`, added in #63 / PR #161).
 
 ## Deploying from CI (owner turns it on)
 
@@ -95,23 +102,30 @@ Its `deploy` job runs only on pushes to `main`, and only when every item below i
 
 **The `staging` environment:**
 - Add required reviewers, so every deploy is approved.
+- Add a deployment branch rule that allows `main` only, so a workflow edited on another branch can't use the secrets.
 - Add these secrets:
   - `STAGING_SSH_KEY`: a new ed25519 key used only for this.
   - `STAGING_SSH_TARGET`: `deploy@staging.<domain>`.
   - `STAGING_SSH_KNOWN_HOSTS`: from `ssh-keyscan`, checked against the host's fingerprint.
 
 **On the host:**
-- Install the public key in `~deploy/.ssh/authorized_keys` as a forced command. The full line is in the header of `infra/staging/deploy.sh`.
-- With the forced command, the key can do one thing: check out a commit that is already on `origin/main`, then build, migrate and restart.
+- Install the public key in `~deploy/.ssh/authorized_keys` as `restrict,command="/usr/local/sbin/jobflow-deploy" ssh-ed25519 …`.
+- With the forced command, the key can do one thing: deploy the **current tip** of `origin/main`. It can't deploy older commits; roll back with a revert commit, or as the owner on the host.
 
 The job then polls `/api/health/ready` until it answers 200.
 
-**Rolling back:** deploy the previous `main` commit the same way. Migrations only go forward. If one has to be undone, use its file in `packages/database/prisma/rollbacks/` during a maintenance window, or restore a backup.
+**Rolling back:** revert on `main` and let the job deploy the revert. Migrations only go forward. If one has to be undone, use its file in `packages/database/prisma/rollbacks/` during a maintenance window, or restore a backup.
 
 ## Before you call staging done
 
-- Restore drill on staging passes ([backups.md](backups.md#restore-drills)).
+- Restore drill on staging passes (`docs/ops/backups.md`, #63).
 - `https://staging.<domain>` gets an A on an SSL test, and `http://` redirects.
 - Sign-in from another origin is refused, and the session cookie is `Secure; HttpOnly`.
 - `curl -H 'X-Forwarded-For: 1.2.3.4'` still gets throttled by the real IP after the limit.
 - No real customer, employee or ABN data anywhere: the database, the bucket or the logs.
+
+## Known follow-ups before production
+
+- **Pin images by digest.** On the host, pin the base images and the Compose images by digest (`NODE_IMAGE` build argument, plus `image: …@sha256:…`). CI tests the image built from the same tags.
+- **Migration owner role.** The migration owner is the image's bootstrap role, which is a superuser. For production, create a non-superuser owner and run migrations as it.
+- **Cloud metadata.** Block the instance metadata address (169.254.169.254) from containers on the host, so a future SSRF can't reach cloud credentials.

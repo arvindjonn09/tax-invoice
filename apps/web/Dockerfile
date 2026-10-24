@@ -6,11 +6,15 @@
 ARG NODE_IMAGE=node:24-bookworm-slim
 
 FROM ${NODE_IMAGE} AS base
+# COREPACK_HOME outside root's home so the non-root migrate job finds the
+# prepared pnpm without downloading it (its network has no route out).
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
+    COREPACK_HOME=/corepack \
     NEXT_TELEMETRY_DISABLED=1 \
     CI=1
-RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate \
+    && chmod -R a+rX /corepack
 WORKDIR /repo
 
 FROM base AS build
@@ -24,7 +28,8 @@ RUN pnpm install --frozen-lockfile \
 FROM base AS migrate
 COPY --from=build /repo /repo
 USER node
-CMD ["sh", "-c", "pnpm db:migrate && pnpm db:runtime-role"]
+# Plain node: no package-manager lookups at run time.
+CMD ["sh", "-c", "node scripts/database/cli.mjs migrate deploy && node scripts/database/apply-runtime-role.mjs"]
 
 # The web server: standalone output only, read-only files, non-root.
 FROM ${NODE_IMAGE} AS runtime

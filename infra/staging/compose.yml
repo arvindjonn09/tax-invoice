@@ -62,6 +62,8 @@ services:
     # No published ports: only nginx reaches the app.
     expose: ["3000"]
     networks: [data, edge]
+    mem_limit: 1g
+    pids_limit: 256
     read_only: true
     tmpfs:
       - /tmp
@@ -80,6 +82,7 @@ services:
       - "443:443"
     volumes:
       - ../nginx/templates:/etc/nginx/templates:ro
+      - ../nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - letsencrypt:/etc/letsencrypt:ro
       - acme_webroot:/var/www/acme:ro
     networks: [edge]

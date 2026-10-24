@@ -35,6 +35,15 @@ async function main() {
     // from the deploy environment and is quoted by PostgreSQL (%L), never
     // interpolated here.
     const password = process.env.RUNTIME_DATABASE_PASSWORD;
+    // A deployed environment always needs the web login role.
+    if (
+      !password &&
+      ["staging", "production"].includes(process.env.APP_ENV ?? "")
+    ) {
+      throw new UsageError(
+        "Set RUNTIME_DATABASE_PASSWORD: the web app logs in as jobflow_web",
+      );
+    }
     if (password) {
       if (password.length < 24) {
         throw new UsageError(
