@@ -221,6 +221,9 @@ model Membership {
   expensesSubmitted   Expense[]        @relation("ExpenseSubmitter")
   expensesDecided     Expense[]        @relation("ExpenseDecider")
 
+  invoicesCreated       Invoice[]      @relation("InvoiceCreator")
+  invoicesIssued        Invoice[]      @relation("InvoiceIssuer")
+  invoicesVoided        Invoice[]      @relation("InvoiceVoider")
   workEvidenceSubmitted WorkEvidence[]
 
   @@unique([companyId, userId])
@@ -317,6 +320,8 @@ model Customer {
   locations    Location[]
   jobs         Job[]
 
+  invoices Invoice[]
+
   @@unique([companyId, id])
   @@index([companyId, archivedAt, name])
   @@index([companyId, createdBy])
@@ -365,6 +370,8 @@ model Location {
   customer     Customer   @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
   creator      Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   jobs         Job[]
+
+  invoices Invoice[]
 
   @@unique([companyId, id])
   @@unique([companyId, customerId, id])
@@ -433,6 +440,7 @@ model Job {
   timesheets                Timesheet[]
   expenses                  Expense[]
 
+  invoices     Invoice[]
   workEvidence WorkEvidence[]
 
   @@unique([companyId, number])
@@ -753,6 +761,105 @@ model ContractorAcceptance {
   @@index([companyId, contractorId])
   @@index([companyId, acceptedBy])
   @@map("contractor_acceptances")
+}
+
+enum InvoiceKind {
+  invoice
+  credit_note
+
+  @@map("invoice_kind")
+}
+
+enum InvoiceStatus {
+  draft
+  issued
+  void
+
+  @@map("invoice_status")
+}
+
+enum InvoicePriceEntry {
+  exclusive
+  inclusive
+
+  @@map("invoice_price_entry")
+}
+
+/// Customer invoice or credit note (#47). Editable as a draft; issuing
+/// assigns the number and freezes amounts, lines and party snapshots
+/// (database guard). Corrections are credit notes or a void.
+model Invoice {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId         String            @map("company_id") @db.Uuid
+  kind              InvoiceKind       @default(invoice)
+  status            InvoiceStatus     @default(draft)
+  customerId        String            @map("customer_id") @db.Uuid
+  jobId             String?           @map("job_id") @db.Uuid
+  locationId        String?           @map("location_id") @db.Uuid
+  creditsId         String?           @map("credits_id") @db.Uuid
+  priceEntry        InvoicePriceEntry @default(exclusive) @map("price_entry")
+  customerReference String?           @map("customer_reference") @db.VarChar(100)
+  notes             String?           @db.VarChar(2000)
+  dueOn             DateTime?         @map("due_on") @db.Date
+  number            Int?
+  reference         String?           @db.VarChar(30)
+  issueDate         DateTime?         @map("issue_date") @db.Date
+  title             String?           @db.VarChar(20)
+  gstRegistered     Boolean?          @map("gst_registered")
+  supplierSnapshot  Json?             @map("supplier_snapshot")
+  customerSnapshot  Json?             @map("customer_snapshot")
+  siteSnapshot      Json?             @map("site_snapshot")
+  exclusiveCents    BigInt            @default(0) @map("exclusive_cents")
+  gstCents          BigInt            @default(0) @map("gst_cents")
+  inclusiveCents    BigInt            @default(0) @map("inclusive_cents")
+  issuedAt          DateTime?         @map("issued_at") @db.Timestamptz(3)
+  issuedBy          String?           @map("issued_by") @db.Uuid
+  voidReason        String?           @map("void_reason") @db.VarChar(500)
+  voidedAt          DateTime?         @map("voided_at") @db.Timestamptz(3)
+  voidedBy          String?           @map("voided_by") @db.Uuid
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy         String            @map("created_by") @db.Uuid
+  customer          Customer          @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  job               Job?              @relation(fields: [companyId, jobId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  location          Location?         @relation(fields: [companyId, customerId, locationId], references: [companyId, customerId, id], onDelete: NoAction, onUpdate: NoAction)
+  credits           Invoice?          @relation("CreditNote", fields: [companyId, creditsId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creditNotes       Invoice[]         @relation("CreditNote")
+  creator           Membership        @relation("InvoiceCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  issuer            Membership?       @relation("InvoiceIssuer", fields: [companyId, issuedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  voider            Membership?       @relation("InvoiceVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  items             InvoiceItem[]
+
+  @@unique([companyId, id])
+  @@unique([companyId, kind, number])
+  @@index([companyId, status, issueDate])
+  @@index([companyId, customerId])
+  @@index([companyId, jobId])
+  @@index([companyId, creditsId])
+  @@index([companyId, createdBy])
+  @@map("invoices")
+}
+
+/// A line as entered plus its rounded amounts (snapshotted; frozen at issue).
+model InvoiceItem {
+  id                 String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId          String  @map("company_id") @db.Uuid
+  invoiceId          String  @map("invoice_id") @db.Uuid
+  position           Int
+  description        String  @db.VarChar(500)
+  quantity           String  @db.VarChar(20)
+  unit               String? @db.VarChar(20)
+  unitPriceCents     BigInt  @map("unit_price_cents")
+  taxCode            TaxCode @map("tax_code")
+  gstRateBasisPoints Int     @map("gst_rate_basis_points")
+  exclusiveCents     BigInt  @map("exclusive_cents")
+  gstCents           BigInt  @map("gst_cents")
+  inclusiveCents     BigInt  @map("inclusive_cents")
+  invoice            Invoice @relation(fields: [companyId, invoiceId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([invoiceId, position])
+  @@index([companyId, invoiceId])
+  @@map("invoice_items")
 }
 
 enum ExpenseCategory {

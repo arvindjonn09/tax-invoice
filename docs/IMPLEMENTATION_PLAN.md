@@ -47,7 +47,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 ## M3 Quotes, bills, invoices and payments
 - [ ] Quotes with tax-coded lines and accepted variations
 - [ ] Supplier bills with creditable GST and payment allocations
-- [ ] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids
+- [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
 - [ ] Customer receipts and allocations
 - [ ] Financial concurrency/idempotency tests
