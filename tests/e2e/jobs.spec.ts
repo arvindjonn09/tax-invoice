@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import { type Page, expect, test } from "@playwright/test";
 import { requireAccounts, signIn } from "./accounts";
+import { sharedEmployee } from "./shared-employee";
 test.setTimeout(90_000);
 test.beforeEach(() => {
   requireAccounts();
@@ -22,35 +23,7 @@ async function write<T>(
 }
 async function fixture(page: Page, createJob = true) {
   const suffix = randomUUID().slice(0, 8);
-  const accounts = requireAccounts();
-  const users = (await (
-    await page.request.get(
-      `/api/users?q=${encodeURIComponent(accounts.emails.employee)}`,
-    )
-  ).json()) as { members: { userId: string; role: string }[] };
-  const userId = users.members.find(
-    (member) => member.role === "employee",
-  )!.userId;
-  const employees = (await (
-    await page.request.get(
-      "/api/employees?status=all&q=Synthetic%20Screen%20Employee",
-    )
-  ).json()) as {
-    employees: { id: string; userId: string | null; isActive: boolean }[];
-  };
-  let employee = employees.employees.find((row) => row.userId === userId);
-  if (!employee)
-    employee = await write(page, "/api/employees", {
-      name: "Synthetic Screen Employee",
-      userId,
-    });
-  if (!employee!.isActive)
-    await write(
-      page,
-      `/api/employees/${employee!.id}`,
-      { isActive: true },
-      "PATCH",
-    );
+  const employee = await sharedEmployee(page, "Synthetic Screen Employee");
   const customer = await write<{ id: string }>(page, "/api/customers", {
     name: `Synthetic jobs client ${suffix}`,
   });
@@ -74,13 +47,20 @@ async function fixture(page: Page, createJob = true) {
         agreedPriceExclusiveCents: "250001",
       })
     : null;
-  return { customer, site, employee: employee!, job };
+  return { customer, site, employee, job };
 }
 test("owner creates a job, schedules a visit, assigns and ends work, and changes status", async ({
   page,
 }) => {
   await signIn(page, "owner");
   const seeded = await fixture(page, false);
+  // A throwaway employee: this test deactivates it, and the shared one
+  // must stay active for specs running in parallel.
+  const assignee = await write<{ id: string; name: string }>(
+    page,
+    "/api/employees",
+    { name: `Synthetic Assignee ${randomUUID().slice(0, 8)}` },
+  );
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Create job", exact: true }).click();
   await page
@@ -162,19 +142,19 @@ test("owner creates a job, schedules a visit, assigns and ends work, and changes
   await page.getByRole("tab", { name: "Assignments", exact: true }).click();
   await page
     .getByLabel("Employee *", { exact: true })
-    .selectOption(seeded.employee.id);
+    .selectOption(assignee.id);
   await page
     .getByRole("button", { name: "Assign employee", exact: true })
     .click();
   await expect(
     page.getByRole("heading", {
-      name: "Synthetic Screen Employee",
+      name: assignee.name,
       exact: true,
     }),
   ).toBeVisible();
   await write(
     page,
-    `/api/employees/${seeded.employee.id}`,
+    `/api/employees/${assignee.id}`,
     { isActive: false },
     "PATCH",
   );
@@ -183,7 +163,7 @@ test("owner creates a job, schedules a visit, assigns and ends work, and changes
   await expect(page.getByText(/Employee inactive/)).toBeVisible();
   await write(
     page,
-    `/api/employees/${seeded.employee.id}`,
+    `/api/employees/${assignee.id}`,
     { isActive: true },
     "PATCH",
   );
