@@ -523,6 +523,20 @@ export function quoteHandlers(db: () => PrismaClient) {
         const before = await lockedQuote(tx, actor, id);
         if (before.status !== "draft")
           throw refuse(409, "This quote has already been sent");
+        // A revision replaces its predecessor only while that's still open:
+        // once accepted, sending the revision would let it convert again.
+        if (before.revisesId) {
+          await lockRow(tx, "quotes", before.revisesId);
+          const predecessor = await tx.quote.findUniqueOrThrow({
+            where: { id: before.revisesId },
+            select: { status: true },
+          });
+          if (!["sent", "declined"].includes(predecessor.status))
+            throw refuse(
+              409,
+              `The quote this revises is already ${predecessor.status}`,
+            );
+        }
         const sentOn = parsed.data.sentOn ?? sydneyToday();
         if (sentOn > sydneyToday())
           throw refuse(400, "The send date can't be in the future", "sentOn");
@@ -562,7 +576,6 @@ export function quoteHandlers(db: () => PrismaClient) {
           data: itemRows(actor.companyId, before.id, lines, amounts),
         });
         if (before.revisesId) {
-          await lockRow(tx, "quotes", before.revisesId);
           await tx.quote.updateMany({
             where: { id: before.revisesId, status: "sent" },
             data: { status: "superseded" },

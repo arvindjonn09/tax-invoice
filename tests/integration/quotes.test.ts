@@ -434,6 +434,25 @@ describe("quotes (#44)", () => {
     expect((await act("accept", revised.body.id)).status).toBe(200);
   });
 
+  it("won't send a revision once its predecessor is accepted, even concurrently", async () => {
+    const first = await draft();
+    await act("send", first.body.id);
+    const revised = await act("revise", first.body.id);
+    expect((await act("accept", first.body.id)).status).toBe(200);
+    const late = await act("send", revised.body.id);
+    expect(late.status).toBe(409);
+    expect(late.body.error).toMatch(/already accepted/);
+    // Racing: exactly one of accept-original and send-revision wins.
+    const second = await draft();
+    await act("send", second.body.id);
+    const next = await act("revise", second.body.id);
+    const [accepted, sent] = await Promise.all([
+      act("accept", second.body.id),
+      act("send", next.body.id),
+    ]);
+    expect([accepted.status, sent.status].sort()).toEqual([200, 409]);
+  });
+
   it("expires after its validity date: accept refused, decline allowed", async () => {
     const created = await draft({ validUntil: shift(-10) });
     const early = await act("send", created.body.id, { sentOn: shift(-20) });
