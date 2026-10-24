@@ -566,7 +566,8 @@ export function QuoteBuilder({
             </fieldset>
             {!registeredToday ? (
               <p className="text-sm text-muted-foreground">
-                Not registered for GST today: no line can be Taxable.
+                Not registered for GST today. A quote can have Taxable lines
+                only if it&apos;s sent on a date the company was registered.
               </p>
             ) : null}
             <ol className="space-y-4">
@@ -636,14 +637,7 @@ export function QuoteBuilder({
                               }
                             >
                               {TAX_CODE_OPTIONS.map((option) => (
-                                <option
-                                  key={option.value}
-                                  value={option.value}
-                                  disabled={
-                                    option.value === "TAXABLE_10" &&
-                                    !registeredToday
-                                  }
-                                >
+                                <option key={option.value} value={option.value}>
                                   {option.label}
                                 </option>
                               ))}
