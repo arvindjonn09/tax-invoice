@@ -1,0 +1,90 @@
+{
+  "title": "Tax Invoice",
+  "details": [
+    [
+      "Invoice number",
+      "INV-0042"
+    ],
+    [
+      "Date",
+      "15 July 2026"
+    ],
+    [
+      "Due",
+      "14 August 2026"
+    ],
+    [
+      "Your reference",
+      "PO-7781"
+    ]
+  ],
+  "from": [
+    "Sample Sparks Pty Ltd",
+    "Trading as Sample Sparks",
+    "ABN 61 484 848 484",
+    "1 Example Street",
+    "Sampleville NSW 2000"
+  ],
+  "to": [
+    "Acme Sample Co",
+    "ABN 31 484 848 490",
+    "2 Sample Road",
+    "Level 3",
+    "Testtown VIC 3000",
+    "accounts@example.invalid"
+  ],
+  "site": [
+    "Head office",
+    "2 Sample Road",
+    "Testtown VIC 3000"
+  ],
+  "columns": [
+    "Description",
+    "Qty",
+    "Unit price",
+    "Tax",
+    "GST",
+    "Incl GST"
+  ],
+  "rows": [
+    [
+      "Office electrical fit-out per accepted quote Q-0007",
+      "1",
+      "$2,300.00",
+      "GST 10%",
+      "$230.00",
+      "$2,530.00"
+    ],
+    [
+      "Call-out labour",
+      "2.5 h",
+      "$80.00",
+      "GST 10%",
+      "$20.00",
+      "$220.00"
+    ]
+  ],
+  "totals": [
+    [
+      "Total ex GST",
+      "$2,500.00"
+    ],
+    [
+      "GST",
+      "$250.00"
+    ],
+    [
+      "Total incl GST",
+      "$2,750.00"
+    ]
+  ],
+  "notes": "Thanks for your business.\nPay by bank transfer within 30 days.",
+  "footer": [
+    "Unit prices exclude GST.",
+    "All items are taxable supplies."
+  ],
+  "metadata": {
+    "title": "Tax Invoice INV-0042",
+    "date": "2026-07-15"
+  }
+}

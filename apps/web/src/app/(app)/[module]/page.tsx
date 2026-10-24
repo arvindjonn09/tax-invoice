@@ -15,6 +15,9 @@ const BUILT_MODULES = new Set([
   "offers",
   "contractors",
   "quotes",
+  "employees",
+  "expenses",
+  "timesheets",
 ]);
 export function generateStaticParams() {
   return NAV_ITEMS.filter((item) => !BUILT_MODULES.has(item.slug)).map(
