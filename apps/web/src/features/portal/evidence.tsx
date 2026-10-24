@@ -212,7 +212,25 @@ export function EvidencePanel({
                 <select
                   {...control}
                   value={kind}
-                  onChange={(e) => setKind(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    // A finished upload belongs to an image type; a note can't
+                    // carry it, so don't leave it silently pending (#129).
+                    if (next === "note" && uploaded) {
+                      if (
+                        !window.confirm(
+                          `${uploaded.fileName} is uploaded but not attached. Switch to a work note and leave it unattached?`,
+                        )
+                      )
+                        return;
+                      setUploaded(null);
+                      setMessage({
+                        kind: "success",
+                        text: `${uploaded.fileName} won't be attached to this job.`,
+                      });
+                    }
+                    setKind(next);
+                  }}
                 >
                   <option value="note">Work note</option>
                   <option value="photo">Photo</option>
