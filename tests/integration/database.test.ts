@@ -41,6 +41,7 @@ it("connects through Prisma only to this run's migrated database", async () => {
     { migration_name: "20261023180000_supplier_bills", finished: true },
     { migration_name: "20261023190000_quotes", finished: true },
     { migration_name: "20261023200000_invoice_pdfs", finished: true },
+    { migration_name: "20261023210000_reporting_periods", finished: true },
   ]);
 });
 
