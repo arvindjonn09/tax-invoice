@@ -1,4 +1,9 @@
-import { createHash } from "node:crypto";
+import {
+  supplierPaymentDateProblem,
+  expensePaymentDateProblem,
+  chronologyMessage,
+} from "../payments/chronology";
+import { createHash, randomUUID } from "node:crypto";
 import {
   type Actor,
   companyScope,
@@ -1101,8 +1106,32 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
               name: bills[0]!.supplierName,
             };
           }
+          const paymentId = randomUUID(),
+            createdAt = new Date();
+          const dateProblem = forExpenses
+            ? expensePaymentDateProblem
+            : supplierPaymentDateProblem;
+          for (const allocation of allocations) {
+            if (
+              await dateProblem(
+                tx,
+                actor.companyId,
+                allocation.billId,
+                balances.get(allocation.billId)!.inclusive,
+                {
+                  id: `${paymentId}:record`,
+                  date: data.paidOn,
+                  recordedAt: createdAt.toISOString(),
+                  amount: allocation.amount,
+                },
+              )
+            )
+              throw refuse(400, chronologyMessage, "paidOn");
+          }
           const created = await tx.supplierPayment.create({
             data: {
+              id: paymentId,
+              createdAt,
               companyId: actor.companyId,
               contractorId: payee.contractorId,
               payeeName: payee.name,
@@ -1193,7 +1222,26 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
         const ids = before.allocations.map((allocation) => allocation.billId);
         await lockBills(tx, ids);
         const balances = await billBalances(tx, actor.companyId, ids);
-        const today = new Date(`${sydneyToday()}T00:00:00Z`);
+        const voidedAt = new Date(),
+          voidDay = sydneyToday(voidedAt);
+        for (const allocation of before.allocations) {
+          if (
+            await supplierPaymentDateProblem(
+              tx,
+              actor.companyId,
+              allocation.billId,
+              balances.get(allocation.billId)!.inclusive,
+              {
+                id: `${before.id}:void`,
+                date: voidDay,
+                recordedAt: voidedAt.toISOString(),
+                amount: -allocation.amountCents,
+              },
+            )
+          )
+            throw refuse(400, chronologyMessage);
+        }
+        const today = new Date(`${voidDay}T00:00:00Z`);
         const gstAdjustments = before.allocations
           .map((allocation) => ({
             billId: allocation.billId,
@@ -1223,6 +1271,25 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
         );
         await lockExpenses(tx, expenseIds);
         const owed = await expenseBalances(tx, actor.companyId, expenseIds);
+        for (const allocation of before.expenseAllocations) {
+          const balance = owed.get(allocation.expenseId);
+          if (
+            balance &&
+            (await expensePaymentDateProblem(
+              tx,
+              actor.companyId,
+              allocation.expenseId,
+              balance.inclusive,
+              {
+                id: `${before.id}:void`,
+                date: voidDay,
+                recordedAt: voidedAt.toISOString(),
+                amount: -allocation.amountCents,
+              },
+            ))
+          )
+            throw refuse(400, chronologyMessage);
+        }
         const expenseAdjustments = before.expenseAllocations
           .map((allocation) => {
             const balance = owed.get(allocation.expenseId);
@@ -1257,7 +1324,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
           where: { id },
           data: {
             voidReason: parsed.data.reason,
-            voidedAt: new Date(),
+            voidedAt,
             voidedBy: actor.userId,
           },
           include: PAYMENT_INCLUDE,

@@ -49,4 +49,27 @@ CREATE TRIGGER supplier_payment_expense_allocations_append_only BEFORE UPDATE OR
 CREATE TRIGGER supplier_payment_expense_gst_adjustments_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON supplier_payment_expense_gst_adjustments
   FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
 
+
+-- Reporting periods (#54): payments to on-account expenses and their void
+-- corrections are cash-basis GST sources. Record their posting date like a
+-- bill payment's, so a late one never changes a finalised period. Own
+-- function, so the reporting migration stays reversible.
+CREATE FUNCTION jobflow_expense_payment_posting() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE day date;
+BEGIN
+  IF TG_TABLE_NAME = 'supplier_payment_expense_allocations' THEN
+    SELECT paid_on INTO day FROM supplier_payments
+      WHERE id = NEW.payment_id AND company_id = NEW.company_id;
+  ELSE
+    day := NEW.adjusted_on;
+  END IF;
+  PERFORM jobflow_record_gst_posting(NEW.company_id, NEW.payment_id, day);
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER supplier_payment_expense_allocations_reporting_period BEFORE INSERT ON supplier_payment_expense_allocations
+  FOR EACH ROW EXECUTE FUNCTION jobflow_expense_payment_posting();
+CREATE TRIGGER supplier_payment_expense_gst_adjustments_reporting_period BEFORE INSERT ON supplier_payment_expense_gst_adjustments
+  FOR EACH ROW EXECUTE FUNCTION jobflow_expense_payment_posting();
+
 COMMIT;
