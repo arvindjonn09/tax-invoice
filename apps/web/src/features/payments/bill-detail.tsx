@@ -266,7 +266,7 @@ export function BillDetail({
                 ? "Not registered for GST on the bill date: no GST credit."
                 : bill.hasEvidence
                   ? `Tax invoice held · ${bill.creditablePercent}% business use${bill.creditableReason ? ` (${bill.creditableReason})` : ""}.`
-                  : "No verified tax invoice: GST on bills over $82.50 can't be claimed."}
+                  : "No verified evidence held, so none of its GST can be claimed (over $82.50 needs a tax invoice)."}
             </p>
             {bill.documentId ? (
               <div className="space-y-2">

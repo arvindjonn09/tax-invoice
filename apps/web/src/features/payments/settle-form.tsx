@@ -9,7 +9,6 @@ import {
   TextField,
   sendJson,
 } from "@/components/form/field";
-import { useRemote } from "@/components/data/use-remote";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
 import { formatAudCents } from "@/components/money-display";
 import { EntityPicker } from "@/features/jobs/picker";
@@ -27,6 +26,7 @@ import {
   type OpenInvoice,
   idempotencyKey,
 } from "./types";
+import { useAllPages } from "./use-all-pages";
 
 type Common = {
   date: string;
@@ -48,6 +48,7 @@ function SettleForm({
   today,
   targets,
   loading,
+  loadFailure,
   legend,
   emptyText,
   before,
@@ -65,6 +66,8 @@ function SettleForm({
   today: string;
   targets: readonly Target[];
   loading: boolean;
+  /** Why the bills or invoices couldn't be loaded, with a retry. */
+  loadFailure: { message: string; retry: () => void } | null;
   legend: string;
   emptyText: string;
   before?: ReactNode;
@@ -203,7 +206,18 @@ function SettleForm({
         >
           <legend className="text-xl font-semibold">Settles</legend>
           {before}
-          {loading ? (
+          {loadFailure ? (
+            <div role="alert" className="space-y-2">
+              <p>{loadFailure.message}</p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={loadFailure.retry}
+              >
+                Try again
+              </Button>
+            </div>
+          ) : loading ? (
             <p role="status">Loading what’s owing…</p>
           ) : targets.length ? (
             <AllocationTable
@@ -302,10 +316,8 @@ export function SupplierPaymentForm({
   billId: string | null;
 }) {
   const router = useRouter();
-  const bills = useRemote<{ bills: Bill[] }>(
-    "/api/bills?status=live&pageSize=100",
-  );
-  const owing = (bills.data?.bills ?? []).filter(
+  const bills = useAllPages<Bill>("/api/bills?status=live", "bills");
+  const owing = (bills.rows ?? []).filter(
     (bill) => BigInt(bill.outstandingCents) > 0n,
   );
   const preset = owing.find((bill) => bill.id === billId);
@@ -344,7 +356,10 @@ export function SupplierPaymentForm({
       back={{ label: "Payments", href: "/payments?view=payments" }}
       dateLabel="Paid on (required)"
       today={today}
-      loading={!bills.data && !bills.error}
+      loading={!bills.rows}
+      loadFailure={
+        bills.error ? { message: bills.error, retry: bills.reload } : null
+      }
       targets={targets}
       legend="Bills to pay"
       emptyText={
@@ -396,12 +411,13 @@ export function ReceiptForm({ today }: { today: string }) {
   const [customerId, setCustomerId] = useState("");
   const [kind, setKind] = useState<"receipt" | "refund">("receipt");
   const [state, setState] = useState<Record<string, Allocation>>({});
-  const invoices = useRemote<{ invoices: OpenInvoice[] }>(
+  const invoices = useAllPages<OpenInvoice>(
     customerId
-      ? `/api/invoices?${new URLSearchParams({ customerId, status: "issued", kind: "invoice", pageSize: "100" })}`
+      ? `/api/invoices?${new URLSearchParams({ customerId, status: "issued", kind: "invoice" })}`
       : null,
+    "invoices",
   );
-  const targets: Target[] = (invoices.data?.invoices ?? [])
+  const targets: Target[] = (invoices.rows ?? [])
     .map((invoice) => ({
       invoice,
       limit: BigInt(
@@ -431,7 +447,12 @@ export function ReceiptForm({ today }: { today: string }) {
         kind === "refund" ? "Refunded on (required)" : "Received on (required)"
       }
       today={today}
-      loading={Boolean(customerId) && !invoices.data && !invoices.error}
+      loading={Boolean(customerId) && !invoices.rows}
+      loadFailure={
+        invoices.error
+          ? { message: invoices.error, retry: invoices.reload }
+          : null
+      }
       targets={targets}
       legend={kind === "refund" ? "Invoices to refund" : "Invoices paid"}
       emptyText={

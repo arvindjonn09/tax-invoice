@@ -13,6 +13,7 @@ import { useRemote } from "@/components/data/use-remote";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
 import { formatAudCents } from "@/components/money-display";
 import { parseAudInput } from "@/lib/aud-input";
+import { JobPicker } from "@/features/jobs/job-picker";
 import { TAX_CODES } from "./types";
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -84,9 +85,6 @@ export function BillForm({ today }: { today: string }) {
   const contractors = useRemote<{
     contractors: { id: string; name: string; gstRegistered?: boolean }[];
   }>(source === "contractor" ? "/api/contractors?pageSize=100" : null);
-  const jobs = useRemote<{
-    jobs: { id: string; reference: string; title: string }[];
-  }>("/api/jobs?pageSize=100");
 
   const touch = () => {
     setDirty(true);
@@ -381,30 +379,20 @@ export function BillForm({ today }: { today: string }) {
                 touch();
               }}
             />
-            <Field
-              id="bill-job"
-              label="Job (optional)"
-              hint="Its cost counts towards the job's profit."
-              error={errors.jobId}
-            >
-              {(control) => (
-                <select
-                  {...control}
-                  value={jobId}
-                  onChange={(event) => {
-                    setJobId(event.target.value);
-                    touch();
-                  }}
-                >
-                  <option value="">Overhead — no job</option>
-                  {jobs.data?.jobs.map((job) => (
-                    <option key={job.id} value={job.id}>
-                      {job.reference} · {job.title}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </Field>
+            <div className="md:col-span-2">
+              <JobPicker
+                id="bill-job"
+                label="Job (optional)"
+                hint="Its cost counts towards the job's profit."
+                value={jobId}
+                emptyLabel="Overhead — no job"
+                error={errors.jobId}
+                onChange={(id) => {
+                  setJobId(id);
+                  touch();
+                }}
+              />
+            </div>
             <TextField
               id="bill-issued"
               label="Bill date (required)"
