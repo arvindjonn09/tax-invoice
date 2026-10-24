@@ -408,7 +408,12 @@ export function billHandlers(db: () => PrismaClient) {
             registered: boolean;
           };
           let jobId = data.jobId ?? null;
+          // Lock order: contractor, then job, then document — the order
+          // contractor writes (contractor → offer → job) and expenses (job →
+          // document) take. Inserting the bill only key-shares rows already
+          // locked here, so a racing expense or offer write can't deadlock it.
           if (data.contractorId) {
+            await lockRow(tx, "contractors", data.contractorId);
             const contractor = await tx.contractor.findFirst({
               where: { id: data.contractorId, companyId: actor.companyId },
             });
@@ -459,6 +464,7 @@ export function billHandlers(db: () => PrismaClient) {
               "supplierAbn",
             );
           if (jobId) {
+            await lockRow(tx, "jobs", jobId);
             const job = await tx.job.findFirst({
               where: { id: jobId, companyId: actor.companyId },
               select: { id: true },

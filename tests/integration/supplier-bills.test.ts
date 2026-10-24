@@ -994,10 +994,10 @@ describe("supplier payments (#46)", () => {
 });
 
 describe("one purchase document backs one record", () => {
-  const expense = (receiptDocumentId: string) =>
+  const expense = (receiptDocumentId: string, jobId: string | null = null) =>
     r().submitExpense(
       call("owner", "POST", {
-        jobId: null,
+        jobId,
         category: "materials",
         description: "Synthetic cable",
         purchasedOn: "2026-07-15",
@@ -1010,7 +1010,7 @@ describe("one purchase document backs one record", () => {
       }),
       undefined,
     );
-  const bill = (documentId: string) =>
+  const bill = (documentId: string, extra: Record<string, unknown> = {}) =>
     record({
       supplierName: "Sample Supplies",
       supplierAbn: SUPPLIER_ABN,
@@ -1018,7 +1018,19 @@ describe("one purchase document backs one record", () => {
       issuedOn: "2026-07-15",
       lines: [SUBCONTRACT_LINE],
       documentId,
+      ...extra,
     });
+  /** Wait until `count` sessions in this test database wait on a lock. */
+  async function waitForLockWaiters(count: number) {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const [row] = await db.$queryRaw<{ waiting: number }[]>`
+        SELECT count(*)::int AS waiting FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+      if ((row?.waiting ?? 0) >= count) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Never saw ${count} lock waiters`);
+  }
 
   it("refuses an expense on a bill's document, and a bill on an expense's", async () => {
     const billed = await document();
@@ -1054,4 +1066,46 @@ describe("one purchase document backs one record", () => {
       ).toHaveLength(1);
     }
   });
+
+  // Codex #143 review (84fd7fb, P2): a job-linked bill took the document
+  // first, then key-shared the job on insert, while an expense held the job
+  // and waited for the document: a deadlock (40P01 → 500). Holding the job
+  // lock queues the expense on the job first, then the bill, so the old order
+  // deadlocks every time; the fixed order (contractor → job → document)
+  // serialises them.
+  it.each([
+    ["a named supplier", () => ({})],
+    ["a contractor", () => ({ contractorId })],
+  ])(
+    "a job-linked bill from %s and an expense on the same job and document don't deadlock",
+    async (_supplier, extra) => {
+      const job = await newJob();
+      const shared = await document();
+      let racing: Promise<[Response, Awaited<ReturnType<typeof bill>>]>;
+      // Hold the job, queue the expense on it, then the bill; commit.
+      await db.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT 1 FROM jobs WHERE id = ${job.id}::uuid FOR UPDATE`;
+          const expensed = expense(shared, job.id);
+          await waitForLockWaiters(1);
+          const billed = bill(shared, { jobId: job.id, ...extra() });
+          await waitForLockWaiters(2);
+          racing = Promise.all([expensed, billed]);
+        },
+        { timeout: 30_000 },
+      );
+      const [expensed, billed] = await racing!;
+      expect([expensed.status, billed.status]).toEqual([201, 400]);
+      expect(billed.body.fields).toHaveProperty("documentId");
+      const claims = await db.document.findUniqueOrThrow({
+        where: { id: shared },
+        select: {
+          supplierBill: { select: { id: true } },
+          expense: { select: { jobId: true } },
+        },
+      });
+      expect(claims.supplierBill).toBeNull();
+      expect(claims.expense?.jobId).toBe(job.id);
+    },
+  );
 });
