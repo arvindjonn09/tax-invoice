@@ -14,3 +14,5 @@ export * from "./contractors";
 export * from "./expenses";
 export * from "./labour";
 export * from "./invoices";
+export * from "./receipts";
+export * from "./bills";

@@ -15,12 +15,6 @@ export function cashAttributedGst(input: {
   settlement: Cents;
 }): Cents {
   const { documentTotal, documentGst, previouslySettled, settlement } = input;
-  if (documentTotal <= 0n) {
-    throw new RangeError("Document total must be positive");
-  }
-  if (documentGst < 0n || documentGst > documentTotal) {
-    throw new RangeError("Document GST must be between 0 and the total");
-  }
   if (previouslySettled < 0n || settlement < 0n) {
     throw new RangeError("Settlements must be >= 0");
   }
@@ -28,9 +22,53 @@ export function cashAttributedGst(input: {
     throw new RangeError("Settlements exceed the document total");
   }
   const cumulative = (settled: Cents) =>
-    divideRounded(settled * documentGst, documentTotal);
+    cumulativeCashGst({ documentTotal, documentGst, settled });
   return (
     cumulative(previouslySettled + settlement) - cumulative(previouslySettled)
+  );
+}
+
+/**
+ * Cash-basis GST attributable once `settled` of the document has been paid:
+ * the rounded share of its GST. Ledgers whose earlier settlements may be
+ * voided reconcile each new settlement against this (see `allocationGst`).
+ */
+export function cumulativeCashGst(input: {
+  documentTotal: Cents;
+  documentGst: Cents;
+  settled: Cents;
+}): Cents {
+  const { documentTotal, documentGst, settled } = input;
+  if (documentTotal <= 0n) {
+    throw new RangeError("Document total must be positive");
+  }
+  if (documentGst < 0n || documentGst > documentTotal) {
+    throw new RangeError("Document GST must be between 0 and the total");
+  }
+  if (settled < 0n || settled > documentTotal) {
+    throw new RangeError("Settled must be between 0 and the document total");
+  }
+  return divideRounded(settled * documentGst, documentTotal);
+}
+
+/**
+ * Cash-basis GST correction to record when a settlement is voided: brings the
+ * live attributed GST left after removing the voided settlement's share back
+ * to the rounded share of what stays settled. With it, live GST always equals
+ * `cumulativeCashGst` of the live settled amount, after every step.
+ */
+export function voidGstAdjustment(input: {
+  documentTotal: Cents;
+  documentGst: Cents;
+  settledAfter: Cents;
+  attributedAfter: Cents;
+}): Cents {
+  return (
+    cumulativeCashGst({
+      documentTotal: input.documentTotal,
+      documentGst: input.documentGst,
+      settled: input.settledAfter,
+    }) - input.attributedAfter
   );
 }
 

@@ -40,6 +40,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
   - #35 schema + API: contractors (ABN, GST flag, optional subcontractor login), fixed/hourly offers in GST-exclusive cents with a tax code, accept/decline with immutable acceptance snapshots and committed cost recorded once; portal screens remain #37
 - [ ] Employee timesheets with cost-rate snapshots
   - #38 schema + API: append-only effective-dated employee cost rates; timesheets per job/visit by live-assigned employees (re-checked under job→employee locks); approval snapshots the rate on the work date and the cost once; decided timesheets frozen, reversal corrections; rates/costs only with employee.cost_rate.read; screens remain #39
+  - #131 screens: `/employees` directory and detail (create/edit, link a login via employee-role-only `GET /api/employees/linkable-users`, deactivate/reactivate) and the append-only cost-rate history (add with employee.write, read with employee.cost_rate.read; accountant read-only without rates)
 - [ ] Expenses with GST code, creditable portion, receipts and approvals
   - #40 schema + API: job/general expenses, ex/incl entry, tax code, creditable share, receipt, settlement (paid at purchase / on account, company default), approval snapshots the cost once, decided expenses frozen, reversal corrections; screens remain #41
 - [x] Work evidence and completion approval — #42: append-only photos/notes/signatures from workers on the job; submit → review (approve or rework) via the status machine; completion and rework only through the review, workers locked and rechecked before every write, visit-only workers kept to their visits
@@ -47,11 +48,12 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 ## M3 Quotes, bills, invoices and payments
 - [ ] Quotes with tax-coded lines and accepted variations
 - [ ] Supplier bills with creditable GST and payment allocations
+  - #46 schema + API: bills from suppliers or contractors, keeping the supplier's line GST as issued (R3), linked to an accepted offer (releases the commitment once) and job; creditable GST only with verified evidence on a registered date, limited to a recorded business share; job cost (ex GST + non-creditable GST) snapshotted once; idempotent supplier payments (key + fingerprint, one transaction, locked bills, no overpayment, cash-basis 1B attribution); immutable except one-way voids. Follow-ups: #139 portal bills, #140 supplier credits, #141 on-account expenses, #142 evidence reclassification
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
   - #48 PDF: deterministic pdf-lib rendering of the frozen issue snapshot (standard fonts only — no HTML, scripts, fonts, images or URLs fetched), stored privately once at issue in append-only `invoice_pdfs` (lazily if storage was down), 5-minute signed links via `POST /api/invoices/:id/pdf`; golden files for registered, not-registered and adjustment notes. Builder UI remains #49
   - #49 screens: `/invoices` list (status/type filters, past-due marker) and builder — server totals only (stale after edits, issue blocked until saved), ex/incl entry, mixed tax lines, confirm-to-issue dialog, issued read-only view with PDF link, credit note and void
-- [ ] Customer receipts and allocations
+- [x] Customer receipts and allocations — #50: idempotent, transactional, no overpayment, refunds, cash-basis GST attribution per allocation
 - [ ] Financial concurrency/idempotency tests
 
 ## M4 Profit, GST reporting and dashboard
