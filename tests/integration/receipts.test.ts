@@ -172,6 +172,7 @@ const r = () => ({
   invRead: withPolicy("invoice.read", invoices.read),
   invList: withPolicy("invoice.read", invoices.list),
   invVoid: withPolicy("invoice.issue", invoices.void),
+  invCredit: withPolicy("invoice.issue", invoices.credit),
   create: withPolicy("payment.write", receipts.create),
   read: withPolicy("payment.read", receipts.read),
   list: withPolicy("payment.read", receipts.list),
@@ -652,5 +653,81 @@ describe("access", () => {
         id,
       ).toBe(404);
     }
+  });
+  it("refuses a cash-basis settlement dated before the invoice's latest credit (#54)", async () => {
+    // $100 + $10 GST taxable and $110 GST-free; the GST-free half is credited
+    // on 10 August, so $55 received from then on is half of $110: $5 GST.
+    const draft = await (
+      await r().invCreate(
+        call("accountant", "POST", {
+          customerId,
+          lines: [
+            {
+              description: "Install",
+              quantity: "1",
+              unitPriceCents: "10000",
+              taxCode: "TAXABLE_10",
+            },
+            {
+              description: "Exported part",
+              quantity: "1",
+              unitPriceCents: "11000",
+              taxCode: "GST_FREE",
+            },
+          ],
+        }),
+        undefined,
+      )
+    ).json();
+    const invoiceId = draft.id as string;
+    expect(
+      (
+        await r().invIssue(
+          call("accountant", "POST", { issueDate: "2026-07-01" }),
+          one(invoiceId),
+        )
+      ).status,
+    ).toBe(200);
+    const credit = await r().invCredit(
+      call("accountant", "POST", {
+        lines: [
+          {
+            description: "Part returned",
+            quantity: "1",
+            unitPriceCents: "11000",
+            taxCode: "GST_FREE",
+          },
+        ],
+      }),
+      one(invoiceId),
+    );
+    expect(credit.status).toBe(201);
+    const creditId = ((await credit.json()) as { id: string }).id;
+    expect(
+      (
+        await r().invIssue(
+          call("accountant", "POST", { issueDate: "2026-08-10" }),
+          one(creditId),
+        )
+      ).status,
+    ).toBe(200);
+
+    const early = await receive([{ invoiceId, amountCents: "5500" }], {
+      date: "2026-07-31",
+    });
+    expect(early.status).toBe(400);
+    expect((await early.json()).fields).toHaveProperty("receivedOn");
+
+    const onTime = await receive([{ invoiceId, amountCents: "5500" }], {
+      date: "2026-08-10",
+    });
+    expect(onTime.status).toBe(201);
+    expect((await onTime.json()).allocations[0].gstAttributedCents).toBe("500");
+
+    const refund = await receive([{ invoiceId, amountCents: "5500" }], {
+      kind: "refund",
+      date: "2026-08-09",
+    });
+    expect(refund.status).toBe(400);
   });
 });
