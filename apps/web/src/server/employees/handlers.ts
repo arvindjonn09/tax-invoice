@@ -238,5 +238,36 @@ export function employeeHandlers(db: () => PrismaClient) {
     }
   };
 
-  return { list, read, create, update };
+  /**
+   * Login accounts an employee record can be linked to (#131): active
+   * employee-role members of this company, with the record each is already
+   * linked to. Lets owner/manager (employee.write) link a login without
+   * user.manage; exposes only name, email and the existing link.
+   */
+  const linkable: PolicyHandler<unknown> = async ({ actor }) => {
+    const members = await db().membership.findMany({
+      where: { companyId: actor.companyId, isActive: true, role: "employee" },
+      select: { userId: true, user: { select: { name: true, email: true } } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 500,
+    });
+    const links = await db().employee.findMany({
+      where: {
+        companyId: actor.companyId,
+        userId: { in: members.map((member) => member.userId) },
+      },
+      select: { id: true, userId: true },
+    });
+    const linkedTo = new Map(links.map((link) => [link.userId, link.id]));
+    return privateJson({
+      users: members.map((member) => ({
+        userId: member.userId,
+        name: member.user.name,
+        email: member.user.email,
+        employeeId: linkedTo.get(member.userId) ?? null,
+      })),
+    });
+  };
+
+  return { list, read, create, update, linkable };
 }
