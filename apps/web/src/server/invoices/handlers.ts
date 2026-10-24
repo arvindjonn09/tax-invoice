@@ -31,6 +31,7 @@ import { lockRow } from "../db/locks";
 import { nextNumber } from "../db/numbering";
 import { optionalText, requiredText, uuidOrNull } from "../http/fields";
 import { parsePage } from "../http/guards";
+import { log, safeError } from "../log";
 import { Refusal, inTransaction } from "../jobs/handlers";
 import { invoiceMoney } from "../receipts/handlers";
 
@@ -245,7 +246,18 @@ function dollars(cents: bigint): string {
   return `$${whole}.${(cents % 100n).toString().padStart(2, "0")}`;
 }
 
-export function invoiceHandlers(db: () => PrismaClient) {
+export type InvoiceHandlerOptions = {
+  /** Runs after an issue commits (stores the PDF); failures are logged. */
+  afterIssue?: (
+    actor: { companyId: string; userId: string },
+    invoiceId: string,
+  ) => Promise<unknown>;
+};
+
+export function invoiceHandlers(
+  db: () => PrismaClient,
+  options: InvoiceHandlerOptions = {},
+) {
   const list: PolicyHandler<unknown> = async ({ actor, request }) => {
     const params = new URL(request.url).searchParams;
     const { page, take, skip } = parsePage(params);
@@ -488,7 +500,7 @@ export function invoiceHandlers(db: () => PrismaClient) {
     if (issueDate > sydneyToday())
       return fail(400, "The issue date can't be in the future", "issueDate");
     const id = uuidOrNull((await context.params).id);
-    return inTransaction(async () => {
+    const response = await inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
         const before = await lockedInvoice(tx, actor, id);
         if (before.status !== "draft")
@@ -679,6 +691,18 @@ export function invoiceHandlers(db: () => PrismaClient) {
       });
       return privateJson(view(row));
     });
+    // Store the PDF now (#48). A storage problem never undoes the issue:
+    // the PDF is rendered from the same frozen snapshot on first request.
+    if (response.status === 200 && id && options.afterIssue)
+      await options
+        .afterIssue({ companyId: actor.companyId, userId: actor.userId }, id)
+        .catch((error: unknown) =>
+          log("warn", "invoice.pdf_deferred", {
+            invoiceId: id,
+            error: safeError(error),
+          }),
+        );
+    return response;
   };
 
   /**

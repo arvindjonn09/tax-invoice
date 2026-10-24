@@ -18,6 +18,7 @@ const LOCKABLE = new Set([
   "expenses",
   "company_gst_registrations",
   "invoices",
+  "quotes",
   "customer_receipts",
   "supplier_bills",
   "supplier_payments",
