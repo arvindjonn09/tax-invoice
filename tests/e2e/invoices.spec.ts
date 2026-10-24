@@ -129,7 +129,9 @@ test("owner drafts, issues and downloads the PDF of an invoice", async ({
   await dialog
     .getByRole("button", { name: `Issue ${title.toLowerCase()}` })
     .click();
-  await expect(page).toHaveURL(/issued=1/);
+  // Issue stores the PDF before responding (#48); the first render in a
+  // cold CI server can take over 10s, plus the page navigation.
+  await expect(page).toHaveURL(/issued=1/, { timeout: 30_000 });
   await expect(
     page.getByText(/issued\. It can no longer be edited\./),
   ).toBeVisible();
@@ -211,7 +213,7 @@ test("validation keeps the draft; credit notes and void follow the rules", async
     .getByRole("dialog")
     .getByRole("button", { name: /^Issue (tax )?invoice$/ })
     .click();
-  await expect(page).toHaveURL(/issued=1/);
+  await expect(page).toHaveURL(/issued=1/, { timeout: 30_000 });
   const invoiceUrl = page.url().replace(/\?.*$/, "");
 
   await page.getByRole("button", { name: "Create credit note" }).click();
@@ -224,7 +226,7 @@ test("validation keeps the draft; credit notes and void follow the rules", async
     .getByRole("dialog")
     .getByRole("button", { name: "Issue credit note" })
     .click();
-  await expect(page).toHaveURL(/issued=1/);
+  await expect(page).toHaveURL(/issued=1/, { timeout: 30_000 });
   await expect(page.getByText(/Credits invoice/)).toBeVisible();
   const creditUrl = page.url().replace(/\?.*$/, "");
 
