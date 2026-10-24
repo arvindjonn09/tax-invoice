@@ -54,6 +54,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
     - Cash-basis GST is re-based on the net bill, with corrections dated on or after the payments they re-split and the note's arrival. A correction that raises the claim needs a verified note when the adjustment is over $75.
     - Credits are immutable, with a one-way void.
     - API: `POST /api/bills/:id/credits`, `GET /api/supplier-credits/:id`, `POST /api/supplier-credits/:id/void`.
+  - #141 supplier payments settle approved on-account expenses with the same rules as bills: idempotent, no overpayment, cash-basis input tax credit and void corrections, one supplier per payment. A supplier-credit reversal and a payment can't both apply, whichever comes first.
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
 - [x] Customer receipts and allocations — #50: idempotent, transactional, no overpayment, refunds, cash-basis GST attribution per allocation
