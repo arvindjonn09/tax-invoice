@@ -182,6 +182,7 @@ const r = () => ({
   createOffer: withPolicy<One>("contractor.write", handlers.createOffer),
   updateOffer: withPolicy<OfferCtx>("contractor.write", handlers.updateOffer),
   myOffers: withPolicy("offer.read_own", handlers.myOffers),
+  myOffer: withPolicy<One>("offer.read_own", handlers.myOffer),
   respond: withPolicy<One>("offer.respond_own", handlers.respond),
 });
 
@@ -987,4 +988,139 @@ describe("locked rechecks (Codex #116 review)", () => {
       one(contractorId),
     );
   });
+});
+
+describe("subcontractor portal reads (#37)", () => {
+  it("scopes the direct detail read and keeps both payloads redacted", async () => {
+    const job = await newJob();
+    const contractorId = await linked();
+    const own = await (await offer(job.id, contractorId)).json();
+    const rival = await newContractor({
+      name: "Portal rival",
+      abn: ABN,
+      gstRegistered: true,
+    });
+    const hidden = await (
+      await offer(job.id, rival.id, { ...FIXED, rateExclusiveCents: "70000" })
+    ).json();
+    const response = await r().myOffer(
+      call("subcontractor", "GET"),
+      one(own.id),
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      id: own.id,
+      contractorActive: true,
+      rateExclusiveCents: "90000",
+    });
+    expect(Object.keys(body.job).sort()).toEqual([
+      "dueOn",
+      "reference",
+      "status",
+      "title",
+    ]);
+    expect(JSON.stringify(body)).not.toMatch(
+      /agreedPrice|committedCost|companyGstRegistered|contractorName|70000|margin|profit/,
+    );
+    for (const id of [hidden.id, "not-a-uuid"])
+      expect(
+        (await r().myOffer(call("subcontractor", "GET"), one(id))).status,
+      ).toBe(404);
+    expect((await r().myOffer(call("sub2", "GET"), one(own.id))).status).toBe(
+      404,
+    );
+    expect(
+      (await r().myOffer(call("employee", "GET"), one(own.id))).status,
+    ).toBe(403);
+    expect((await r().myOffer(call("owner", "GET"), one(own.id))).status).toBe(
+      404,
+    );
+  });
+  it("filters accepted jobs before paging/search and removes archived work access", async () => {
+    const job = await newJob();
+    const contractorId = await linked();
+    const title = `Portal accepted ${job.id}`;
+    await db.job.update({ where: { id: job.id }, data: { title } });
+    const own = await (await offer(job.id, contractorId)).json();
+    expect((await respond("subcontractor", own.id, "accept")).status).toBe(200);
+    const query = `?view=jobs&q=${encodeURIComponent(title)}&pageSize=1`;
+    const result = await (
+      await r().myOffers(
+        call("subcontractor", "GET", undefined, query),
+        undefined,
+      )
+    ).json();
+    expect(result).toMatchObject({
+      total: 1,
+      pageSize: 1,
+      offers: [{ id: own.id, status: "accepted" }],
+    });
+    const none = await (
+      await r().myOffers(
+        call(
+          "subcontractor",
+          "GET",
+          undefined,
+          `?status=declined&q=${encodeURIComponent(title)}`,
+        ),
+        undefined,
+      )
+    ).json();
+    expect(none.total).toBe(0);
+    await db.contractor.update({
+      where: { id: contractorId },
+      data: { archivedAt: new Date() },
+    });
+    try {
+      expect(
+        await (
+          await r().myOffers(
+            call("subcontractor", "GET", undefined, query),
+            undefined,
+          )
+        ).json(),
+      ).toMatchObject({ total: 0, offers: [] });
+      expect(
+        await (
+          await r().myOffer(call("subcontractor", "GET"), one(own.id))
+        ).json(),
+      ).toMatchObject({ contractorActive: false, status: "accepted" });
+    } finally {
+      await db.contractor.update({
+        where: { id: contractorId },
+        data: { archivedAt: null },
+      });
+    }
+  });
+});
+
+it("never exposes a different company's offer through the direct portal read", async () => {
+  const response = await r().createOffer(
+    call("outsider", "POST", {
+      contractorId: outsiderContractorId,
+      scope: "Synthetic other-company portal offer",
+      rateType: "fixed",
+      rateExclusiveCents: "66666",
+      taxCode: "OUT_OF_SCOPE",
+    }),
+    one(outsiderJobId),
+  );
+  expect(response.status).toBe(201);
+  const foreign = await response.json();
+  expect(
+    (await r().myOffer(call("subcontractor", "GET"), one(foreign.id))).status,
+  ).toBe(404);
+  const own = await (
+    await r().myOffers(
+      call(
+        "subcontractor",
+        "GET",
+        undefined,
+        "?q=Synthetic%20other-company%20portal%20offer",
+      ),
+      undefined,
+    )
+  ).json();
+  expect(own).toMatchObject({ total: 0, offers: [] });
 });
