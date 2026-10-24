@@ -42,6 +42,18 @@ function present(row: CompanyGstRegistration) {
  * Is the company registered for GST on `date`, and on which basis? The single
  * source for invoices (Tax Invoice vs Invoice), GST on lines and BAS attribution.
  */
+/** Every registration period, for screens that resolve a chosen date. */
+export async function companyGstPeriods(
+  db: Pick<PrismaClient, "companyGstRegistration">,
+  companyId: string,
+): Promise<GstRegistrationPeriod[]> {
+  const rows = await db.companyGstRegistration.findMany({
+    where: { companyId },
+    orderBy: { startsOn: "asc" },
+  });
+  return rows.map(period);
+}
+
 export async function companyGstStatusOn(
   db: Pick<PrismaClient, "companyGstRegistration">,
   companyId: string,

@@ -1,5 +1,6 @@
 import {
   type Actor,
+  can,
   companyScope,
   notFound,
   requireSameCompany,
@@ -14,6 +15,7 @@ import {
   invoiceLines,
   invoiceTitle,
   issueProblems,
+  receivable,
   transitionProblem,
 } from "@jobflow/domain";
 import { z } from "zod";
@@ -31,8 +33,9 @@ import { lockRow } from "../db/locks";
 import { nextNumber } from "../db/numbering";
 import { optionalText, requiredText, uuidOrNull } from "../http/fields";
 import { parsePage } from "../http/guards";
+import { log, safeError } from "../log";
 import { Refusal, inTransaction } from "../jobs/handlers";
-import { invoiceMoney } from "../receipts/handlers";
+import { invoiceBalances, invoiceMoney } from "../receipts/handlers";
 
 // #47. Office roles read (invoice.read); owner/manager/accountant draft
 // (invoice.write); owner/accountant issue, credit and void (invoice.issue).
@@ -245,7 +248,18 @@ function dollars(cents: bigint): string {
   return `$${whole}.${(cents % 100n).toString().padStart(2, "0")}`;
 }
 
-export function invoiceHandlers(db: () => PrismaClient) {
+export type InvoiceHandlerOptions = {
+  /** Runs after an issue commits (stores the PDF); failures are logged. */
+  afterIssue?: (
+    actor: { companyId: string; userId: string },
+    invoiceId: string,
+  ) => Promise<unknown>;
+};
+
+export function invoiceHandlers(
+  db: () => PrismaClient,
+  options: InvoiceHandlerOptions = {},
+) {
   const list: PolicyHandler<unknown> = async ({ actor, request }) => {
     const params = new URL(request.url).searchParams;
     const { page, take, skip } = parsePage(params);
@@ -270,11 +284,34 @@ export function invoiceHandlers(db: () => PrismaClient) {
       }),
       db().invoice.count({ where }),
     ]);
+    // Issued invoices carry what's been received and what's still owed, so
+    // receipt allocation can show balances without a request per invoice.
+    // Payment amounts are payment data: only for roles that may read it.
+    const balances = can(actor.role, "payment.read")
+      ? await invoiceBalances(
+          db(),
+          actor.companyId,
+          rows
+            .filter((row) => row.kind === "invoice" && row.status === "issued")
+            .map((row) => row.id),
+        )
+      : new Map();
     return privateJson({
       page,
       pageSize: take,
       total,
-      invoices: rows.map(view),
+      invoices: rows.map((row) => {
+        const balance = balances.get(row.id);
+        return {
+          ...view(row),
+          ...(balance
+            ? {
+                receivedCents: balance.received.toString(),
+                outstandingCents: receivable(balance).toString(),
+              }
+            : {}),
+        };
+      }),
     });
   };
 
@@ -488,7 +525,7 @@ export function invoiceHandlers(db: () => PrismaClient) {
     if (issueDate > sydneyToday())
       return fail(400, "The issue date can't be in the future", "issueDate");
     const id = uuidOrNull((await context.params).id);
-    return inTransaction(async () => {
+    const response = await inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
         const before = await lockedInvoice(tx, actor, id);
         if (before.status !== "draft")
@@ -679,6 +716,18 @@ export function invoiceHandlers(db: () => PrismaClient) {
       });
       return privateJson(view(row));
     });
+    // Store the PDF now (#48). A storage problem never undoes the issue:
+    // the PDF is rendered from the same frozen snapshot on first request.
+    if (response.status === 200 && id && options.afterIssue)
+      await options
+        .afterIssue({ companyId: actor.companyId, userId: actor.userId }, id)
+        .catch((error: unknown) =>
+          log("warn", "invoice.pdf_deferred", {
+            invoiceId: id,
+            error: safeError(error),
+          }),
+        );
+    return response;
   };
 
   /**

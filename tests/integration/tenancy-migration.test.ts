@@ -28,6 +28,8 @@ await withIsolatedDatabase(async env => {
     // Roll back newest first: later migrations depend on users/companies.
     await run('rollbacks/20261024110000_expense_payments.sql');
     await run('rollbacks/20261024100000_supplier_credits.sql');
+    await run('rollbacks/20261023200000_invoice_pdfs.sql');
+    await run('rollbacks/20261023190000_quotes.sql');
     await run('rollbacks/20261023180000_supplier_bills.sql');
     await run('rollbacks/20261023170000_receipts.sql');
     await run('rollbacks/20261023160000_invoices.sql');
@@ -66,6 +68,8 @@ await withIsolatedDatabase(async env => {
     await run('migrations/20261023160000_invoices/migration.sql');
     await run('migrations/20261023170000_receipts/migration.sql');
     await run('migrations/20261023180000_supplier_bills/migration.sql');
+    await run('migrations/20261023190000_quotes/migration.sql');
+    await run('migrations/20261023200000_invoice_pdfs/migration.sql');
     await run('migrations/20261024100000_supplier_credits/migration.sql');
     await run('migrations/20261024110000_expense_payments/migration.sql');
     await check(true);

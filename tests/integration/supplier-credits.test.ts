@@ -48,6 +48,7 @@ function makeRoutes() {
   return {
     bill: withPolicy("bill.write", bills.create),
     billRead: withPolicy<One>("bill.read", bills.read),
+    billList: withPolicy("bill.read", bills.list),
     voidBill: withPolicy<One>("bill.write", bills.void),
     pay: withPolicy("payment.write", payments.create),
     voidPayment: withPolicy<One>("payment.write", payments.void),
@@ -983,6 +984,30 @@ describe("supplier credits (#140)", () => {
     });
     expect((await profitOf(job)).cost).toBe("88000");
     expect(await bill(billId)).toMatchObject({ netCreditableGstCents: "0" });
+  });
+
+  it("?status=owing leaves out bills that credits (and payments) have settled", async () => {
+    const job = await newJob();
+    const settled = await fixtureBill(job);
+    const part = await fixtureBill(job);
+    expect((await credit(settled, "60000", "6000")).status).toBe(201);
+    expect((await pay(settled, "33000")).status).toBe(201);
+    expect((await credit(part, "10000", "1000")).status).toBe(201);
+    const listed = (await (
+      await routes.billList(
+        new Request(
+          `${ORIGIN}/api/bills?status=owing&jobId=${job}&pageSize=100`,
+          {
+            headers: call("accountant").headers,
+          },
+        ),
+        undefined,
+      )
+    ).json()) as { bills: { id: string; outstandingCents: string }[] };
+    expect(listed.bills.map((row) => [row.id, row.outstandingCents])).toEqual([
+      [part, "88000"],
+    ]);
+    expect((await profitOf(job)).cost).toBe(String(180_000 - 60_000 - 10_000));
   });
 
   it("is immutable in the database: no edits, deletes or line changes", async () => {
