@@ -102,10 +102,11 @@ export async function sendJson(
   url: string,
   method: "POST" | "PATCH",
   body: unknown,
+  headers: Record<string, string> = {},
 ): Promise<ApiResult> {
   const response = await fetch(url, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { ...headers, "content-type": "application/json" },
     body: JSON.stringify(body),
   }).catch(() => undefined);
   if (!response)

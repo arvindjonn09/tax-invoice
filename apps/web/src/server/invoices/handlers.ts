@@ -14,6 +14,7 @@ import {
   invoiceLines,
   invoiceTitle,
   issueProblems,
+  receivable,
   transitionProblem,
 } from "@jobflow/domain";
 import { z } from "zod";
@@ -32,7 +33,7 @@ import { nextNumber } from "../db/numbering";
 import { optionalText, requiredText, uuidOrNull } from "../http/fields";
 import { parsePage } from "../http/guards";
 import { Refusal, inTransaction } from "../jobs/handlers";
-import { invoiceMoney } from "../receipts/handlers";
+import { invoiceBalances, invoiceMoney } from "../receipts/handlers";
 
 // #47. Office roles read (invoice.read); owner/manager/accountant draft
 // (invoice.write); owner/accountant issue, credit and void (invoice.issue).
@@ -270,11 +271,31 @@ export function invoiceHandlers(db: () => PrismaClient) {
       }),
       db().invoice.count({ where }),
     ]);
+    // Issued invoices carry what's been received and what's still owed, so
+    // receipt allocation can show balances without a request per invoice.
+    const balances = await invoiceBalances(
+      db(),
+      actor.companyId,
+      rows
+        .filter((row) => row.kind === "invoice" && row.status === "issued")
+        .map((row) => row.id),
+    );
     return privateJson({
       page,
       pageSize: take,
       total,
-      invoices: rows.map(view),
+      invoices: rows.map((row) => {
+        const balance = balances.get(row.id);
+        return {
+          ...view(row),
+          ...(balance
+            ? {
+                receivedCents: balance.received.toString(),
+                outstandingCents: receivable(balance).toString(),
+              }
+            : {}),
+        };
+      }),
     });
   };
 
