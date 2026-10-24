@@ -1,7 +1,7 @@
 # Database and financial rules
 
 ## Tables
-companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, gst_adjustments, documents, audit_events, idempotency_keys.
+companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, receipt_gst_adjustments, gst_adjustments, documents, audit_events, idempotency_keys.
 
 Each company-owned entity has company_id and unique ID; human job/invoice numbers unique per company. All date-times UTC with Australia/Sydney display; AUD cents stored as integer/BigInt with bounds and explicit rounding rules.
 

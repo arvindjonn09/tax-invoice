@@ -437,39 +437,110 @@ describe("refunds and voids", () => {
     expect((await balanceOf(invoiceId)).receivedCents).toBe(due);
   });
 
-  it("keeps cash GST whole after a middle receipt is voided and replaced", async () => {
+  // Live GST: unvoided allocations plus the adjustments voids recorded.
+  const liveGst = async (invoiceId: string) => {
+    const [allocations, adjustments] = await Promise.all([
+      db.receiptAllocation.aggregate({
+        where: { invoiceId, receipt: { voidedAt: null } },
+        _sum: { gstAttributedCents: true },
+      }),
+      db.receiptGstAdjustment.aggregate({
+        where: { invoiceId },
+        _sum: { gstCents: true },
+      }),
+    ]);
+    return (
+      (allocations._sum.gstAttributedCents ?? 0n) +
+      (adjustments._sum.gstCents ?? 0n)
+    );
+  };
+  const recorded = async (response: Response) => {
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    return {
+      id: body.id as string,
+      gst: BigInt(body.allocations[0].gstAttributedCents),
+    };
+  };
+  const voidReceipt = (id: string) =>
+    r().void(
+      call("accountant", "POST", { reason: "Entered wrongly" }),
+      one(id),
+    );
+
+  it("corrects cash GST when a middle receipt is voided, without editing history", async () => {
     // $2,750 invoice with $250 GST: 5c (GST 0), 1c (GST 1), the rest.
     const invoiceId = await issuedInvoice();
-    const gstOf = async (response: Response) => {
-      const body = await response.json();
-      return {
-        id: body.id as string,
-        gst: BigInt(body.allocations[0].gstAttributedCents),
-      };
-    };
-    const first = await gstOf(await receive([{ invoiceId, amountCents: "5" }]));
-    const middle = await gstOf(
+    const first = await recorded(
+      await receive([{ invoiceId, amountCents: "5" }]),
+    );
+    const middle = await recorded(
       await receive([{ invoiceId, amountCents: "1" }]),
     );
-    const rest = await gstOf(
+    const rest = await recorded(
       await receive([{ invoiceId, amountCents: "274994" }]),
     );
     expect([first.gst, middle.gst, rest.gst]).toEqual([0n, 1n, 24_999n]);
+    expect((await voidReceipt(middle.id)).status).toBe(200);
+    // 274999c stays received → round(24999.9) = 25000c: the void records +1c.
     expect(
-      (
-        await r().void(
-          call("accountant", "POST", { reason: "Bounced" }),
-          one(middle.id),
-        )
-      ).status,
-    ).toBe(200);
-    const replacement = await gstOf(
+      await db.receiptGstAdjustment.findMany({
+        where: { invoiceId },
+        select: { receiptId: true, gstCents: true },
+      }),
+    ).toEqual([{ receiptId: middle.id, gstCents: 1n }]);
+    expect(await liveGst(invoiceId)).toBe(25_000n);
+    const replacement = await recorded(
       await receive([{ invoiceId, amountCents: "1" }]),
     );
-    // The replacement recovers the cent the void removed; history is unchanged.
-    expect(replacement.gst).toBe(1n);
-    expect(first.gst + rest.gst + replacement.gst).toBe(25_000n);
+    expect(replacement.gst).toBe(0n);
+    expect(await liveGst(invoiceId)).toBe(25_000n);
     expect((await balanceOf(invoiceId)).outstandingCents).toBe("0");
+    // The voided allocation keeps the GST it recorded.
+    expect(
+      (
+        await db.receiptAllocation.findFirstOrThrow({
+          where: { receiptId: middle.id },
+        })
+      ).gstAttributedCents,
+    ).toBe(1n);
+  });
+
+  it("voiding a refund that leaves the invoice fully paid keeps exactly its GST", async () => {
+    // Codex's #127 sequence: receipt in full, refunds 5c and 1c, receipt 5c,
+    // then void the 1c refund → fully paid again with $250 GST, not $250.01.
+    const invoiceId = await issuedInvoice();
+    await recorded(await receive([{ invoiceId, amountCents: "275000" }]));
+    await recorded(
+      await receive([{ invoiceId, amountCents: "5" }], { kind: "refund" }),
+    );
+    const last = await recorded(
+      await receive([{ invoiceId, amountCents: "1" }], { kind: "refund" }),
+    );
+    await recorded(await receive([{ invoiceId, amountCents: "5" }]));
+    expect(await liveGst(invoiceId)).toBe(25_000n);
+    expect((await voidReceipt(last.id)).status).toBe(200);
+    expect((await balanceOf(invoiceId)).outstandingCents).toBe("0");
+    expect(await liveGst(invoiceId)).toBe(25_000n);
+  });
+
+  it("keeps adjustments append-only", async () => {
+    const invoiceId = await issuedInvoice();
+    await recorded(await receive([{ invoiceId, amountCents: "5" }]));
+    const middle = await recorded(
+      await receive([{ invoiceId, amountCents: "1" }]),
+    );
+    await recorded(await receive([{ invoiceId, amountCents: "5" }]));
+    expect((await voidReceipt(middle.id)).status).toBe(200);
+    await expect(
+      db.receiptGstAdjustment.updateMany({
+        where: { invoiceId },
+        data: { gstCents: 2n },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      db.receiptGstAdjustment.deleteMany({ where: { invoiceId } }),
+    ).rejects.toThrow();
   });
 
   it("never overpays when a refund void races a replacement receipt", async () => {

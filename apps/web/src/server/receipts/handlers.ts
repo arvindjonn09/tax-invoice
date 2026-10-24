@@ -8,6 +8,7 @@ import {
 import {
   type InvoiceBalance,
   allocationGst,
+  voidAdjustmentGst,
   allocationProblems,
   receivable,
   voidProblem,
@@ -120,7 +121,7 @@ export async function invoiceBalances(
     select: { id: true, inclusiveCents: true, gstCents: true },
   });
   const ids = invoices.map((invoice) => invoice.id);
-  const [credits, allocations] = await Promise.all([
+  const [credits, allocations, adjustments] = await Promise.all([
     db.invoice.groupBy({
       by: ["creditsId"],
       where: { companyId, creditsId: { in: ids }, status: "issued" },
@@ -135,12 +136,21 @@ export async function invoiceBalances(
         receipt: { select: { kind: true } },
       },
     }),
+    db.receiptGstAdjustment.groupBy({
+      by: ["invoiceId"],
+      where: { companyId, invoiceId: { in: ids } },
+      _sum: { gstCents: true },
+    }),
   ]);
   const credited = new Map(
     credits.map((row) => [row.creditsId!, row._sum.inclusiveCents ?? 0n]),
   );
   const received = new Map<string, bigint>();
-  const attributed = new Map<string, bigint>();
+  // Live GST: unvoided allocations (refunds stored negative) plus the
+  // adjustments their voids recorded.
+  const attributed = new Map<string, bigint>(
+    adjustments.map((row) => [row.invoiceId, row._sum.gstCents ?? 0n]),
+  );
   for (const allocation of allocations) {
     const sign = allocation.receipt.kind === "refund" ? -1n : 1n;
     received.set(
@@ -148,7 +158,6 @@ export async function invoiceBalances(
       (received.get(allocation.invoiceId) ?? 0n) +
         sign * allocation.amountCents,
     );
-    // Stored signed: refunds already carry negative GST.
     attributed.set(
       allocation.invoiceId,
       (attributed.get(allocation.invoiceId) ?? 0n) +
@@ -404,6 +413,31 @@ export function receiptHandlers(db: () => PrismaClient) {
             voidProblem(before.kind, balance, allocation.amountCents);
           if (problem) throw new Refusal(fail(409, problem));
         }
+        // Keep each invoice's live GST at the rounded share of what stays
+        // received: record the correction rather than rewrite history.
+        const gstAdjustments = before.allocations
+          .map((allocation) => ({
+            invoiceId: allocation.invoiceId,
+            gstCents: voidAdjustmentGst(
+              before.kind,
+              {
+                amount: allocation.amountCents,
+                gst: allocation.gstAttributedCents,
+              },
+              balances.get(allocation.invoiceId)!,
+            ),
+          }))
+          .filter((adjustment) => adjustment.gstCents !== 0n);
+        if (gstAdjustments.length > 0)
+          await tx.receiptGstAdjustment.createMany({
+            data: gstAdjustments.map((adjustment) => ({
+              companyId: actor.companyId,
+              receiptId: id,
+              invoiceId: adjustment.invoiceId,
+              gstCents: adjustment.gstCents,
+              adjustedOn: new Date(`${sydneyToday()}T00:00:00Z`),
+            })),
+          });
         const updated = await tx.customerReceipt.update({
           where: { id },
           data: {
@@ -419,7 +453,13 @@ export function receiptHandlers(db: () => PrismaClient) {
           action:
             before.kind === "receipt" ? "receipt.voided" : "refund.voided",
           target: { type: "customer_receipt", id },
-          after: { reason: parsed.data.reason },
+          after: {
+            reason: parsed.data.reason,
+            gstAdjustments: gstAdjustments.map((adjustment) => ({
+              invoiceId: adjustment.invoiceId,
+              gstCents: adjustment.gstCents.toString(),
+            })),
+          },
         });
         return updated;
       });

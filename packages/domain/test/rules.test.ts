@@ -7,7 +7,7 @@ import {
   calculatePurchase,
   calculateSupplyLine,
   cashAttributedGst,
-  cashGstToward,
+  voidGstAdjustment,
   cumulativeCashGst,
   divideRounded,
   draftBasSummary,
@@ -365,22 +365,14 @@ describe("balances and attribution", () => {
       cumulativeCashGst({ ...cumulative, documentTotal: 0n, settled: 0n }),
     ).toThrow("positive");
     expect(cumulativeCashGst({ ...cumulative, settled: 55n })).toBe(6n);
-    // Reconciling settlements keep their sign and never exceed their amount.
-    const toward = { ...cumulative, amount: 1n, direction: 1n as const };
+    // A void's correction restores the rounded share of what stays settled.
     expect(
-      cashGstToward({ ...toward, settledAfter: 100n, attributed: 5n }),
-    ).toBe(1n);
-    expect(
-      cashGstToward({ ...toward, settledAfter: 10n, attributed: 5n }),
-    ).toBe(0n);
-    expect(
-      cashGstToward({
-        ...toward,
-        direction: -1n,
-        settledAfter: 0n,
-        attributed: 5n,
+      voidGstAdjustment({
+        ...cumulative,
+        settledAfter: 55n,
+        attributedAfter: 5n,
       }),
-    ).toBe(-1n);
+    ).toBe(1n);
   });
 
   it("non-cash attribution uses the earlier of issue and first consideration (R8)", () => {

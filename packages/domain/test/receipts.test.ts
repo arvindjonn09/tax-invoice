@@ -5,6 +5,7 @@ import {
   allocationProblems,
   jobProfit,
   receivable,
+  voidAdjustmentGst,
   voidProblem,
 } from "../src/index";
 
@@ -119,93 +120,95 @@ describe("receipts (#50)", () => {
 });
 
 describe("cash GST after voids", () => {
-  // Invoice $0.11 with $0.01 GST, replaying allocations as the ledger does:
-  // each new allocation sees the live (unvoided) received and attributed.
+  // Replays the ledger: live allocations plus the adjustments voids record.
   type Entry = { kind: "receipt" | "refund"; amount: bigint; gst: bigint };
-  const tiny = { inclusive: 11n, gst: 1n };
-  const record = (live: Entry[], kind: Entry["kind"], amount: bigint) => {
-    const received = live.reduce(
-      (t, e) => t + (e.kind === "receipt" ? e.amount : -e.amount),
-      0n,
-    );
-    const attributed = live.reduce((t, e) => t + e.gst, 0n);
-    const entry = {
-      kind,
-      amount,
-      gst: allocationGst(
-        kind,
-        amount,
-        invoice({ ...tiny, received, attributed }),
-      ),
+  const ledger = (inclusive: bigint, gst: bigint) => {
+    const live: Entry[] = [];
+    let adjustments = 0n;
+    const received = () =>
+      live.reduce(
+        (t, e) => t + (e.kind === "receipt" ? e.amount : -e.amount),
+        0n,
+      );
+    const attributed = () => live.reduce((t, e) => t + e.gst, adjustments);
+    const balance = () =>
+      invoice({
+        inclusive,
+        gst,
+        received: received(),
+        attributed: attributed(),
+      });
+    return {
+      received,
+      attributed,
+      live,
+      record(kind: Entry["kind"], amount: bigint) {
+        const entry = {
+          kind,
+          amount,
+          gst: allocationGst(kind, amount, balance()),
+        };
+        live.push(entry);
+        return entry;
+      },
+      /** Voids it if allowed; returns the adjustment recorded, or null. */
+      void(entry: Entry) {
+        const now = balance();
+        if (voidProblem(entry.kind, now, entry.amount)) return null;
+        const adjustment = voidAdjustmentGst(entry.kind, entry, now);
+        live.splice(live.indexOf(entry), 1);
+        adjustments += adjustment;
+        return adjustment;
+      },
+      /** Live GST is the rounded share of live received, after any step. */
+      expected: () => (received() * gst * 2n + inclusive) / (inclusive * 2n),
     };
-    live.push(entry);
-    return entry;
   };
-  const liveGst = (live: Entry[]) => live.reduce((t, e) => t + e.gst, 0n);
 
-  it("a replacement for a voided middle receipt recovers its rounding cent", () => {
-    const live: Entry[] = [];
-    record(live, "receipt", 5n);
-    const middle = record(live, "receipt", 1n);
-    record(live, "receipt", 5n);
-    expect(live.map((e) => e.gst)).toEqual([0n, 1n, 0n]);
-    live.splice(live.indexOf(middle), 1); // void, history unchanged
-    expect(liveGst(live)).toBe(0n);
-    expect(record(live, "receipt", 1n).gst).toBe(1n);
-    expect(liveGst(live)).toBe(tiny.gst);
+  it("voiding a middle receipt corrects GST at once; its replacement attributes normally", () => {
+    const l = ledger(11n, 1n);
+    l.record("receipt", 5n);
+    const middle = l.record("receipt", 1n);
+    l.record("receipt", 5n);
+    expect(l.live.map((e) => e.gst)).toEqual([0n, 1n, 0n]);
+    // 10c stays received: round(10/11) = 1c, so the void records +1c.
+    expect(l.void(middle)).toBe(1n);
+    expect(l.attributed()).toBe(1n);
+    expect(l.record("receipt", 1n).gst).toBe(0n);
+    expect(l.attributed()).toBe(1n);
   });
 
-  it("re-receiving after a refund void ends at exactly the invoice's GST", () => {
-    const live: Entry[] = [];
-    record(live, "receipt", 11n);
-    const first = record(live, "refund", 5n);
-    record(live, "refund", 1n);
-    expect(live.map((e) => e.gst)).toEqual([1n, 0n, -1n]);
-    live.splice(live.indexOf(first), 1);
-    expect(record(live, "receipt", 1n).gst).toBe(1n);
-    expect(liveGst(live)).toBe(tiny.gst);
+  it("voiding a refund on a now fully paid invoice leaves exactly its GST (Codex #127)", () => {
+    const l = ledger(11n, 1n);
+    l.record("receipt", 11n);
+    l.record("refund", 5n);
+    const last = l.record("refund", 1n);
+    l.record("receipt", 5n);
+    expect(l.live.map((e) => e.gst)).toEqual([1n, 0n, -1n, 1n]);
+    expect(l.void(last)).toBe(-1n);
+    expect([l.received(), l.attributed()]).toEqual([11n, 1n]);
   });
 
-  it("property: after any voids, settling in full attributes exactly the GST", () => {
+  it("property: live GST is the rounded share of live received after every step", () => {
     let seed = 7;
     const next = (n: number) => {
       seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
       return BigInt(seed % n);
     };
-    for (let run = 0; run < 300; run += 1) {
-      const inclusive = next(10_000) + 1n;
-      const gst = next(Number(inclusive) + 1);
-      const shape = { inclusive, gst };
-      let live: Entry[] = [];
-      const net = () =>
-        live.reduce(
-          (t, e) => t + (e.kind === "receipt" ? e.amount : -e.amount),
-          0n,
-        );
-      const add = (kind: Entry["kind"], amount: bigint) => {
-        const attributed = live.reduce((t, e) => t + e.gst, 0n);
-        const balance = invoice({ ...shape, received: net(), attributed });
-        live.push({ kind, amount, gst: allocationGst(kind, amount, balance) });
-      };
-      for (let step = 0; step < 8; step += 1) {
-        const room = inclusive - net();
+    for (let run = 0; run < 1_000; run += 1) {
+      const inclusive = next(200) + 1n;
+      const l = ledger(inclusive, next(Number(inclusive) + 1));
+      for (let step = 0; step < 12; step += 1) {
+        const room = inclusive - l.received();
         const choice = next(3);
-        if (choice === 0n && room > 0n) add("receipt", next(Number(room)) + 1n);
-        else if (choice === 1n && net() > 0n)
-          add("refund", next(Number(net())) + 1n);
-        else if (live.length > 0) {
-          // Void one entry if the ledger stays within 0…total.
-          const index = Number(next(live.length));
-          const rest = live.filter((_, i) => i !== index);
-          const restNet = rest.reduce(
-            (t, e) => t + (e.kind === "receipt" ? e.amount : -e.amount),
-            0n,
-          );
-          if (restNet >= 0n && restNet <= inclusive) live = rest;
-        }
+        if (choice === 0n && room > 0n)
+          l.record("receipt", next(Number(room)) + 1n);
+        else if (choice === 1n && l.received() > 0n)
+          l.record("refund", next(Number(l.received())) + 1n);
+        else if (l.live.length > 0)
+          l.void(l.live[Number(next(l.live.length))]!);
+        expect(l.attributed()).toBe(l.expected());
       }
-      if (net() < inclusive) add("receipt", inclusive - net());
-      expect(live.reduce((t, e) => t + e.gst, 0n)).toBe(gst);
     }
   });
 });

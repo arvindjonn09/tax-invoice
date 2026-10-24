@@ -1,4 +1,4 @@
-import { cashGstToward } from "./attribution";
+import { cumulativeCashGst, voidGstAdjustment } from "./attribution";
 import { type Cents, sum } from "./money";
 
 // Customer receipts and refunds (#50). Money received is allocated to issued
@@ -16,7 +16,7 @@ export type InvoiceBalance = {
   credited: Cents;
   /** Net received so far (receipts minus refunds). */
   received: Cents;
-  /** Net cash-basis GST attributed by the live (unvoided) allocations. */
+  /** Live cash-basis GST: unvoided allocations plus void adjustments. */
   attributed: Cents;
 };
 
@@ -93,24 +93,43 @@ export function allocationProblems(
 
 /**
  * Cash-basis GST attributed to one allocation (positive for a receipt,
- * negative for a refund), reconciled against the live attributed GST so the
- * invoice's GST is attributed exactly once in total, even after voids.
+ * negative for a refund): what takes the invoice's live GST to the rounded
+ * share of what will then be received, so it's attributed exactly once.
  */
 export function allocationGst(
   kind: "receipt" | "refund",
   amount: Cents,
   balance: InvoiceBalance,
 ): Cents {
-  const receipt = kind === "receipt";
-  return cashGstToward({
+  return (
+    cumulativeCashGst({
+      documentTotal: balance.inclusive,
+      documentGst: balance.gst,
+      settled:
+        kind === "receipt"
+          ? balance.received + amount
+          : balance.received - amount,
+    }) - balance.attributed
+  );
+}
+
+/**
+ * GST adjustment to record on this invoice when voiding a receipt or refund
+ * allocation of `amount` that attributed `gst` (0 when none is needed).
+ */
+export function voidAdjustmentGst(
+  kind: "receipt" | "refund",
+  allocation: { amount: Cents; gst: Cents },
+  balance: InvoiceBalance,
+): Cents {
+  return voidGstAdjustment({
     documentTotal: balance.inclusive,
     documentGst: balance.gst,
-    settledAfter: receipt
-      ? balance.received + amount
-      : balance.received - amount,
-    attributed: balance.attributed,
-    amount,
-    direction: receipt ? 1n : -1n,
+    settledAfter:
+      kind === "receipt"
+        ? balance.received - allocation.amount
+        : balance.received + allocation.amount,
+    attributedAfter: balance.attributed - allocation.gst,
   });
 }
 
