@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { receiptDateProblem, chronologyMessage } from "../payments/chronology";
+import { createHash, randomUUID } from "node:crypto";
 import {
   type Actor,
   companyScope,
@@ -7,6 +8,7 @@ import {
 } from "@jobflow/authz";
 import {
   type InvoiceBalance,
+  adjustedCashShare,
   allocationGst,
   voidAdjustmentGst,
   allocationProblems,
@@ -121,27 +123,40 @@ export async function invoiceBalances(
     select: { id: true, inclusiveCents: true, gstCents: true },
   });
   const ids = invoices.map((invoice) => invoice.id);
-  const [credits, allocations, adjustments] = await Promise.all([
-    db.invoice.groupBy({
-      by: ["creditsId"],
-      where: { companyId, creditsId: { in: ids }, status: "issued" },
-      _sum: { inclusiveCents: true },
-    }),
-    db.receiptAllocation.findMany({
-      where: { companyId, invoiceId: { in: ids }, receipt: { voidedAt: null } },
-      select: {
-        invoiceId: true,
-        amountCents: true,
-        gstAttributedCents: true,
-        receipt: { select: { kind: true } },
-      },
-    }),
-    db.receiptGstAdjustment.groupBy({
-      by: ["invoiceId"],
-      where: { companyId, invoiceId: { in: ids } },
-      _sum: { gstCents: true },
-    }),
-  ]);
+  const [credits, allocations, adjustments, creditAdjustments] =
+    await Promise.all([
+      db.invoice.groupBy({
+        by: ["creditsId"],
+        where: { companyId, creditsId: { in: ids }, status: "issued" },
+        _sum: { inclusiveCents: true, gstCents: true },
+      }),
+      db.receiptAllocation.findMany({
+        where: {
+          companyId,
+          invoiceId: { in: ids },
+          receipt: { voidedAt: null },
+        },
+        select: {
+          invoiceId: true,
+          amountCents: true,
+          gstAttributedCents: true,
+          receipt: { select: { kind: true } },
+        },
+      }),
+      db.receiptGstAdjustment.groupBy({
+        by: ["invoiceId"],
+        where: { companyId, invoiceId: { in: ids } },
+        _sum: { gstCents: true },
+      }),
+      db.creditCashAdjustment.groupBy({
+        by: ["invoiceId"],
+        where: { companyId, invoiceId: { in: ids } },
+        _sum: { gstCents: true },
+      }),
+    ]);
+  const creditedGst = new Map(
+    credits.map((row) => [row.creditsId!, row._sum.gstCents ?? 0n]),
+  );
   const credited = new Map(
     credits.map((row) => [row.creditsId!, row._sum.inclusiveCents ?? 0n]),
   );
@@ -151,6 +166,11 @@ export async function invoiceBalances(
   const attributed = new Map<string, bigint>(
     adjustments.map((row) => [row.invoiceId, row._sum.gstCents ?? 0n]),
   );
+  for (const a of creditAdjustments)
+    attributed.set(
+      a.invoiceId,
+      (attributed.get(a.invoiceId) ?? 0n) + (a._sum.gstCents ?? 0n),
+    );
   for (const allocation of allocations) {
     const sign = allocation.receipt.kind === "refund" ? -1n : 1n;
     received.set(
@@ -172,6 +192,7 @@ export async function invoiceBalances(
         inclusive: invoice.inclusiveCents,
         gst: invoice.gstCents,
         credited: credited.get(invoice.id) ?? 0n,
+        creditedGst: creditedGst.get(invoice.id) ?? 0n,
         received: received.get(invoice.id) ?? 0n,
         attributed: attributed.get(invoice.id) ?? 0n,
       },
@@ -318,8 +339,28 @@ export function receiptHandlers(db: () => PrismaClient) {
                 { status: 400 },
               ),
             );
+          const receiptId = randomUUID(),
+            createdAt = new Date();
+          for (const allocation of allocations) {
+            const problem = await receiptDateProblem(
+              tx,
+              actor.companyId,
+              allocation.invoiceId,
+              balances.get(allocation.invoiceId)!.inclusive,
+              {
+                id: `${receiptId}:record`,
+                date: data.receivedOn,
+                recordedAt: createdAt.toISOString(),
+                amount: allocation.amount * (data.kind === "refund" ? -1n : 1n),
+              },
+            );
+            if (problem)
+              throw new Refusal(fail(400, chronologyMessage, "receivedOn"));
+          }
           const created = await tx.customerReceipt.create({
             data: {
+              id: receiptId,
+              createdAt,
               companyId: actor.companyId,
               customerId: customer.id,
               kind: data.kind,
@@ -406,8 +447,28 @@ export function receiptHandlers(db: () => PrismaClient) {
         // Under the invoice locks, the money left after this void must stay
         // between nothing and what's due, for receipts and refunds alike.
         const balances = await invoiceBalances(tx, actor.companyId, ids);
+        const voidedAt = new Date(),
+          voidDay = sydneyToday(voidedAt);
         for (const allocation of before.allocations) {
           const balance = balances.get(allocation.invoiceId);
+          if (
+            balance &&
+            (await receiptDateProblem(
+              tx,
+              actor.companyId,
+              allocation.invoiceId,
+              balance.inclusive,
+              {
+                id: `${before.id}:void`,
+                date: voidDay,
+                recordedAt: voidedAt.toISOString(),
+                amount:
+                  allocation.amountCents *
+                  (before.kind === "refund" ? 1n : -1n),
+              },
+            ))
+          )
+            throw new Refusal(fail(400, chronologyMessage));
           const problem =
             balance &&
             voidProblem(before.kind, balance, allocation.amountCents);
@@ -435,14 +496,14 @@ export function receiptHandlers(db: () => PrismaClient) {
               receiptId: id,
               invoiceId: adjustment.invoiceId,
               gstCents: adjustment.gstCents,
-              adjustedOn: new Date(`${sydneyToday()}T00:00:00Z`),
+              adjustedOn: new Date(`${voidDay}T00:00:00Z`),
             })),
           });
         const updated = await tx.customerReceipt.update({
           where: { id },
           data: {
             voidReason: parsed.data.reason,
-            voidedAt: new Date(),
+            voidedAt,
             voidedBy: actor.userId,
           },
           include: { allocations: true },
@@ -484,4 +545,40 @@ export async function invoiceMoney(
     receivedCents: balance.received.toString(),
     outstandingCents: receivable(balance).toString(),
   };
+}
+
+/** Caller holds the original invoice row lock, serializing with settlements. */
+export async function reconcileCreditCashGst(
+  tx: Prisma.TransactionClient,
+  actor: Actor,
+  invoiceId: string,
+  creditId: string,
+  event: "issue" | "void",
+  day: string,
+) {
+  const balance = (await invoiceBalances(tx, actor.companyId, [invoiceId])).get(
+    invoiceId,
+  );
+  if (!balance) throw notFound();
+  const target = adjustedCashShare({
+    total: balance.inclusive,
+    eligible: balance.gst,
+    credited: balance.credited,
+    creditedEligible: balance.creditedGst,
+    received: balance.received,
+  });
+  const delta = target - balance.attributed;
+  if (delta !== 0n)
+    await tx.creditCashAdjustment.create({
+      data: {
+        companyId: actor.companyId,
+        invoiceId,
+        creditId,
+        event,
+        adjustedOn: new Date(day),
+        gstCents: delta,
+        createdBy: actor.userId,
+      },
+    });
+  return delta;
 }

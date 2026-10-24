@@ -91,3 +91,42 @@ export function nonCashAttributionDate(input: {
   }
   return dates.reduce((earliest, date) => (date < earliest ? date : earliest));
 }
+
+/** Cash share after credit notes: unpaid consideration uses the remaining
+ * supply; overpaid consideration retains the credited component until refunded.
+ * This keeps a credit note from reporting a cash refund that has not happened.
+ */
+export function adjustedCashShare(input: {
+  total: Cents;
+  eligible: Cents;
+  credited: Cents;
+  creditedEligible: Cents;
+  received: Cents;
+}): Cents {
+  const { total, eligible, credited, creditedEligible, received } = input;
+  if (
+    total <= 0n ||
+    credited < 0n ||
+    credited > total ||
+    eligible < 0n ||
+    eligible > total ||
+    creditedEligible < 0n ||
+    creditedEligible > eligible ||
+    creditedEligible > credited ||
+    eligible - creditedEligible > total - credited ||
+    received < 0n ||
+    received > total
+  )
+    throw new RangeError("Invalid credited cash share");
+  const remaining = total - credited;
+  const retained = received < remaining ? received : remaining;
+  const overpaid = received - retained;
+  return (
+    (remaining === 0n
+      ? 0n
+      : divideRounded(retained * (eligible - creditedEligible), remaining)) +
+    (credited === 0n
+      ? 0n
+      : divideRounded(overpaid * creditedEligible, credited))
+  );
+}
