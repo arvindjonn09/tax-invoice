@@ -472,3 +472,95 @@ describe("review fixes (#106)", () => {
     expect(new Set(befores).size).toBe(4);
   });
 });
+
+describe("linkable login accounts (#131)", () => {
+  const linkable = () => withPolicy("employee.write", handlers.linkable);
+  const users = async (who: Role) =>
+    (
+      (await (
+        await linkable()(
+          call(who, "GET", undefined, "/linkable-users"),
+          undefined,
+        )
+      ).json()) as {
+        users: {
+          userId: string;
+          name: string;
+          email: string;
+          employeeId: string | null;
+        }[];
+      }
+    ).users;
+
+  it("is limited to owner and manager", async () => {
+    for (const role of ["accountant", "employee", "subcontractor"] as const) {
+      expect(
+        (
+          await linkable()(
+            call(role, "GET", undefined, "/linkable-users"),
+            undefined,
+          )
+        ).status,
+        role,
+      ).toBe(403);
+    }
+    expect(
+      (
+        await linkable()(
+          call("manager", "GET", undefined, "/linkable-users"),
+          undefined,
+        )
+      ).status,
+    ).toBe(200);
+  });
+
+  it("lists only active employee-role members of this company, with their link", async () => {
+    const dormant = await createCredentialUser(db, {
+      email: "dormant@jobflow.invalid",
+      name: "Synthetic dormant",
+      password: PASSWORD,
+    });
+    await db.membership.create({
+      data: {
+        companyId,
+        userId: dormant.id,
+        createdBy: userIds.owner,
+        role: "employee",
+        isActive: false,
+      },
+    });
+    const record = await db.employee.create({
+      data: {
+        companyId,
+        createdBy: userIds.owner,
+        name: "Linked Worker",
+        userId: userIds.employee,
+      },
+    });
+    const rows = await users("manager");
+    expect(rows).toEqual([
+      {
+        userId: userIds.employee,
+        name: "Synthetic employee",
+        email: "employee@jobflow.invalid",
+        employeeId: record.id,
+      },
+    ]);
+    // Other roles, inactive members and other companies never appear.
+    const ids = rows.map((row) => row.userId);
+    for (const hidden of [
+      userIds.owner,
+      userIds.manager,
+      userIds.accountant,
+      userIds.subcontractor,
+      userIds.outsider,
+      dormant.id,
+    ])
+      expect(ids).not.toContain(hidden);
+    await db.employee.update({
+      where: { id: record.id },
+      data: { userId: null },
+    });
+    expect((await users("owner"))[0]?.employeeId).toBeNull();
+  });
+});
