@@ -254,7 +254,7 @@ async function lockedQuote(
   id: string | null,
 ): Promise<Row> {
   if (!id) throw notFound();
-  await lockRow(tx, "quotes", id).catch(() => undefined);
+  await lockRow(tx, "quotes", id, actor.companyId).catch(() => undefined);
   return requireSameCompany(
     actor,
     await tx.quote.findUnique({ where: { id }, include: { items: true } }),

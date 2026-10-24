@@ -202,7 +202,7 @@ async function lockedInvoice(
   id: string | null,
 ): Promise<Row> {
   if (!id) throw notFound();
-  await lockRow(tx, "invoices", id).catch(() => undefined);
+  await lockRow(tx, "invoices", id, actor.companyId).catch(() => undefined);
   return requireSameCompany(
     actor,
     await tx.invoice.findUnique({ where: { id }, include: { items: true } }),

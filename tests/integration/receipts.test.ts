@@ -5,6 +5,7 @@ import { createAuth } from "../../apps/web/src/server/auth/config";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
 import { createWithPolicy } from "../../apps/web/src/server/authz/policy";
 import { invoiceHandlers } from "../../apps/web/src/server/invoices/handlers";
+import { lockRow } from "../../apps/web/src/server/db/locks";
 import { receiptHandlers } from "../../apps/web/src/server/receipts/handlers";
 import { syntheticAbn } from "../helpers/abn";
 import {
@@ -650,5 +651,19 @@ describe("access", () => {
         id,
       ).toBe(404);
     }
+  });
+  it("never locks another company's row for a request-supplied id (#53)", async () => {
+    const lockedElsewhere = () =>
+      db.$queryRaw`SELECT 1 FROM customer_receipts WHERE id = ${outsiderReceiptId}::uuid FOR UPDATE NOWAIT`;
+    // Scoped to this company: the outsider's receipt stays unlocked.
+    await db.$transaction(async (tx) => {
+      await lockRow(tx, "customer_receipts", outsiderReceiptId, companyId);
+      await expect(lockedElsewhere()).resolves.toBeDefined();
+    });
+    // Control: an unscoped lock would hold it.
+    await db.$transaction(async (tx) => {
+      await lockRow(tx, "customer_receipts", outsiderReceiptId);
+      await expect(lockedElsewhere()).rejects.toThrow();
+    });
   });
 });
