@@ -49,6 +49,32 @@ pinned rules are in [GST.md](../GST.md) and
 [the sourced domain rules](../research/domain-gst-profit.md). ATO background on
 adjustment notes: [GSTR 2013/2](https://www.ato.gov.au/law/view/document?LocID=%22GST%2FGSTR20132%2FNAT%2FATO%2Ffp4%22&PiT=20251205000001).
 
+## Settlement chronology and legacy integrity
+
+Receipt, refund and receipt-void writes validate the complete date-ordered
+invoice allocation history while holding its allocation locks. Supplier payment
+and void writes apply the same rule to bills. Every running balance must stay
+between zero and the original inclusive document total; an invalid proposed date
+returns400 without writing. Ordering is business date, recorded timestamp, then
+stable settlement ID, shared with report replay. A replacement after a void must
+use a date that also preserves historical balances.
+
+Live reports return company/object-scoped `warnings`. Invalid legacy settlement
+histories preserve revenue, incurred cost and received/paid facts. Cash GST for
+the affected document is omitted with `omittedGst: true`; the GST response sets
+`incomplete: true`. Other documents continue to contribute normally. Non-cash
+GST remains available when its document source is independent of the invalid
+settlements. A cash replay range error is also isolated to its document rather
+than failing the company report. No invalid amount is clamped into a tax figure.
+Finalisation and closed-period amendments return409 with the warnings until the
+history is corrected, preventing an incomplete immutable GST revision.
+
+The reporting migration backfills `gst_source_postings` for existing issued or
+approved documents, settlements, voids and GST adjustments using their original
+business dates. Reporting periods are introduced by this migration, so no earlier
+finalised period requires an inferred deferral. A rollback/redeploy integration
+test verifies the backfill over existing financial rows.
+
 ## Finalisation and amendments
 
 - `POST /api/reports/gst/periods` requires `gst_settings.update`. It accepts
@@ -103,8 +129,8 @@ foreign objects, finalisation, immutable amendments, correction replay and a
 barrier-based close-versus-writer test are included. Labour/accepted-offer snapshots
 are seeded records; #59 remains the full browser workflow through all entry UIs.
 
-This is a draft backend PR, **not completion of M4**. Remaining before closing
-#54/#55: independent financial/security review, broader correction/basis-boundary regressions (including out-of-order/backdated settlement rounding) and dependency
-sync. Follow-on M4 work: #56 exports/ageing/cash, #57 real dashboard, #58 report UI,
+This backend PR is **not completion of M4**. Remaining before closing
+#54/#55: independent exact-head financial/security re-review, green CI and dependency
+sync after #146, #151 and #152 merge. Follow-on M4 work: #56 exports/ageing/cash, #57 real dashboard, #58 report UI,
 #142 late-evidence reclassification and #59 end-to-end reconciliation. No UI,
 production deployment or accountant sign-off is included here.

@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { receiptDateProblem, chronologyMessage } from "../payments/chronology";
+import { createHash, randomUUID } from "node:crypto";
 import {
   type Actor,
   companyScope,
@@ -338,8 +339,28 @@ export function receiptHandlers(db: () => PrismaClient) {
                 { status: 400 },
               ),
             );
+          const receiptId = randomUUID(),
+            createdAt = new Date();
+          for (const allocation of allocations) {
+            const problem = await receiptDateProblem(
+              tx,
+              actor.companyId,
+              allocation.invoiceId,
+              balances.get(allocation.invoiceId)!.inclusive,
+              {
+                id: `${receiptId}:record`,
+                date: data.receivedOn,
+                recordedAt: createdAt.toISOString(),
+                amount: allocation.amount * (data.kind === "refund" ? -1n : 1n),
+              },
+            );
+            if (problem)
+              throw new Refusal(fail(400, chronologyMessage, "receivedOn"));
+          }
           const created = await tx.customerReceipt.create({
             data: {
+              id: receiptId,
+              createdAt,
               companyId: actor.companyId,
               customerId: customer.id,
               kind: data.kind,
@@ -426,8 +447,28 @@ export function receiptHandlers(db: () => PrismaClient) {
         // Under the invoice locks, the money left after this void must stay
         // between nothing and what's due, for receipts and refunds alike.
         const balances = await invoiceBalances(tx, actor.companyId, ids);
+        const voidedAt = new Date(),
+          voidDay = sydneyToday(voidedAt);
         for (const allocation of before.allocations) {
           const balance = balances.get(allocation.invoiceId);
+          if (
+            balance &&
+            (await receiptDateProblem(
+              tx,
+              actor.companyId,
+              allocation.invoiceId,
+              balance.inclusive,
+              {
+                id: `${before.id}:void`,
+                date: voidDay,
+                recordedAt: voidedAt.toISOString(),
+                amount:
+                  allocation.amountCents *
+                  (before.kind === "refund" ? 1n : -1n),
+              },
+            ))
+          )
+            throw new Refusal(fail(400, chronologyMessage));
           const problem =
             balance &&
             voidProblem(before.kind, balance, allocation.amountCents);
@@ -455,14 +496,14 @@ export function receiptHandlers(db: () => PrismaClient) {
               receiptId: id,
               invoiceId: adjustment.invoiceId,
               gstCents: adjustment.gstCents,
-              adjustedOn: new Date(`${sydneyToday()}T00:00:00Z`),
+              adjustedOn: new Date(`${voidDay}T00:00:00Z`),
             })),
           });
         const updated = await tx.customerReceipt.update({
           where: { id },
           data: {
             voidReason: parsed.data.reason,
-            voidedAt: new Date(),
+            voidedAt,
             voidedBy: actor.userId,
           },
           include: { allocations: true },

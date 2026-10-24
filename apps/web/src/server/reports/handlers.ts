@@ -86,6 +86,11 @@ export function reportHandlers(db: () => PrismaClient) {
               });
           }
           const source = await financialEvents(tx, actor.companyId);
+          const warnings = source.warnings.filter(
+            (warning) =>
+              (!query.jobId || warning.jobId === query.jobId) &&
+              (!query.customerId || warning.customerId === query.customerId),
+          );
           const positions = source.jobs
             .filter(
               (job) =>
@@ -152,6 +157,8 @@ export function reportHandlers(db: () => PrismaClient) {
           return privateJson(
             json({
               range: query,
+              warnings,
+              incomplete: gst && warnings.some((warning) => warning.omittedGst),
               ...(gst
                 ? draftGstReport(source.events, query)
                 : {

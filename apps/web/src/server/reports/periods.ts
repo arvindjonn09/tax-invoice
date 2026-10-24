@@ -109,6 +109,17 @@ export function periodHandlers(db: () => PrismaClient) {
         )
           throw refuse(409, "That date range overlaps a finalised period");
         const source = await financialEvents(tx, actor.companyId);
+        if (source.warnings.length)
+          throw new Refusal(
+            privateJson(
+              {
+                error:
+                  "Resolve data-integrity warnings before finalising this GST period. No snapshot was created.",
+                warnings: source.warnings,
+              },
+              { status: 409 },
+            ),
+          );
         const snapshot = reportJson(
           draftGstReport(source.events, { from, to }),
         );
@@ -249,6 +260,17 @@ export function periodHandlers(db: () => PrismaClient) {
               })
             : null;
           const source = await financialEvents(tx, actor.companyId);
+          if (period && source.warnings.length)
+            throw new Refusal(
+              privateJson(
+                {
+                  error:
+                    "Resolve data-integrity warnings before rebuilding the amended GST snapshot.",
+                  warnings: source.warnings,
+                },
+                { status: 409 },
+              ),
+            );
           if (!gstStatusOn(source.periods, data.effectiveOn).registered)
             throw refuse(
               400,

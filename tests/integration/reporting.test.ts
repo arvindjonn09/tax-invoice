@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -1794,4 +1795,258 @@ describe("cash reporting source regressions", () => {
     ).json();
     expect(gst.oneB).toBe("0");
   }, 120000);
+});
+
+// P1: current balances alone do not prove that a dated ledger is valid.
+describe("chronological settlement safety and legacy report isolation", () => {
+  for (const basis of ["cash", "non_cash"] as const) {
+    it(`rejects backdated receipts/refunds and unsafe voids (${basis})`, async () => {
+      const f = await fixture(true, basis),
+        handler = receiptHandlers(() => db);
+      const settle = async (
+        kind: "receipt" | "refund",
+        date: string,
+        amount = "275000",
+      ) =>
+        handler.create({
+          actor: f.actor,
+          request: req({
+            customerId: f.customer.id,
+            kind,
+            receivedOn: date,
+            amountCents: amount,
+            method: "card",
+            allocations: [{ invoiceId: f.invoice.id, amountCents: amount }],
+          }),
+          context: undefined,
+        });
+      expect((await settle("receipt", "2026-08-01")).status).toBe(201);
+      const refund = await settle("refund", "2026-09-01");
+      expect(refund.status).toBe(201);
+      const refundId = (await refund.json()).id as string;
+      const replacement = await settle("receipt", "2026-07-20");
+      expect(replacement.status, await replacement.clone().text()).toBe(400);
+      expect(
+        await db.customerReceipt.count({ where: { companyId: f.company.id } }),
+      ).toBe(2);
+      expect((await settle("receipt", "2026-09-02", "100")).status).toBe(201);
+      expect((await settle("refund", "2026-07-19", "100")).status).toBe(400);
+      const voided = await handler.void({
+        actor: f.actor,
+        request: req({ reason: "Synthetic unsafe void" }),
+        context: context(refundId),
+      });
+      expect(voided.status).toBe(400);
+      expect(
+        (
+          await db.customerReceipt.findUniqueOrThrow({
+            where: { id: refundId },
+          })
+        ).voidedAt,
+      ).toBeNull();
+    });
+    it(`rejects backdated supplier replacement payments (${basis})`, async () => {
+      const f = await fixture(true, basis),
+        handler = supplierPaymentHandlers(() => db);
+      const pay = (date: string) =>
+        handler.create({
+          actor: f.actor,
+          request: req({
+            paidOn: date,
+            amountCents: "99000",
+            method: "card",
+            allocations: [{ billId: f.supplier.id, amountCents: "99000" }],
+          }),
+          context: undefined,
+        });
+      const paid = await pay("2026-08-01");
+      expect(paid.status).toBe(201);
+      const id = (await paid.json()).id as string;
+      expect(
+        (
+          await handler.void({
+            actor: f.actor,
+            request: req({ reason: "Synthetic bounced payment" }),
+            context: context(id),
+          })
+        ).status,
+      ).toBe(200);
+      expect((await pay("2026-07-20")).status).toBe(400);
+      expect(
+        await db.supplierPayment.count({ where: { companyId: f.company.id } }),
+      ).toBe(1);
+      expect((await pay(sydneyToday())).status).toBe(201);
+    });
+    it(`warns for a legacy invoice while other invoices and profit remain available (${basis})`, async () => {
+      const f = await fixture(true, basis);
+      for (const [kind, date] of [
+        ["receipt", "2026-08-01"],
+        ["refund", "2026-09-01"],
+        ["receipt", "2026-07-20"],
+      ] as const) {
+        await db.$transaction(async (tx) => {
+          const receipt = await tx.customerReceipt.create({
+            data: {
+              companyId: f.company.id,
+              customerId: f.customer.id,
+              kind,
+              receivedOn: new Date(date),
+              amountCents: 275000n,
+              method: "card",
+              createdBy: f.user.id,
+              idempotencyKey: randomUUID(),
+              requestHash: "c".repeat(64),
+            },
+          });
+          await tx.receiptAllocation.create({
+            data: {
+              companyId: f.company.id,
+              receiptId: receipt.id,
+              invoiceId: f.invoice.id,
+              amountCents: 275000n,
+              gstAttributedCents: kind === "refund" ? -25000n : 25000n,
+            },
+          });
+        });
+      }
+      const invoices = invoiceHandlers(() => db),
+        receipts = receiptHandlers(() => db);
+      const created = await invoices.create({
+        actor: f.actor,
+        request: req({
+          customerId: f.customer.id,
+          jobId: f.job.id,
+          lines: [
+            {
+              description: "Unaffected synthetic supply",
+              quantity: "1",
+              unitPriceCents: "1000",
+              taxCode: "TAXABLE_10",
+            },
+          ],
+        }),
+        context: undefined,
+      });
+      expect(created.status).toBe(201);
+      const healthyId = (await created.json()).id as string;
+      expect(
+        (
+          await invoices.issue({
+            actor: f.actor,
+            request: req({ issueDate: "2026-08-15" }),
+            context: context(healthyId),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await receipts.create({
+            actor: f.actor,
+            request: req({
+              customerId: f.customer.id,
+              receivedOn: "2026-09-15",
+              amountCents: "1100",
+              method: "card",
+              allocations: [{ invoiceId: healthyId, amountCents: "1100" }],
+            }),
+            context: undefined,
+          })
+        ).status,
+      ).toBe(201);
+      const report = await reports(f.actor);
+      expect(report.profit.totals).toMatchObject({
+        revenue: "251000",
+        cost: "145000",
+        profit: "106000",
+        receivedInclusive: "276100",
+      });
+      for (const result of [report.profit, report.gst])
+        expect(result.warnings).toEqual([
+          expect.objectContaining({
+            code: "INVALID_SETTLEMENT_HISTORY",
+            sourceId: f.invoice.id,
+            sourceType: "invoice",
+            omittedGst: basis === "cash",
+          }),
+        ]);
+      expect(report.gst).toMatchObject({
+        oneA: basis === "cash" ? "100" : "25100",
+        incomplete: basis === "cash",
+      });
+      expect(
+        report.gst.events.some(
+          (event: { sourceId: string; amount: string }) =>
+            event.sourceId !== f.invoice.id && event.amount === "100",
+        ),
+      ).toBe(true);
+      const close = await periodHandlers(() => db).close({
+        actor: f.actor,
+        request: req({
+          from: "2026-07-01",
+          to: "2026-09-30",
+          note: "Must not freeze incomplete sources",
+        }),
+        context: undefined,
+      });
+      expect(close.status).toBe(409);
+      expect((await close.json()).warnings[0].sourceId).toBe(f.invoice.id);
+      expect(
+        await db.gstPeriod.count({ where: { companyId: f.company.id } }),
+      ).toBe(0);
+    });
+  }
+});
+
+it("backfills GST source postings when deploying over legacy financial rows", async () => {
+  const f = await fixture(true, "cash");
+  const receipt = await receiptHandlers(() => db).create({
+    actor: f.actor,
+    request: req({
+      customerId: f.customer.id,
+      receivedOn: "2026-08-01",
+      amountCents: "100",
+      method: "card",
+      allocations: [{ invoiceId: f.invoice.id, amountCents: "100" }],
+    }),
+    context: undefined,
+  });
+  expect(receipt.status).toBe(201);
+  const receiptId = (await receipt.json()).id as string;
+  const { Client } = createRequire(
+    new URL("../../packages/database/package.json", import.meta.url),
+  )("pg");
+  const connection = new Client({ connectionString: database.url });
+  await connection.connect();
+  try {
+    // Down/up leaves immutable source documents in place, simulating first
+    // deployment of the reporting migration against a pre-reporting database.
+    await connection.query(
+      readFileSync(
+        new URL(
+          "../../packages/database/prisma/rollbacks/20261023210000_reporting_periods.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    await connection.query(
+      readFileSync(
+        new URL(
+          "../../packages/database/prisma/migrations/20261023210000_reporting_periods/migration.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+  } finally {
+    await connection.end();
+  }
+  const rows = await db.gstSourcePosting.findMany({
+    where: { companyId: f.company.id },
+  });
+  for (const id of [f.invoice.id, f.supplier.id, receiptId, ...f.expenseIds])
+    expect(rows.some((row) => row.sourceId === id)).toBe(true);
+  expect(
+    rows.every((row) => row.originalOn.getTime() === row.effectiveOn.getTime()),
+  ).toBe(true);
 });

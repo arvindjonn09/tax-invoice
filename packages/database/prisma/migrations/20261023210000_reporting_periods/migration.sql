@@ -174,6 +174,29 @@ CREATE TRIGGER supplier_payment_gst_adjustments_reporting_period BEFORE INSERT O
 
 CREATE TRIGGER credit_cash_adjustments_reporting_period BEFORE INSERT ON credit_cash_adjustments FOR EACH ROW EXECUTE FUNCTION jobflow_guard_report_source();
 
+-- Backfill legacy source posting dates. No finalised periods predate this
+-- migration (gst_periods is created above), so their original dates remain the
+-- correct immutable effective dates. DDL/source-trigger locks protect the copy.
+WITH source_dates AS (
+ SELECT company_id,id AS source_id,issue_date AS original_on FROM invoices WHERE status<>'draft'
+ UNION ALL SELECT company_id,id,(voided_at AT TIME ZONE 'Australia/Sydney')::date FROM invoices WHERE voided_at IS NOT NULL
+ UNION ALL SELECT company_id,id,issued_on FROM supplier_bills
+ UNION ALL SELECT company_id,id,(voided_at AT TIME ZONE 'Australia/Sydney')::date FROM supplier_bills WHERE voided_at IS NOT NULL
+ UNION ALL SELECT company_id,id,CASE WHEN reverses_id IS NOT NULL OR corrects_id IS NOT NULL THEN (decided_at AT TIME ZONE 'Australia/Sydney')::date ELSE purchased_on END FROM expenses WHERE status='approved'
+ UNION ALL SELECT company_id,id,paid_on FROM expenses WHERE status='approved' AND paid_on IS NOT NULL
+ UNION ALL SELECT company_id,id,CASE WHEN reverses_id IS NOT NULL THEN (decided_at AT TIME ZONE 'Australia/Sydney')::date ELSE work_date END FROM timesheets WHERE status='approved'
+ UNION ALL SELECT company_id,id,received_on FROM customer_receipts
+ UNION ALL SELECT company_id,id,(voided_at AT TIME ZONE 'Australia/Sydney')::date FROM customer_receipts WHERE voided_at IS NOT NULL
+ UNION ALL SELECT company_id,id,paid_on FROM supplier_payments
+ UNION ALL SELECT company_id,id,(voided_at AT TIME ZONE 'Australia/Sydney')::date FROM supplier_payments WHERE voided_at IS NOT NULL
+ UNION ALL SELECT company_id,receipt_id,adjusted_on FROM receipt_gst_adjustments
+ UNION ALL SELECT company_id,payment_id,adjusted_on FROM supplier_payment_gst_adjustments
+ UNION ALL SELECT company_id,credit_id,adjusted_on FROM credit_cash_adjustments
+)
+INSERT INTO gst_source_postings(company_id,source_id,original_on,effective_on)
+ SELECT company_id,source_id,original_on,original_on FROM source_dates WHERE original_on IS NOT NULL
+ ON CONFLICT DO NOTHING;
+
 -- Effective registration/basis coverage of closed days cannot be changed.
 CREATE FUNCTION jobflow_guard_locked_registration() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE cid uuid; p record; old_span daterange; new_span daterange; old_basis text; new_basis text;

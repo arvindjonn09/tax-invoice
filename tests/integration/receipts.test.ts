@@ -1,3 +1,4 @@
+import { sydneyToday } from "../../apps/web/src/server/company/gst";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
@@ -212,6 +213,7 @@ function receive(
     who = "accountant" as Who,
     kind = "receipt",
     customer = customerId,
+    date = "2026-07-05",
   } = {},
 ) {
   return r().create(
@@ -221,7 +223,7 @@ function receive(
       {
         customerId: customer,
         kind,
-        receivedOn: "2026-07-05",
+        receivedOn: date,
         amountCents: amount,
         method: "bank_transfer",
         allocations,
@@ -382,7 +384,7 @@ describe("refunds and voids", () => {
           one(paid.id),
         )
       ).status,
-    ).toBe(409);
+    ).toBe(400);
     expect(
       (
         await r().void(
@@ -432,7 +434,7 @@ describe("refunds and voids", () => {
       call("accountant", "POST", { reason: "Refund never sent" }),
       one(refund.id),
     );
-    expect(voided.status).toBe(409);
+    expect(voided.status).toBe(400);
     expect((await voided.json()).error).toMatch(/overpay/);
     expect((await balanceOf(invoiceId)).receivedCents).toBe(due);
   });
@@ -491,7 +493,7 @@ describe("refunds and voids", () => {
     ).toEqual([{ receiptId: middle.id, gstCents: 1n }]);
     expect(await liveGst(invoiceId)).toBe(25_000n);
     const replacement = await recorded(
-      await receive([{ invoiceId, amountCents: "1" }]),
+      await receive([{ invoiceId, amountCents: "1" }], { date: sydneyToday() }),
     );
     expect(replacement.gst).toBe(0n);
     expect(await liveGst(invoiceId)).toBe(25_000n);
@@ -559,10 +561,10 @@ describe("refunds and voids", () => {
     ]);
     // Exactly one of them takes the invoice back to fully paid.
     // Either the void wins and the receipt would overpay (400), or the
-    // receipt wins and the void would (409).
+    // receipt wins and the dated void would (400).
     expect([
       [200, 400],
-      [409, 201],
+      [400, 201],
     ]).toContainEqual([voided.status, replacement.status]);
     expect((await balanceOf(invoiceId)).receivedCents).toBe(due);
   });

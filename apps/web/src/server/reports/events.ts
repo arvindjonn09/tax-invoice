@@ -1,10 +1,13 @@
 import {
   adjustedCashShare,
+  compareSettlementDates,
+  settlementHistoryProblem,
   gstStatusOn,
   type GstRegistrationPeriod,
   type ReportEvent,
 } from "@jobflow/domain";
 import type { Prisma } from "../../../../../packages/database/src/generated/prisma/client";
+import { receiptHistory, supplierPaymentHistory } from "../payments/chronology";
 import { toDay } from "../company/gst";
 
 /** Sydney calendar date for immutable UTC audit/decision timestamps. */
@@ -90,6 +93,15 @@ export async function financialEvents(
   }));
   const customerByJob = new Map(jobs.map((j) => [j.id, j.customerId]));
   const events: ReportEvent[] = [];
+  const warnings: {
+    code: "INVALID_SETTLEMENT_HISTORY" | "INVALID_GST_REPLAY";
+    sourceType: "invoice" | "supplier_bill";
+    sourceId: string;
+    jobId: string | null;
+    customerId: string | null;
+    omittedGst: boolean;
+    message: string;
+  }[] = [];
   const postingDates = new Map(
     postings.map((p) => [
       `${p.source_id}:${toDay(p.original_on)}`,
@@ -144,6 +156,21 @@ export async function financialEvents(
       .filter((i) => i.taxCode !== "OUT_OF_SCOPE")
       .reduce((s, i) => s + i.inclusiveCents, 0n);
     const basis = status.basis;
+    const historyProblem = settlementHistoryProblem(
+      row.inclusiveCents,
+      receiptHistory(row.allocations),
+    );
+    if (historyProblem)
+      warnings.push({
+        code: "INVALID_SETTLEMENT_HISTORY",
+        sourceType: "invoice",
+        sourceId: row.id,
+        jobId: row.jobId,
+        customerId: row.customerId,
+        omittedGst: basis === "cash",
+        message:
+          "This invoice has an invalid date-ordered settlement history. Review its records; cash GST for this source is excluded when using the cash basis.",
+      });
     if (basis === "non_cash") {
       const date = earliest(
         taxDay(row.id, day),
@@ -197,140 +224,163 @@ export async function financialEvents(
           signed(a.amountCents, -paymentSign),
         );
     }
-    if (basis === "cash" && row.inclusiveCents > 0n) {
-      // G1 needs its own cumulative allocation for mixed out-of-scope lines.
-      // Process record/void events in their economic-date order; ids break ties.
-      const cash = row.allocations
-        .flatMap((a) => [
-          {
-            id: `${a.id}:gst`,
-            source: a.receiptId,
-            date: toDay(a.receipt.receivedOn),
-            amount: a.amountCents * (a.receipt.kind === "refund" ? -1n : 1n),
-            gst: a.gstAttributedCents,
-            recorded: a.receipt.createdAt.toISOString(),
-          },
-          ...(a.receipt.voidedAt
-            ? [
-                {
-                  id: `${a.id}:gst-void`,
-                  source: a.receiptId,
-                  date: businessDay(a.receipt.voidedAt),
-                  amount:
-                    a.amountCents * (a.receipt.kind === "refund" ? 1n : -1n),
-                  gst: -a.gstAttributedCents,
-                  recorded: a.receipt.voidedAt.toISOString(),
-                },
-              ]
-            : []),
-        ])
-        .map((c) => ({
-          ...c,
-          date: taxDay(c.source, c.date),
-          creditAmount: 0n,
-          creditG1: 0n,
-        }))
-        .concat(
-          invoices
-            .filter((credit) => credit.creditsId === row.id && credit.issueDate)
-            .flatMap((credit) => {
-              const eligible = credit.items
-                .filter((item) => item.taxCode !== "OUT_OF_SCOPE")
-                .reduce((sum, item) => sum + item.inclusiveCents, 0n);
-              const make = (
-                suffix: string,
-                date: string,
-                recorded: string,
-                sign: bigint,
-              ) => ({
-                id: `${credit.id}:cash-credit-${suffix}`,
-                source: credit.id,
-                date: taxDay(credit.id, date),
-                recorded,
-                amount: 0n,
-                gst: 0n,
-                creditAmount: sign * credit.inclusiveCents,
-                creditG1: sign * eligible,
-              });
-              return [
-                make(
-                  "issue",
-                  toDay(credit.issueDate!),
-                  credit.issuedAt!.toISOString(),
-                  1n,
-                ),
-                ...(credit.voidedAt
-                  ? [
-                      make(
-                        "void",
-                        businessDay(credit.voidedAt),
-                        credit.voidedAt.toISOString(),
-                        -1n,
-                      ),
-                    ]
-                  : []),
-              ];
-            }),
-        )
-        .sort(
-          (a, b) =>
-            a.date.localeCompare(b.date) ||
-            a.recorded.localeCompare(b.recorded) ||
-            a.id.localeCompare(b.id),
-        );
-      let received = 0n,
-        credited = 0n,
-        creditedEligible = 0n;
-      const target = () =>
-        adjustedCashShare({
-          total: row.inclusiveCents,
-          eligible: g1,
-          credited,
-          creditedEligible,
-          received,
+    if (basis === "cash" && row.inclusiveCents > 0n && !historyProblem) {
+      const gstStart = events.length;
+      try {
+        // G1 needs its own cumulative allocation for mixed out-of-scope lines.
+        // Process record/void events in their economic-date order; ids break ties.
+        const cash = row.allocations
+          .flatMap((a) => [
+            {
+              id: `${a.id}:gst`,
+              orderId: `${a.receiptId}:record`,
+              source: a.receiptId,
+              date: toDay(a.receipt.receivedOn),
+              amount: a.amountCents * (a.receipt.kind === "refund" ? -1n : 1n),
+              gst: a.gstAttributedCents,
+              recorded: a.receipt.createdAt.toISOString(),
+            },
+            ...(a.receipt.voidedAt
+              ? [
+                  {
+                    id: `${a.id}:gst-void`,
+                    orderId: `${a.receiptId}:void`,
+                    source: a.receiptId,
+                    date: businessDay(a.receipt.voidedAt),
+                    amount:
+                      a.amountCents * (a.receipt.kind === "refund" ? 1n : -1n),
+                    gst: -a.gstAttributedCents,
+                    recorded: a.receipt.voidedAt.toISOString(),
+                  },
+                ]
+              : []),
+          ])
+          .map((c) => ({
+            ...c,
+            date: taxDay(c.source, c.date),
+            creditAmount: 0n,
+            creditG1: 0n,
+          }))
+          .concat(
+            invoices
+              .filter(
+                (credit) => credit.creditsId === row.id && credit.issueDate,
+              )
+              .flatMap((credit) => {
+                const eligible = credit.items
+                  .filter((item) => item.taxCode !== "OUT_OF_SCOPE")
+                  .reduce((sum, item) => sum + item.inclusiveCents, 0n);
+                const make = (
+                  suffix: string,
+                  date: string,
+                  recorded: string,
+                  sign: bigint,
+                ) => ({
+                  id: `${credit.id}:cash-credit-${suffix}`,
+                  orderId: `${credit.id}:credit-${suffix}`,
+                  source: credit.id,
+                  date: taxDay(credit.id, date),
+                  recorded,
+                  amount: 0n,
+                  gst: 0n,
+                  creditAmount: sign * credit.inclusiveCents,
+                  creditG1: sign * eligible,
+                });
+                return [
+                  make(
+                    "issue",
+                    toDay(credit.issueDate!),
+                    credit.issuedAt!.toISOString(),
+                    1n,
+                  ),
+                  ...(credit.voidedAt
+                    ? [
+                        make(
+                          "void",
+                          businessDay(credit.voidedAt),
+                          credit.voidedAt.toISOString(),
+                          -1n,
+                        ),
+                      ]
+                    : []),
+                ];
+              }),
+          )
+          .sort((a, b) =>
+            compareSettlementDates(
+              { id: a.orderId, date: a.date, recordedAt: a.recorded },
+              { id: b.orderId, date: b.date, recordedAt: b.recorded },
+            ),
+          );
+        let received = 0n,
+          credited = 0n,
+          creditedEligible = 0n;
+        const target = () =>
+          adjustedCashShare({
+            total: row.inclusiveCents,
+            eligible: g1,
+            credited,
+            creditedEligible,
+            received,
+          });
+        for (const c of cash) {
+          const before = target();
+          received += c.amount;
+          credited += c.creditAmount;
+          creditedEligible += c.creditG1;
+          const share = target() - before;
+          if (registered(c.date))
+            emit(
+              c.id,
+              c.source,
+              c.date,
+              row.jobId,
+              row.customerId,
+              "gst_sales",
+              c.gst,
+              share,
+            );
+        }
+        for (const a of creditAdjustments.filter((a) => a.invoiceId === row.id))
+          if (registered(toDay(a.adjustedOn)))
+            emit(
+              a.id,
+              a.creditId,
+              toDay(a.adjustedOn),
+              row.jobId,
+              row.customerId,
+              "gst_sales",
+              a.gstCents,
+              0n,
+            );
+        for (const a of receiptAdjustments.filter(
+          (a) => a.invoiceId === row.id,
+        ))
+          if (registered(toDay(a.adjustedOn)))
+            emit(
+              a.id,
+              a.receiptId,
+              toDay(a.adjustedOn),
+              row.jobId,
+              row.customerId,
+              "gst_sales",
+              a.gstCents,
+              0n,
+            );
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        events.length = gstStart;
+        warnings.push({
+          code: "INVALID_GST_REPLAY",
+          sourceType: "invoice",
+          sourceId: row.id,
+          jobId: row.jobId,
+          customerId: row.customerId,
+          omittedGst: true,
+          message:
+            "Cash GST could not be reconstructed for this invoice. Its GST is excluded from these incomplete totals; review the source records.",
         });
-      for (const c of cash) {
-        const before = target();
-        received += c.amount;
-        credited += c.creditAmount;
-        creditedEligible += c.creditG1;
-        const share = target() - before;
-        if (registered(c.date))
-          emit(
-            c.id,
-            c.source,
-            c.date,
-            row.jobId,
-            row.customerId,
-            "gst_sales",
-            c.gst,
-            share,
-          );
       }
-      for (const a of creditAdjustments.filter((a) => a.invoiceId === row.id))
-        if (registered(toDay(a.adjustedOn)))
-          emit(
-            a.id,
-            a.creditId,
-            toDay(a.adjustedOn),
-            row.jobId,
-            row.customerId,
-            "gst_sales",
-            a.gstCents,
-            0n,
-          );
-      for (const a of receiptAdjustments.filter((a) => a.invoiceId === row.id))
-        if (registered(toDay(a.adjustedOn)))
-          emit(
-            a.id,
-            a.receiptId,
-            toDay(a.adjustedOn),
-            row.jobId,
-            row.customerId,
-            "gst_sales",
-            a.gstCents,
-            0n,
-          );
     }
   }
   for (const row of bills) {
@@ -356,6 +406,21 @@ export async function financialEvents(
         -row.jobCostCents,
       );
     const status = gstStatusOn(periods, day);
+    const historyProblem = settlementHistoryProblem(
+      row.inclusiveCents,
+      supplierPaymentHistory(row.allocations),
+    );
+    if (historyProblem)
+      warnings.push({
+        code: "INVALID_SETTLEMENT_HISTORY",
+        sourceType: "supplier_bill",
+        sourceId: row.id,
+        jobId: row.jobId,
+        customerId,
+        omittedGst: status.basis === "cash",
+        message:
+          "This bill has an invalid date-ordered payment history. Review its records; cash GST for this source is excluded when using the cash basis.",
+      });
     if (status.basis === "non_cash") {
       const date = earliest(
         taxDay(row.id, day),
@@ -395,7 +460,7 @@ export async function financialEvents(
         "paid",
         a.amountCents,
       );
-      if (status.basis === "cash" && registered(day))
+      if (status.basis === "cash" && !historyProblem && registered(day))
         emit(
           `${a.id}:cash-credit`,
           a.paymentId,
@@ -416,7 +481,7 @@ export async function financialEvents(
           "paid",
           -a.amountCents,
         );
-        if (status.basis === "cash" && registered(voidDay))
+        if (status.basis === "cash" && !historyProblem && registered(voidDay))
           emit(
             `${a.id}:cash-credit-void`,
             a.paymentId,
@@ -428,7 +493,7 @@ export async function financialEvents(
           );
       }
     }
-    if (status.basis === "cash")
+    if (status.basis === "cash" && !historyProblem)
       for (const a of paymentAdjustments.filter((a) => a.billId === row.id))
         if (registered(toDay(a.adjustedOn)))
           emit(
@@ -517,5 +582,5 @@ export async function financialEvents(
   events.sort(
     (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
   );
-  return { events, jobs, periods, bills, acceptances, quotes };
+  return { events, jobs, periods, bills, acceptances, quotes, warnings };
 }

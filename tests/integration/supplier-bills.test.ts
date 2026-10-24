@@ -1,3 +1,4 @@
+import { sydneyToday } from "../../apps/web/src/server/company/gst";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
@@ -905,7 +906,9 @@ describe("supplier payments (#46)", () => {
       }),
     ).toEqual([{ paymentId: paid[1]!.id, creditableGstCents: 1n }]);
     expect(await liveCredit()).toBe(9_000n);
-    const replacement = (await pay(payment(bill.id, "1"))).body;
+    const replacement = (
+      await pay({ ...payment(bill.id, "1"), paidOn: sydneyToday() })
+    ).body;
     expect(replacement.allocations[0]!.creditableGstAttributedCents).toBe("0");
     expect(await liveCredit()).toBe(9_000n);
     await expect(
