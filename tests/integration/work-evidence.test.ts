@@ -5,6 +5,7 @@ import { createAuth } from "../../apps/web/src/server/auth/config";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
 import { createWithPolicy } from "../../apps/web/src/server/authz/policy";
 import { evidenceHandlers } from "../../apps/web/src/server/jobs/evidence";
+import { jobHandlers } from "../../apps/web/src/server/jobs/handlers";
 import {
   type CommittedDatabase,
   withCommittedDatabase,
@@ -23,6 +24,9 @@ const WHO = [
   "sub",
   "othersub",
   "outsider",
+  "visitonly",
+  "leaver",
+  "exsub",
 ] as const;
 type Who = (typeof WHO)[number];
 const ROLE: Record<Who, string> = {
@@ -34,6 +38,9 @@ const ROLE: Record<Who, string> = {
   sub: "subcontractor",
   othersub: "subcontractor",
   outsider: "owner",
+  visitonly: "employee",
+  leaver: "employee",
+  exsub: "subcontractor",
 };
 
 let database: CommittedDatabase;
@@ -44,6 +51,7 @@ let companyId = "";
 let jobId = "";
 let draftJobId = "";
 let visitId = "";
+let otherVisitId = "";
 let otherJobVisitId = "";
 let outsiderJobId = "";
 const userIds = {} as Record<Who, string>;
@@ -145,6 +153,16 @@ beforeAll(async () => {
       },
     })
   ).id;
+  otherVisitId = (
+    await db.jobVisit.create({
+      data: {
+        companyId,
+        jobId,
+        createdBy: userIds.owner,
+        startsAt: new Date("2026-11-04T22:00:00Z"),
+      },
+    })
+  ).id;
   otherJobVisitId = (
     await db.jobVisit.create({
       data: {
@@ -156,8 +174,10 @@ beforeAll(async () => {
     })
   ).id;
   for (const [key, assign] of [
-    ["worker", true],
-    ["bystander", false],
+    ["worker", "job"],
+    ["bystander", null],
+    ["visitonly", "visit"],
+    ["leaver", "job"],
   ] as const) {
     const employee = await db.employee.create({
       data: {
@@ -173,6 +193,7 @@ beforeAll(async () => {
           companyId,
           jobId,
           employeeId: employee.id,
+          visitId: assign === "visit" ? visitId : null,
           createdBy: userIds.owner,
         },
       });
@@ -180,6 +201,7 @@ beforeAll(async () => {
   for (const [key, accepted] of [
     ["sub", true],
     ["othersub", false],
+    ["exsub", true],
   ] as const) {
     const contractor = await db.contractor.create({
       data: {
@@ -277,6 +299,36 @@ const r = () => ({
 });
 const add = (who: Who, body: unknown, id = jobId) =>
   r().add(call(who, "POST", body), one(id));
+
+/** Resolves once another connection is waiting on a row lock (bounded). */
+async function untilWaitingOnLock() {
+  for (let i = 0; i < 100; i += 1) {
+    const [row] = await db.$queryRaw<[{ waiting: bigint }]>`
+      SELECT count(*) AS waiting FROM pg_stat_activity
+      WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+    if (row.waiting > 0n) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+/**
+ * Run `revoke` in a transaction that holds `lock` (the row lock the real
+ * revoking write takes) while `write` arrives and waits, then commit.
+ */
+async function revokeDuring(
+  lock: (
+    tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0],
+  ) => Promise<unknown>,
+  write: () => Promise<Response>,
+) {
+  let pending: Promise<Response> | undefined;
+  await db.$transaction(async (tx) => {
+    await lock(tx);
+    pending = write();
+    await untilWaitingOnLock();
+  });
+  return pending!;
+}
 
 describe("adding evidence", () => {
   it("lets an assigned employee add a note and a photo of their own upload, audited", async () => {
@@ -414,6 +466,109 @@ describe("adding evidence", () => {
   });
 });
 
+describe("visit-only assignments (Codex #125 review, P2)", () => {
+  it("lets a visit-only employee attach evidence to their visit, not another", async () => {
+    expect(
+      (await add("visitonly", { kind: "note", note: "Visit A", visitId }))
+        .status,
+    ).toBe(201);
+    const refused = await add("visitonly", {
+      kind: "note",
+      note: "Visit B",
+      visitId: otherVisitId,
+    });
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).fields).toHaveProperty("visitId");
+    expect(
+      await db.workEvidence.count({ where: { visitId: otherVisitId } }),
+    ).toBe(0);
+    // A whole-job worker may use any visit of the job.
+    expect(
+      (
+        await add("worker", {
+          kind: "note",
+          note: "Visit B",
+          visitId: otherVisitId,
+        })
+      ).status,
+    ).toBe(201);
+  });
+});
+
+describe("revocation during a write (Codex #125 review, P1)", () => {
+  const evidenceAudits = (who: Who) =>
+    db.auditEvent.count({
+      where: { action: "job.evidence_added", createdBy: userIds[who] },
+    });
+
+  it("adds nothing when the employee is deactivated while the write waits", async () => {
+    const employee = await db.employee.findFirstOrThrow({
+      where: { companyId, userId: userIds.leaver },
+    });
+    const response = await revokeDuring(
+      async (tx) => {
+        await tx.$queryRaw`SELECT 1 FROM employees WHERE id = ${employee.id}::uuid FOR UPDATE`;
+        await tx.employee.update({
+          where: { id: employee.id },
+          data: { isActive: false },
+        });
+      },
+      () => add("leaver", { kind: "note", note: "Sneaking in" }),
+    );
+    expect(response.status).toBe(404);
+    expect(
+      await db.workEvidence.count({ where: { submittedBy: userIds.leaver } }),
+    ).toBe(0);
+    expect(await evidenceAudits("leaver")).toBe(0);
+  });
+
+  it("neither adds evidence nor submits when the contractor is archived meanwhile", async () => {
+    const contractor = await db.contractor.findFirstOrThrow({
+      where: { companyId, userId: userIds.exsub },
+    });
+    const archive = async (
+      tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0],
+      data: { archivedAt: Date | null },
+    ) => {
+      await tx.$queryRaw`SELECT 1 FROM contractors WHERE id = ${contractor.id}::uuid FOR UPDATE`;
+      await tx.contractor.update({ where: { id: contractor.id }, data });
+    };
+    const added = await revokeDuring(
+      (tx) => archive(tx, { archivedAt: new Date() }),
+      () => add("exsub", { kind: "note", note: "After archive" }),
+    );
+    expect(added.status).toBe(404);
+    expect(
+      await db.workEvidence.count({ where: { submittedBy: userIds.exsub } }),
+    ).toBe(0);
+    expect(await evidenceAudits("exsub")).toBe(0);
+
+    // Restore, then archive again while a submit waits.
+    await db.contractor.update({
+      where: { id: contractor.id },
+      data: { archivedAt: null },
+    });
+    const events = await db.jobStatusEvent.count({ where: { jobId } });
+    const submitted = await revokeDuring(
+      (tx) => archive(tx, { archivedAt: new Date() }),
+      () => r().submit(call("exsub", "POST", {}), one(jobId)),
+    );
+    expect(submitted.status).toBe(404);
+    expect(
+      (await db.job.findUniqueOrThrow({ where: { id: jobId } })).status,
+    ).toBe("in_progress");
+    expect(await db.jobStatusEvent.count({ where: { jobId } })).toBe(events);
+    expect(
+      await db.auditEvent.count({
+        where: {
+          action: "job.submitted_for_review",
+          createdBy: userIds.exsub,
+        },
+      }),
+    ).toBe(0);
+  });
+});
+
 describe("completion review", () => {
   it("needs evidence before submitting; a draft job can't take evidence", async () => {
     expect(
@@ -430,6 +585,14 @@ describe("completion review", () => {
     expect(
       (await r().submit(call("worker", "POST", {}), one(jobId))).status,
     ).toBe(200);
+    expect(await statusOf()).toBe("awaiting_review");
+    // The plain status route can't skip the review (Codex #125 review).
+    const status = withPolicy("job.write", jobHandlers(() => db).changeStatus);
+    for (const to of ["completed", "in_progress"])
+      expect(
+        (await status(call("manager", "POST", { to }), one(jobId))).status,
+        to,
+      ).toBe(409);
     expect(await statusOf()).toBe("awaiting_review");
     // A second submit while awaiting review is refused.
     expect((await r().submit(call("sub", "POST", {}), one(jobId))).status).toBe(
@@ -464,6 +627,13 @@ describe("completion review", () => {
       ).status,
     ).toBe(200);
     expect(await statusOf()).toBe("in_progress");
+    // Every worker on the job can read what to redo (Codex #125 review).
+    for (const who of ["worker", "sub"] as const) {
+      const view = await (await r().mine(call(who, "GET"), one(jobId))).json();
+      expect(view.reworkRequests, who).toEqual([
+        { note: "Photo of the meter please", requestedAt: expect.any(String) },
+      ]);
+    }
     const meter = await documentFor("worker");
     await add("worker", { kind: "photo", documentId: meter.id });
     await r().submit(call("worker", "POST", {}), one(jobId));

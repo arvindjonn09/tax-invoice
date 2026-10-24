@@ -12,6 +12,7 @@ import {
 } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid, jsonOrNull } from "../company/handlers";
+import { lockRow } from "../db/locks";
 import { optionalText, uuidOrNull } from "../http/fields";
 import { Refusal, inTransaction, lockedJob } from "./handlers";
 
@@ -60,23 +61,34 @@ const fail = (status: 400 | 409, error: string, field?: string) =>
     },
   );
 
-/** Is the actor one of the workers on this job right now? */
-export async function isWorkerOnJob(
+/** Where on the job a worker may work: the whole job, or only some visits. */
+type WorkerScope = { wholeJob: boolean; visitIds: readonly string[] };
+
+/**
+ * The actor's scope on this job right now, or null if they aren't one of
+ * its workers. An employee assigned only to visits keeps to those visits
+ * (#32); an accepted subcontractor offer covers the whole job (#35).
+ */
+export async function workerScope(
   db: Prisma.TransactionClient | PrismaClient,
   actor: Actor,
   jobId: string,
-): Promise<boolean> {
+): Promise<WorkerScope | null> {
   if (actor.role === "employee") {
-    const assignment = await db.assignment.findFirst({
+    const assignments = await db.assignment.findMany({
       where: {
         companyId: actor.companyId,
         jobId,
         endedAt: null,
         employee: { userId: actor.userId, isActive: true },
       },
-      select: { id: true },
+      select: { visitId: true },
     });
-    return Boolean(assignment);
+    if (!assignments.length) return null;
+    return {
+      wholeJob: assignments.some((row) => row.visitId === null),
+      visitIds: assignments.flatMap((row) => row.visitId ?? []),
+    };
   }
   if (actor.role === "subcontractor") {
     const offer = await db.contractorOffer.findFirst({
@@ -88,9 +100,46 @@ export async function isWorkerOnJob(
       },
       select: { id: true },
     });
-    return Boolean(offer);
+    return offer ? { wholeJob: true, visitIds: [] } : null;
   }
-  return false;
+  return null;
+}
+
+/**
+ * Lock the job and the actor's worker record in the order the revoking
+ * writes take them — subcontractors: contractor, then job (#35, unlink and
+ * archive lock the contractor); employees: job, then employee (#32,
+ * assignment endings lock the job, deactivation and unlinking the employee)
+ * — then check the actor is still a worker on it. Nothing that revokes
+ * their access can commit between this check and the caller's write.
+ */
+async function lockedWorkerJob(
+  tx: Prisma.TransactionClient,
+  actor: Actor,
+  jobId: string,
+) {
+  const where = { companyId: actor.companyId, userId: actor.userId };
+  if (actor.role === "subcontractor") {
+    const contractor = await tx.contractor.findFirst({
+      where,
+      select: { id: true },
+    });
+    if (!contractor) throw notFound();
+    await lockRow(tx, "contractors", contractor.id);
+  }
+  const job = await lockedJob(tx, jobId).catch(() => null);
+  if (!job || job.companyId !== actor.companyId) throw notFound();
+  if (actor.role === "employee") {
+    const employee = await tx.employee.findFirst({
+      where,
+      select: { id: true },
+    });
+    if (!employee) throw notFound();
+    await lockRow(tx, "employees", employee.id);
+  }
+  const scope = await workerScope(tx, actor, jobId);
+  if (!scope) throw notFound();
+  return { job, scope };
 }
 
 function evidenceView(row: WorkEvidence) {
@@ -119,7 +168,7 @@ async function moveJob(
   note: string | null,
   action: string,
 ) {
-  const problem = transitionProblem(job.status, to);
+  const problem = transitionProblem(job.status, to, { byReview: true });
   if (problem)
     throw new Refusal(
       fail(409, `A ${job.status} job can't move to ${to}`, "status"),
@@ -160,14 +209,7 @@ export function evidenceHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
-          // Under the job lock: status and assignment can't change meanwhile.
-          const job = await lockedJob(tx, jobId).catch(() => null);
-          if (
-            !job ||
-            job.companyId !== actor.companyId ||
-            !(await isWorkerOnJob(tx, actor, jobId))
-          )
-            throw notFound();
+          const { job, scope } = await lockedWorkerJob(tx, actor, jobId);
           if (!WORKING.includes(job.status))
             throw new Refusal(
               fail(409, `Evidence can't be added to a ${job.status} job`),
@@ -177,9 +219,12 @@ export function evidenceHandlers(db: () => PrismaClient) {
               where: { id: data.visitId, companyId: actor.companyId, jobId },
               select: { id: true },
             });
-            if (!visit)
+            if (
+              !visit ||
+              !(scope.wholeJob || scope.visitIds.includes(visit.id))
+            )
               throw new Refusal(
-                fail(400, "Choose one of this job's visits", "visitId"),
+                fail(400, "Choose one of your visits on this job", "visitId"),
               );
           }
           if (data.kind !== "note") {
@@ -237,15 +282,36 @@ export function evidenceHandlers(db: () => PrismaClient) {
     }
   };
 
-  /** A worker's view: their own evidence on a job they're on. */
+  /**
+   * A worker's view: their own evidence on a job they're on, and what the
+   * office asked to redo each time it sent the work back.
+   */
   const mine: PolicyHandler<JobContext> = async ({ actor, context }) => {
     const jobId = uuidOrNull((await context.params).id);
-    if (!jobId || !(await isWorkerOnJob(db(), actor, jobId))) throw notFound();
-    const rows = await db().workEvidence.findMany({
-      where: { companyId: actor.companyId, jobId, submittedBy: actor.userId },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    if (!jobId || !(await workerScope(db(), actor, jobId))) throw notFound();
+    const [rows, reworks] = await Promise.all([
+      db().workEvidence.findMany({
+        where: { companyId: actor.companyId, jobId, submittedBy: actor.userId },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      }),
+      db().jobStatusEvent.findMany({
+        where: {
+          companyId: actor.companyId,
+          jobId,
+          fromStatus: "awaiting_review",
+          toStatus: "in_progress",
+        },
+        select: { note: true, createdAt: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      }),
+    ]);
+    return privateJson({
+      evidence: rows.map(evidenceView),
+      reworkRequests: reworks.map((row) => ({
+        note: row.note,
+        requestedAt: row.createdAt,
+      })),
     });
-    return privateJson({ evidence: rows.map(evidenceView) });
   };
 
   /** The office's view: all evidence on a job of this company. */
@@ -277,13 +343,7 @@ export function evidenceHandlers(db: () => PrismaClient) {
     if (!jobId) throw notFound();
     return inTransaction(async () => {
       await withAudit(db(), async (tx, audit) => {
-        const job = await lockedJob(tx, jobId).catch(() => null);
-        if (
-          !job ||
-          job.companyId !== actor.companyId ||
-          !(await isWorkerOnJob(tx, actor, jobId))
-        )
-          throw notFound();
+        const { job } = await lockedWorkerJob(tx, actor, jobId);
         if (
           (await tx.workEvidence.count({
             where: { companyId: actor.companyId, jobId },
