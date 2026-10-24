@@ -12,6 +12,7 @@ export default async function ExpensesPage() {
     <ExpensesList
       office={office}
       canApprove={can(actor.role, "expense.approve")}
+      canSubmit={can(actor.role, "expense.submit_own")}
     />
   );
 }

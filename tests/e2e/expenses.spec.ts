@@ -176,6 +176,18 @@ test("manager approves from the queue with a fixed snapshot, then reverses; acco
   // Accountant sees it read-only.
   await page.context().clearCookies();
   await signIn(page, "accountant");
+  // Accountants read the office list but get no submission flow.
+  await page.goto("/expenses");
+  await page.getByLabel("Show").selectOption("approved", { timeout: 30_000 });
+  await expect(
+    page.getByRole("link", {
+      name: `Synthetic conduit ${suffix}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "New expense" })).toHaveCount(
+    0,
+  );
   await page.goto(`/expenses/${submitted.id}`);
   await expect(snapshot).toBeVisible({ timeout: 30_000 });
   await expect(

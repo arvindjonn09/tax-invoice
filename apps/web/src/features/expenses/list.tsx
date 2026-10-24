@@ -25,9 +25,12 @@ type Page<T> = { expenses: T[]; total: number; pageSize: number };
 export function ExpensesList({
   office,
   canApprove,
+  canSubmit,
 }: {
   office: boolean;
   canApprove: boolean;
+  /** Accountants read the office list but can't submit (no upload either). */
+  canSubmit: boolean;
 }) {
   const router = useRouter();
   const [creating, setCreating] = useState(false);
@@ -95,7 +98,7 @@ export function ExpensesList({
             : "Claim purchases for your assigned jobs. The office approves them."
         }
         actions={
-          creating ? null : (
+          creating || !canSubmit ? null : (
             <Button
               onClick={() => {
                 setMessage(null);
@@ -107,7 +110,7 @@ export function ExpensesList({
           )
         }
       />
-      {creating ? (
+      {creating && canSubmit ? (
         <section className="rounded-lg border bg-card p-6">
           <h2 className="mb-4 text-xl font-semibold">New expense</h2>
           {form()}
