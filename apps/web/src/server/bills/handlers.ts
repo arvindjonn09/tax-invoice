@@ -425,12 +425,7 @@ export async function expenseBalances(
             (total, adjustment) => total + adjustment.creditableGstCents,
             0n,
           );
-        const {
-          reversedBy: _reversedBy,
-          supplierPaymentAllocations: _allocations,
-          supplierPaymentGstAdjustments: _adjustments,
-          ...row
-        } = expense;
+
         return [
           expense.id,
           {
@@ -439,7 +434,8 @@ export async function expenseBalances(
             creditableGst: expense.creditableGstCents ?? 0n,
             paid,
             attributed,
-            expense: row,
+            // The extra included relations are harmless on the payee read.
+            expense: expense as Expense,
           },
         ];
       }),
