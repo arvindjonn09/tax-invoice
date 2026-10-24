@@ -33,10 +33,16 @@ async function fixture(page: Page, createJob = true) {
   )!.userId;
   const employees = (await (
     await page.request.get(
-      "/api/employees?status=all&q=Synthetic%20Screen%20Employee",
+      // Other specs may already have linked this user under another name.
+      "/api/employees?status=all&pageSize=100",
     )
   ).json()) as {
-    employees: { id: string; userId: string | null; isActive: boolean }[];
+    employees: {
+      id: string;
+      name: string;
+      userId: string | null;
+      isActive: boolean;
+    }[];
   };
   let employee = employees.employees.find((row) => row.userId === userId);
   if (!employee)
@@ -168,7 +174,7 @@ test("owner creates a job, schedules a visit, assigns and ends work, and changes
     .click();
   await expect(
     page.getByRole("heading", {
-      name: "Synthetic Screen Employee",
+      name: seeded.employee.name,
       exact: true,
     }),
   ).toBeVisible();
