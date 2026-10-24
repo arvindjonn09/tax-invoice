@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect, type Page } from "@playwright/test";
 import { requireAccounts, signIn } from "./accounts";
+import { sharedEmployee } from "./shared-employee";
 test.setTimeout(120_000);
 test.beforeEach(() => {
   requireAccounts();
@@ -23,32 +24,7 @@ async function write<T>(
 /** A job with the synthetic employee assigned to the whole job (as owner). */
 async function fixture(page: Page) {
   const suffix = randomUUID().slice(0, 8);
-  const accounts = requireAccounts();
-  const users = (await (
-    await page.request.get(
-      `/api/users?q=${encodeURIComponent(accounts.emails.employee)}`,
-    )
-  ).json()) as { members: { userId: string; role: string }[] };
-  const userId = users.members.find(
-    (member) => member.role === "employee",
-  )!.userId;
-  type Employee = { id: string; userId: string | null; isActive: boolean };
-  const { employees } = (await (
-    await page.request.get("/api/employees?status=all&pageSize=100")
-  ).json()) as { employees: Employee[] };
-  const employee =
-    employees.find((row) => row.userId === userId) ??
-    (await write<Employee>(page, "/api/employees", {
-      name: "Synthetic Expense Employee",
-      userId,
-    }));
-  if (!employee.isActive)
-    await write(
-      page,
-      `/api/employees/${employee.id}`,
-      { isActive: true },
-      "PATCH",
-    );
+  const employee = await sharedEmployee(page, "Synthetic Expense Employee");
   const customer = await write<{ id: string }>(page, "/api/customers", {
     name: `Synthetic expense client ${suffix}`,
   });
