@@ -2,6 +2,7 @@ import { notFound } from "@jobflow/authz";
 import {
   draftGstReport,
   profitabilityReport,
+  jobProfit,
   outstandingCommitment,
   type ReportFilter,
 } from "@jobflow/domain";
@@ -91,39 +92,63 @@ export function reportHandlers(db: () => PrismaClient) {
                 (!query.jobId || query.jobId === job.id) &&
                 (!query.customerId || query.customerId === job.customerId),
             )
-            .map((job) => ({
-              jobId: job.id,
-              customerId: job.customerId,
-              reference: job.reference,
-              title: job.title,
-              status: job.status,
-              currentAgreedRevenueExclusive: job.agreedPriceExclusiveCents,
-              committedCost: source.acceptances
-                .filter(
-                  (a) =>
-                    a.jobId === job.id && businessDay(a.acceptedAt) <= query.to,
-                )
-                .reduce(
-                  (total, a) =>
-                    total +
-                    outstandingCommitment({
-                      committed: a.committedCostCents,
-                      committedExclusive: a.exclusiveCents,
-                      billedExclusive: source.bills
-                        .filter(
-                          (b) =>
-                            b.offerId === a.offerId &&
-                            b.issuedOn.toISOString().slice(0, 10) <= query.to &&
-                            (!b.voidedAt ||
-                              new Intl.DateTimeFormat("en-CA", {
-                                timeZone: "Australia/Sydney",
-                              }).format(b.voidedAt) > query.to),
-                        )
-                        .map((b) => b.exclusiveCents),
-                    }),
-                  0n,
-                ),
-            }));
+            .map((job) => {
+              const estimates = source.quotes.filter(
+                (quote) =>
+                  quote.jobId === job.id &&
+                  quote.decidedAt &&
+                  businessDay(quote.decidedAt) <= query.to,
+              );
+              return {
+                jobId: job.id,
+                customerId: job.customerId,
+                reference: job.reference,
+                title: job.title,
+                status: job.status,
+                currentAgreedRevenueExclusive: job.agreedPriceExclusiveCents,
+                estimated: estimates.length
+                  ? {
+                      asOf: query.to,
+                      quoteIds: estimates.map((quote) => quote.id),
+                      ...jobProfit({
+                        revenueExclusive: estimates.map(
+                          (quote) => quote.exclusiveCents,
+                        ),
+                        jobCosts: estimates.map(
+                          (quote) => quote.estimatedCostCents,
+                        ),
+                      }),
+                    }
+                  : null,
+                committedCost: source.acceptances
+                  .filter(
+                    (a) =>
+                      a.jobId === job.id &&
+                      businessDay(a.acceptedAt) <= query.to,
+                  )
+                  .reduce(
+                    (total, a) =>
+                      total +
+                      outstandingCommitment({
+                        committed: a.committedCostCents,
+                        committedExclusive: a.exclusiveCents,
+                        billedExclusive: source.bills
+                          .filter(
+                            (b) =>
+                              b.offerId === a.offerId &&
+                              b.issuedOn.toISOString().slice(0, 10) <=
+                                query.to &&
+                              (!b.voidedAt ||
+                                new Intl.DateTimeFormat("en-CA", {
+                                  timeZone: "Australia/Sydney",
+                                }).format(b.voidedAt) > query.to),
+                          )
+                          .map((b) => b.exclusiveCents),
+                      }),
+                    0n,
+                  ),
+              };
+            });
           return privateJson(
             json({
               range: query,

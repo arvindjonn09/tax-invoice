@@ -1,7 +1,7 @@
 # Profit and draft GST reporting (#54/#55, in progress)
 
-This branch is stacked on #143 / #127 at the owner's request to start M4 while
-those dependencies are reviewed. It must not merge until the prerequisite fixes
+The owner requested work on M4 before every prerequisite merged. Receipts and
+bills are now on main; quote estimate integration includes the pending #144 head. It must not merge until the prerequisite fixes
 are merged, main is integrated, CI passes and the other agent reviews the head.
 
 ## Shared source of truth
@@ -22,7 +22,11 @@ historical reports. Dates are inclusive. Cancelled jobs retain their costs.
   `job.profit.read`. It returns period totals, job/customer breakdowns, unallocated
   general expenses, source facts, and unbilled commitments at the range end.
   `positions.currentAgreedRevenueExclusive` explicitly means the job's **current**
-  recorded agreed estimate; it is not a historical quote snapshot.
+  recorded agreed estimate; it is not a historical quote snapshot. `positions[].estimated` separately sums
+  accepted quote/variation snapshots as of the range end (revenue, cost, profit,
+  margin and source quote IDs). It is null when no accepted estimate exists;
+  drafts and later acceptances are excluded. Estimates never add actual revenue
+  or incurred cost.
 - `GET /api/reports/gst` requires `gst_report.read` (owner/accountant). G1 excludes
   out-of-scope amounts; 1A/1B are separated. Every response says **Draft BAS/GST
   summary — not lodged**. Profit responses contain no GST channels.
@@ -78,8 +82,7 @@ barrier-based close-versus-writer test are included. Labour/accepted-offer snaps
 are seeded records; #59 remains the full browser workflow through all entry UIs.
 
 This is a draft backend PR, **not completion of M4**. Remaining before closing
-#54/#55: independent financial/security review, richer quote estimate/cost source
-integration after #44, broader correction/basis-boundary regressions (including out-of-order/backdated settlement rounding) and dependency
+#54/#55: independent financial/security review, broader correction/basis-boundary regressions (including out-of-order/backdated settlement rounding) and dependency
 sync. Follow-on M4 work: #56 exports/ageing/cash, #57 real dashboard, #58 report UI,
 #142 late-evidence reclassification and #59 end-to-end reconciliation. No UI,
 production deployment or accountant sign-off is included here.

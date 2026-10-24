@@ -38,6 +38,7 @@ export async function financialEvents(
     manualAdjustments,
     acceptances,
     postings,
+    quotes,
   ] = await Promise.all([
     tx.job.findMany({
       where: { companyId },
@@ -69,6 +70,16 @@ export async function financialEvents(
       { source_id: string; original_on: Date; effective_on: Date }[]
     >`
       SELECT source_id,original_on,effective_on FROM gst_source_postings WHERE company_id=${companyId}::uuid`,
+    tx.quote.findMany({
+      where: { companyId, status: "accepted" },
+      select: {
+        id: true,
+        jobId: true,
+        decidedAt: true,
+        exclusiveCents: true,
+        estimatedCostCents: true,
+      },
+    }),
   ]);
   const periods: GstRegistrationPeriod[] = registrations.map((p) => ({
     startsOn: toDay(p.startsOn),
@@ -427,5 +438,5 @@ export async function financialEvents(
   events.sort(
     (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
   );
-  return { events, jobs, periods, bills, acceptances };
+  return { events, jobs, periods, bills, acceptances, quotes };
 }

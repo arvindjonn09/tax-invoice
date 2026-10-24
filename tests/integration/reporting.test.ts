@@ -7,6 +7,7 @@ import {
   isLockedPeriodError,
 } from "../../apps/web/src/server/authz/policy";
 import { invoiceHandlers } from "../../apps/web/src/server/invoices/handlers";
+import { quoteHandlers } from "../../apps/web/src/server/quotes/handlers";
 import { receiptHandlers } from "../../apps/web/src/server/receipts/handlers";
 import {
   billHandlers,
@@ -361,6 +362,124 @@ describe("database reports reconcile GST and profit together", () => {
         });
       else expect(after.gst).toEqual(before.gst);
     }, 120000);
+  for (const registered of [true, false])
+    it(`compares accepted quote estimates with actuals (registered=${registered})`, async () => {
+      const f = await fixture(registered, "non_cash");
+      await db.$executeRaw`INSERT INTO number_sequences(company_id,kind,last_value) VALUES(${f.company.id}::uuid,'job',1)`;
+      const quotes = quoteHandlers(() => db);
+      const draft = await quotes.create({
+        actor: f.actor,
+        request: req({
+          customerId: f.customer.id,
+          title: "Synthetic estimated work",
+          lines: [
+            {
+              description: "Synthetic estimate",
+              quantity: "1",
+              unitPriceCents: "250000",
+              taxCode: registered ? "TAXABLE_10" : "OUT_OF_SCOPE",
+              estimatedCostCents: "145000",
+            },
+          ],
+        }),
+        context: undefined,
+      });
+      expect(draft.status, await draft.clone().text()).toBe(201);
+      const id = (await draft.json()).id as string;
+      expect(
+        (
+          await quotes.send({
+            actor: f.actor,
+            request: req(),
+            context: context(id),
+          })
+        ).status,
+      ).toBe(200);
+      const accepted = await quotes.accept({
+        actor: f.actor,
+        request: req(),
+        context: context(id),
+      });
+      expect(accepted.status, await accepted.clone().text()).toBe(200);
+      const jobId = (await accepted.json()).jobId as string;
+      const read = async (to: string) =>
+        (
+          await reportHandlers(() => db).profitability({
+            actor: f.actor,
+            request: new Request(
+              `${origin}/api/reports/profitability?from=2026-01-01&to=${to}&jobId=${jobId}`,
+            ),
+            context: undefined,
+          })
+        ).json();
+      const report = await read(sydneyToday());
+      expect(report.positions[0].estimated).toMatchObject({
+        quoteIds: [id],
+        revenue: "250000",
+        cost: "145000",
+        profit: "105000",
+        marginBasisPoints: "4200",
+      });
+      expect(report.totals).toMatchObject({
+        revenue: "0",
+        cost: "0",
+        profit: "0",
+        marginBasisPoints: null,
+      });
+      expect((await read("2026-09-30")).positions[0].estimated).toBeNull();
+      // Accepted variations add their own snapshot once; draft variations do not.
+      const variation = await quotes.create({
+        actor: f.actor,
+        request: req({
+          kind: "variation",
+          customerId: f.customer.id,
+          jobId,
+          title: "Synthetic variation",
+          lines: [
+            {
+              description: "Additional work",
+              quantity: "1",
+              unitPriceCents: "20000",
+              taxCode: registered ? "TAXABLE_10" : "OUT_OF_SCOPE",
+              estimatedCostCents: "12000",
+            },
+          ],
+        }),
+        context: undefined,
+      });
+      expect(variation.status, await variation.clone().text()).toBe(201);
+      const variationId = (await variation.json()).id as string;
+      expect((await read(sydneyToday())).positions[0].estimated.cost).toBe(
+        "145000",
+      );
+      expect(
+        (
+          await quotes.send({
+            actor: f.actor,
+            request: req(),
+            context: context(variationId),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await quotes.accept({
+            actor: f.actor,
+            request: req(),
+            context: context(variationId),
+          })
+        ).status,
+      ).toBe(200);
+      const after = await read(sydneyToday());
+      expect(after.positions[0].estimated).toMatchObject({
+        revenue: "270000",
+        cost: "157000",
+        profit: "113000",
+        marginBasisPoints: "4185",
+      });
+      expect(after.positions[0].estimated.quoteIds).toHaveLength(2);
+      expect(after.totals.profit).toBe("0");
+    });
   it("authenticates reports, denies workers and manager GST, and hides foreign objects", async () => {
     const f = await fixture(false, "non_cash");
     const foreign = await fixture(false, "non_cash");
