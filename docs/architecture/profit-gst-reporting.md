@@ -30,7 +30,7 @@ historical reports. Dates are inclusive. Cancelled jobs retain their costs.
 - Registration and source-date accounting basis select cash/non-cash facts. Cash
   uses stored allocation GST plus dated void adjustments; mixed out-of-scope G1
   uses cumulative integer rounding. Non-cash uses the earlier invoice/payment
-  date. Explicit accountant adjustments are separate dated facts.
+  date, excluding voided settlements. Explicit accountant adjustments are separate dated facts.
 
 Basis changes and complex adjustments require accountant review: manual
 adjustments are supported; there is no automatic opening-balance conversion
@@ -55,11 +55,17 @@ adjustment notes: [GSTR 2013/2](https://www.ato.gov.au/law/view/document?LocID=%
   revision, with finalisation metadata. Filtered drill-down is a live source view.
 
 Database triggers take a shared per-company advisory transaction gate for source
-writes and reject dates in closed periods. Closing/amending takes that same gate
+writes. An immutable `gst_source_postings` row preserves each source tax date.
+A newly recorded or approved late item keeps its original business date for
+profit and posts GST on the current Sydney day when its tax date is closed.
+Later finalisations do not move that persisted date. Finalised snapshots remain
+unchanged; filtered live source reports can show the newly recorded costs. Closing/amending takes that same gate
 exclusively before reading. It waits for in-flight financial writers and does not
 take their row locks. Registration/basis changes cannot change coverage of closed
 days. Backdated non-cash settlements cannot shift tax out of a closed source
-period. The shared API policy maps the lock refusal to409. Old documents can be
+period. Voiding an earlier non-cash settlement also checks the period it would
+remove attribution from. The shared API policy maps SQLSTATE55000 with the fixed
+lock marker to409; user text alone cannot select that response. Old documents can be
 voided in an open current period: this posts a reversal, not a historical edit.
 
 ## Verification and remaining work

@@ -26,6 +26,14 @@ CREATE TABLE gst_manual_adjustments (
  FOREIGN KEY(company_id,created_by) REFERENCES memberships(company_id,user_id)
 );
 CREATE INDEX gst_manual_adjustments_company_id_effective_on_idx ON gst_manual_adjustments(company_id,effective_on);
+-- Original business dates remain intact. These immutable postings record the
+-- open tax date chosen under the same gate as period finalisation.
+CREATE TABLE gst_source_postings (
+ company_id uuid NOT NULL REFERENCES companies(id), source_id uuid NOT NULL,
+ original_on date NOT NULL, effective_on date NOT NULL,
+ PRIMARY KEY(company_id,source_id,original_on), CHECK(effective_on>=original_on)
+);
+CREATE TRIGGER gst_source_postings_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON gst_source_postings FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
 -- Writers share this gate; finalisation takes it exclusively before reading.
 -- Finalisation never takes source-row locks, avoiding reversed row-lock order.
 CREATE FUNCTION jobflow_reporting_gate(cid uuid) RETURNS void LANGUAGE sql AS $$
@@ -39,10 +47,23 @@ BEGIN
  END IF;
 END;
 $$;
-CREATE FUNCTION jobflow_guard_report_source() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE r jsonb; cid uuid; day date; parent_day date;
+CREATE FUNCTION jobflow_record_gst_posting(cid uuid, sid uuid, day date) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE posting_day date;
 BEGIN
- r:=to_jsonb(NEW); cid:=(r->>'company_id')::uuid;
+ PERFORM jobflow_reporting_gate(cid);
+ posting_day:=day;
+ IF EXISTS(SELECT 1 FROM gst_periods WHERE company_id=cid AND day BETWEEN starts_on AND ends_on) THEN
+  posting_day:=(clock_timestamp() AT TIME ZONE 'Australia/Sydney')::date;
+ END IF;
+ PERFORM jobflow_assert_open_period(cid,posting_day);
+ INSERT INTO gst_source_postings(company_id,source_id,original_on,effective_on)
+ VALUES(cid,sid,day,posting_day) ON CONFLICT DO NOTHING;
+END;
+$$;
+CREATE FUNCTION jobflow_guard_report_source() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE r jsonb; cid uuid; day date; parent_day date; sid uuid; settlement_day date;
+BEGIN
+ r:=to_jsonb(NEW); cid:=(r->>'company_id')::uuid; sid:=(r->>'id')::uuid;
  IF TG_TABLE_NAME='invoices' THEN
   IF r->>'status'='draft' THEN RETURN NEW; END IF;
   day:=CASE WHEN r->>'status'='void' THEN ((r->>'voided_at')::timestamptz AT TIME ZONE 'Australia/Sydney')::date ELSE (r->>'issue_date')::date END;
@@ -54,23 +75,50 @@ BEGIN
  ELSIF TG_TABLE_NAME IN ('supplier_bills','customer_receipts','supplier_payments') THEN
   day:=CASE WHEN r->>'voided_at' IS NOT NULL THEN ((r->>'voided_at')::timestamptz AT TIME ZONE 'Australia/Sydney')::date
     ELSE COALESCE((r->>'issued_on')::date,(r->>'received_on')::date,(r->>'paid_on')::date) END;
+  -- Removing an earlier non-cash settlement must not move tax out of a
+  -- finalised period. This is a correction, unlike a newly received late item.
+  IF TG_OP='UPDATE' AND r->>'voided_at' IS NOT NULL THEN
+   IF TG_TABLE_NAME='customer_receipts' THEN
+    SELECT min(i.issue_date) INTO parent_day FROM receipt_allocations a JOIN invoices i ON i.id=a.invoice_id
+     WHERE a.receipt_id=sid AND i.issue_date>(r->>'received_on')::date;
+    SELECT effective_on INTO settlement_day FROM gst_source_postings WHERE company_id=cid AND source_id=sid AND original_on=(r->>'received_on')::date;
+    settlement_day:=COALESCE(settlement_day,(r->>'received_on')::date);
+    IF settlement_day<parent_day AND EXISTS(SELECT 1 FROM company_gst_registrations WHERE company_id=cid AND basis='non_cash' AND parent_day>=starts_on AND (ends_on IS NULL OR parent_day<=ends_on)) THEN
+     PERFORM jobflow_assert_open_period(cid,settlement_day);
+    END IF;
+   ELSIF TG_TABLE_NAME='supplier_payments' THEN
+    SELECT min(b.issued_on) INTO parent_day FROM supplier_payment_allocations a JOIN supplier_bills b ON b.id=a.bill_id
+     WHERE a.payment_id=sid AND b.issued_on>(r->>'paid_on')::date;
+    SELECT effective_on INTO settlement_day FROM gst_source_postings WHERE company_id=cid AND source_id=sid AND original_on=(r->>'paid_on')::date;
+    settlement_day:=COALESCE(settlement_day,(r->>'paid_on')::date);
+    IF settlement_day<parent_day AND EXISTS(SELECT 1 FROM company_gst_registrations WHERE company_id=cid AND basis='non_cash' AND parent_day>=starts_on AND (ends_on IS NULL OR parent_day<=ends_on)) THEN
+     PERFORM jobflow_assert_open_period(cid,settlement_day);
+    END IF;
+   END IF;
+  END IF;
  ELSIF TG_TABLE_NAME='receipt_allocations' THEN
-  SELECT received_on INTO day FROM customer_receipts WHERE id=(r->>'receipt_id')::uuid;
+  sid:=(r->>'receipt_id')::uuid;
+  SELECT received_on INTO day FROM customer_receipts WHERE id=sid;
+  PERFORM jobflow_record_gst_posting(cid,sid,day);
+  SELECT effective_on INTO day FROM gst_source_postings WHERE company_id=cid AND source_id=sid AND original_on=day;
   SELECT issue_date INTO parent_day FROM invoices WHERE id=(r->>'invoice_id')::uuid;
   IF day<parent_day AND EXISTS(SELECT 1 FROM company_gst_registrations WHERE company_id=cid AND basis='non_cash' AND parent_day>=starts_on AND (ends_on IS NULL OR parent_day<=ends_on)) THEN
    PERFORM jobflow_assert_open_period(cid,parent_day);
   END IF;
  ELSIF TG_TABLE_NAME='supplier_payment_allocations' THEN
-  SELECT paid_on INTO day FROM supplier_payments WHERE id=(r->>'payment_id')::uuid;
+  sid:=(r->>'payment_id')::uuid;
+  SELECT paid_on INTO day FROM supplier_payments WHERE id=sid;
+  PERFORM jobflow_record_gst_posting(cid,sid,day);
+  SELECT effective_on INTO day FROM gst_source_postings WHERE company_id=cid AND source_id=sid AND original_on=day;
   SELECT issued_on INTO parent_day FROM supplier_bills WHERE id=(r->>'bill_id')::uuid;
   IF day<parent_day AND EXISTS(SELECT 1 FROM company_gst_registrations WHERE company_id=cid AND basis='non_cash' AND parent_day>=starts_on AND (ends_on IS NULL OR parent_day<=ends_on)) THEN
    PERFORM jobflow_assert_open_period(cid,parent_day);
   END IF;
- ELSE day:=(r->>'adjusted_on')::date; END IF;
- PERFORM jobflow_assert_open_period(cid,day);
+ ELSE day:=(r->>'adjusted_on')::date; sid:=COALESCE((r->>'receipt_id')::uuid,(r->>'payment_id')::uuid,sid); END IF;
+ PERFORM jobflow_record_gst_posting(cid,sid,day);
  -- A paid-at-purchase expense may have a distinct cash date.
  IF TG_TABLE_NAME='expenses' AND r->>'paid_on' IS NOT NULL THEN
-  PERFORM jobflow_assert_open_period(cid,(r->>'paid_on')::date);
+  PERFORM jobflow_record_gst_posting(cid,sid,(r->>'paid_on')::date);
  END IF;
  RETURN NEW;
 END;

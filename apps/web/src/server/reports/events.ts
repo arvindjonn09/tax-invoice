@@ -37,6 +37,7 @@ export async function financialEvents(
     paymentAdjustments,
     manualAdjustments,
     acceptances,
+    postings,
   ] = await Promise.all([
     tx.job.findMany({
       where: { companyId },
@@ -64,6 +65,10 @@ export async function financialEvents(
     tx.supplierPaymentGstAdjustment.findMany({ where: { companyId } }),
     tx.gstManualAdjustment.findMany({ where: { companyId } }),
     tx.contractorAcceptance.findMany({ where: { companyId } }),
+    tx.$queryRaw<
+      { source_id: string; original_on: Date; effective_on: Date }[]
+    >`
+      SELECT source_id,original_on,effective_on FROM gst_source_postings WHERE company_id=${companyId}::uuid`,
   ]);
   const periods: GstRegistrationPeriod[] = registrations.map((p) => ({
     startsOn: toDay(p.startsOn),
@@ -72,6 +77,14 @@ export async function financialEvents(
   }));
   const customerByJob = new Map(jobs.map((j) => [j.id, j.customerId]));
   const events: ReportEvent[] = [];
+  const postingDates = new Map(
+    postings.map((p) => [
+      `${p.source_id}:${toDay(p.original_on)}`,
+      toDay(p.effective_on),
+    ]),
+  );
+  const taxDay = (source: string, day: string) =>
+    postingDates.get(`${source}:${day}`) ?? day;
   const emit = (
     id: string,
     sourceId: string,
@@ -85,7 +98,10 @@ export async function financialEvents(
     events.push({
       id,
       sourceId,
-      date,
+      date:
+        channel === "gst_sales" || channel === "gst_purchases"
+          ? taxDay(sourceId, date)
+          : date,
       jobId,
       customerId,
       channel,
@@ -117,10 +133,10 @@ export async function financialEvents(
     const basis = status.basis;
     if (basis === "non_cash") {
       const date = earliest(
-        day,
+        taxDay(row.id, day),
         row.allocations
-          .filter((a) => a.receipt.kind === "receipt")
-          .map((a) => toDay(a.receipt.receivedOn)),
+          .filter((a) => a.receipt.kind === "receipt" && !a.receipt.voidedAt)
+          .map((a) => taxDay(a.receiptId, toDay(a.receipt.receivedOn))),
       );
       if (registered(date))
         emit(
@@ -252,8 +268,10 @@ export async function financialEvents(
     const status = gstStatusOn(periods, day);
     if (status.basis === "non_cash") {
       const date = earliest(
-        day,
-        row.allocations.map((a) => toDay(a.payment.paidOn)),
+        taxDay(row.id, day),
+        row.allocations
+          .filter((a) => !a.payment.voidedAt)
+          .map((a) => taxDay(a.paymentId, toDay(a.payment.paidOn))),
       );
       if (registered(date))
         emit(

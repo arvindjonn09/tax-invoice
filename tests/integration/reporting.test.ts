@@ -2,7 +2,10 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAuth } from "../../apps/web/src/server/auth/config";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
-import { createWithPolicy } from "../../apps/web/src/server/authz/policy";
+import {
+  createWithPolicy,
+  isLockedPeriodError,
+} from "../../apps/web/src/server/authz/policy";
 import { invoiceHandlers } from "../../apps/web/src/server/invoices/handlers";
 import { receiptHandlers } from "../../apps/web/src/server/receipts/handlers";
 import {
@@ -265,7 +268,17 @@ async function fixture(registered: boolean, basis: "cash" | "non_cash") {
     });
     expect(decision.status, await decision.clone().text()).toBe(200);
   }
-  return { actor, user, company, customer, job, invoice, supplier, expenseIds };
+  return {
+    actor,
+    user,
+    company,
+    customer,
+    job,
+    invoice,
+    supplier,
+    expenseIds,
+    doc,
+  };
 }
 async function reports(actor: Actor) {
   const handler = reportHandlers(() => db),
@@ -465,6 +478,223 @@ describe("database reports reconcile GST and profit together", () => {
 });
 
 describe("locked GST periods and explicit amendment history", () => {
+  it("only maps real locked-period SQLSTATE errors to a conflict", () => {
+    expect(
+      isLockedPeriodError(new Error("user text jobflow_period_locked")),
+    ).toBe(false);
+    expect(
+      isLockedPeriodError({ code: "23505", message: "jobflow_period_locked" }),
+    ).toBe(false);
+    expect(
+      isLockedPeriodError({
+        meta: {
+          driverAdapterError: {
+            cause: {
+              originalCode: "55000",
+              originalMessage: "jobflow_period_locked",
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+  it("refuses to void an early non-cash settlement out of a finalised period", async () => {
+    const f = await fixture(true, "non_cash");
+    const receipts = receiptHandlers(() => db),
+      payments = supplierPaymentHandlers(() => db);
+    const receipt = await receipts.create({
+      actor: f.actor,
+      request: req({
+        customerId: f.customer.id,
+        receivedOn: "2026-06-20",
+        amountCents: "1000",
+        method: "card",
+        allocations: [{ invoiceId: f.invoice.id, amountCents: "1000" }],
+      }),
+      context: undefined,
+    });
+    const payment = await payments.create({
+      actor: f.actor,
+      request: req({
+        paidOn: "2026-06-20",
+        amountCents: "1000",
+        method: "card",
+        allocations: [{ billId: f.supplier.id, amountCents: "1000" }],
+      }),
+      context: undefined,
+    });
+    expect(receipt.status).toBe(201);
+    expect(payment.status).toBe(201);
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({
+        from: "2026-04-01",
+        to: "2026-06-30",
+        note: "Synthetic deposit close",
+      }),
+      context: undefined,
+    });
+    expect(close.status).toBe(201);
+    for (const [handler, response] of [
+      [receipts, receipt],
+      [payments, payment],
+    ] as const) {
+      const id = (await response.json()).id as string;
+      await expect(
+        handler.void({
+          actor: f.actor,
+          request: req({ reason: "Synthetic corrected date" }),
+          context: context(id),
+        }),
+      ).rejects.toThrow(/jobflow_period_locked/);
+    }
+    expect((await reports(f.actor)).gst).toMatchObject({
+      oneA: "0",
+      oneB: "1500",
+    });
+  });
+  it("reattributes non-cash GST when mistaken early settlements are voided", async () => {
+    const f = await fixture(true, "non_cash");
+    const receipts = receiptHandlers(() => db),
+      payments = supplierPaymentHandlers(() => db);
+    const receipt = await receipts.create({
+      actor: f.actor,
+      request: req({
+        customerId: f.customer.id,
+        receivedOn: "2026-06-20",
+        amountCents: "1000",
+        method: "card",
+        allocations: [{ invoiceId: f.invoice.id, amountCents: "1000" }],
+      }),
+      context: undefined,
+    });
+    const payment = await payments.create({
+      actor: f.actor,
+      request: req({
+        paidOn: "2026-06-20",
+        amountCents: "1000",
+        method: "card",
+        allocations: [{ billId: f.supplier.id, amountCents: "1000" }],
+      }),
+      context: undefined,
+    });
+    expect(receipt.status).toBe(201);
+    expect(payment.status).toBe(201);
+    const read = async () =>
+      (
+        await reportHandlers(() => db).gst({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/reports/gst?from=2026-04-01&to=2026-06-30`,
+          ),
+          context: undefined,
+        })
+      ).json();
+    expect(await read()).toMatchObject({ oneA: "25000", oneB: "9000" });
+    for (const [handler, response] of [
+      [receipts, receipt],
+      [payments, payment],
+    ] as const) {
+      const id = (await response.json()).id as string;
+      const result = await handler.void({
+        actor: f.actor,
+        request: req({ reason: "Synthetic corrected date" }),
+        context: context(id),
+      });
+      expect(result.status, await result.clone().text()).toBe(200);
+    }
+    expect(await read()).toMatchObject({ oneA: "0", oneB: "0" });
+    expect((await reports(f.actor)).gst).toMatchObject({
+      oneA: "25000",
+      oneB: "10500",
+    });
+  });
+  it("records late costs on their business dates and GST in the open period", async () => {
+    const f = await fixture(true, "non_cash");
+    const closed = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({
+        from: "2026-07-01",
+        to: "2026-09-30",
+        note: "Synthetic close",
+      }),
+      context: undefined,
+    });
+    expect(closed.status).toBe(201);
+    const snapshot = (await reports(f.actor)).gst;
+    const bill = await billHandlers(() => db).create({
+      actor: f.actor,
+      request: req({
+        jobId: f.job.id,
+        supplierName: "Synthetic late supplier",
+        supplierGstRegistered: true,
+        supplierAbn: syntheticAbn("545454547"),
+        issuedOn: "2026-08-15",
+        lines: [
+          {
+            description: "Late work",
+            taxCode: "TAXABLE_10",
+            exclusiveCents: "10000",
+            gstCents: "1000",
+          },
+        ],
+        documentId: await f.doc(),
+        evidenceVerified: true,
+      }),
+      context: undefined,
+    });
+    expect(bill.status, await bill.clone().text()).toBe(201);
+    const handler = expenseHandlers(() => db);
+    const expense = await handler.create({
+      actor: f.actor,
+      request: req({
+        jobId: f.job.id,
+        category: "materials",
+        description: "Late materials",
+        purchasedOn: "2026-08-16",
+        priceEntry: "exclusive",
+        amountCents: "2000",
+        taxCode: "TAXABLE_10",
+        receiptDocumentId: await f.doc(),
+        settlement: "paid_at_purchase",
+        paymentMethod: "card",
+      }),
+      context: undefined,
+    });
+    expect(expense.status, await expense.clone().text()).toBe(201);
+    const id = (await expense.json()).id as string;
+    const approval = await handler.decide({
+      actor: f.actor,
+      request: req({ decision: "approve", evidenceVerified: true }),
+      context: context(id),
+    });
+    expect(approval.status, await approval.clone().text()).toBe(200);
+    const report = await reports(f.actor);
+    expect(report.profit.totals).toMatchObject({
+      cost: "157000",
+      profit: "93000",
+    });
+    expect(report.gst).toEqual(snapshot);
+    const current = await reportHandlers(() => db).gst({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports/gst?from=2026-10-01&to=${sydneyToday()}`,
+      ),
+      context: undefined,
+    });
+    expect(await current.json()).toMatchObject({ oneB: "1200" });
+    const rows = await db.$queryRaw<
+      { effective_on: Date }[]
+    >`SELECT effective_on FROM gst_source_postings WHERE company_id=${f.company.id}::uuid AND source_id=${id}::uuid`;
+    expect(
+      rows.some(
+        (r) => r.effective_on.toISOString().slice(0, 10) === sydneyToday(),
+      ),
+    ).toBe(true);
+    await expect(
+      db.$executeRaw`DELETE FROM gst_source_postings WHERE company_id=${f.company.id}::uuid`,
+    ).rejects.toThrow();
+  });
   it("freezes source dates/settings and records an immutable amended revision", async () => {
     const f = await fixture(true, "non_cash");
     const periods = periodHandlers(() => db);
@@ -499,7 +729,7 @@ describe("locked GST periods and explicit amendment history", () => {
         }),
         context: undefined,
       });
-    await expect(createReceipt()).rejects.toThrow(/jobflow_period_locked/);
+    expect((await createReceipt()).status).toBe(201);
     await expect(
       receiptHandlers(() => db).create({
         actor: f.actor,
@@ -535,7 +765,7 @@ describe("locked GST periods and explicit amendment history", () => {
     expect(login.status).toBe(200);
     const blockedRequest = req({
       customerId: f.customer.id,
-      receivedOn: "2026-07-16",
+      receivedOn: "2026-06-01",
       amountCents: "100",
       method: "card",
       allocations: [{ invoiceId: f.invoice.id, amountCents: "100" }],
@@ -558,7 +788,7 @@ describe("locked GST periods and explicit amendment history", () => {
 
     expect(
       await db.customerReceipt.count({ where: { companyId: f.company.id } }),
-    ).toBe(0);
+    ).toBe(1);
     await expect(
       db.companyGstRegistration.updateMany({
         where: { companyId: f.company.id },

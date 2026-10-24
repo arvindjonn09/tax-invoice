@@ -17,6 +17,24 @@ import {
 } from "../http/guards";
 import { log, safeError } from "../log";
 
+/** PostgreSQL and Prisma adapter errors must carry the actual SQLSTATE. */
+export function isLockedPeriodError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const row = error as Record<string, unknown>;
+  const state = row.code ?? row.originalCode;
+  if (
+    state === "55000" &&
+    [row.message, row.originalMessage].some(
+      (value) =>
+        typeof value === "string" && value.includes("jobflow_period_locked"),
+    )
+  )
+    return true;
+  return [row.meta, row.cause, row.driverAdapterError].some(
+    isLockedPeriodError,
+  );
+}
+
 export type PolicyDependencies = {
   auth: () => Auth;
   db: () => PrismaClient;
@@ -82,7 +100,7 @@ export function createWithPolicy(deps: PolicyDependencies) {
             { status: error.status },
           );
         }
-        if (String(error).includes("jobflow_period_locked"))
+        if (isLockedPeriodError(error))
           return privateJson(
             {
               error:

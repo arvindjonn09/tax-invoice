@@ -150,6 +150,7 @@ model Company {
   @@map("companies")
   gstPeriods GstPeriod[]
   gstManualAdjustments GstManualAdjustment[]
+  gstSourcePostings GstSourcePosting[]
 
 }
 
@@ -1314,4 +1315,15 @@ model GstManualAdjustment {
   @@unique([companyId,idempotencyKey])
   @@index([companyId, effectiveOn])
   @@map("gst_manual_adjustments")
+}
+
+/// Immutable GST attribution dates, separate from source business dates.
+model GstSourcePosting {
+  companyId String @map("company_id") @db.Uuid
+  sourceId String @map("source_id") @db.Uuid
+  originalOn DateTime @map("original_on") @db.Date
+  effectiveOn DateTime @map("effective_on") @db.Date
+  company Company @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@id([companyId, sourceId, originalOn])
+  @@map("gst_source_postings")
 }
