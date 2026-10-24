@@ -30,6 +30,7 @@ export default async function InvoiceDetailPage({
       id={id}
       periods={periods}
       today={today}
+      canWrite={can(actor.role, "invoice.write")}
       canIssue={can(actor.role, "invoice.issue")}
     />
   );

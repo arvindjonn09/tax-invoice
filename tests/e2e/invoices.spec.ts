@@ -266,6 +266,47 @@ test("roles: manager reads invoices only; workers can't open them", async ({
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "New invoice" })).toHaveCount(0);
   expect((await page.goto("/invoices/new"))?.status()).toBe(404);
+
+  // An existing draft opens read only: no editor a manager can't save.
+  await page.context().clearCookies();
+  await signIn(page, "owner");
+  const { registered, name, customerId } = await setup(page);
+  const draft = await write<{ id: string }>(page, "/api/invoices", {
+    customerId,
+    priceEntry: "exclusive",
+    lines: [
+      {
+        description: "Synthetic manager-visible line",
+        quantity: "2",
+        unit: "hr",
+        unitPriceCents: "5000",
+        taxCode: registered ? "TAXABLE_10" : "OUT_OF_SCOPE",
+      },
+    ],
+  });
+  await page.context().clearCookies();
+  await signIn(page, "manager");
+  await page.goto(`/invoices/${draft.id}`);
+  await expect(
+    page.getByRole("heading", { name: "Draft invoice", level: 1 }),
+  ).toBeVisible();
+  await expect(page.getByText(name)).toBeVisible();
+  const lines = page.getByRole("region", { name: "Lines" });
+  await expect(lines).toContainText("1. Synthetic manager-visible line");
+  await expect(lines).toContainText("$100.00 ex GST");
+  for (const button of ["Save draft", "Review and issue", "Discard draft"])
+    await expect(page.getByRole("button", { name: button })).toHaveCount(0);
+  const main = page.getByRole("main");
+  await expect(main.getByRole("textbox")).toHaveCount(0);
+  await expect(main.getByRole("combobox")).toHaveCount(0);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  const edit = await page.request.fetch(`/api/invoices/${draft.id}`, {
+    method: "PATCH",
+    headers: { origin: new URL(page.url()).origin },
+    data: { notes: "Synthetic manager edit" },
+  });
+  expect(edit.status()).toBe(403);
+
   for (const role of ["employee", "subcontractor"] as const) {
     await page.context().clearCookies();
     await signIn(page, role);

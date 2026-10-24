@@ -4,20 +4,26 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useRemote } from "@/components/data/use-remote";
 import { InvoiceBuilder } from "./builder";
+import { DraftInvoiceView } from "./draft-view";
 import { IssuedInvoice } from "./issued";
-import type { GstRegistrationPeriod } from "@jobflow/domain";
+import { type GstRegistrationPeriod, gstStatusOn } from "@jobflow/domain";
 import type { Invoice } from "./types";
 
-/** Loads one document, then shows the draft builder or the issued view. */
+/**
+ * Loads one document, then shows the draft builder (read only without
+ * invoice.write) or the issued view.
+ */
 export function InvoicePage({
   id,
   periods,
   today,
+  canWrite,
   canIssue,
 }: {
   id: string;
   periods: GstRegistrationPeriod[];
   today: string;
+  canWrite: boolean;
   canIssue: boolean;
 }) {
   const params = useSearchParams();
@@ -41,6 +47,18 @@ export function InvoicePage({
       </p>
     );
   const creditsReference = original.data?.reference ?? null;
+  if (data.status === "draft" && !canWrite)
+    return (
+      <DraftInvoiceView
+        invoice={data}
+        registered={
+          data.kind === "credit_note"
+            ? (original.data?.gstRegistered ?? null)
+            : gstStatusOn(periods, today).registered
+        }
+        creditsReference={creditsReference}
+      />
+    );
   return data.status === "draft" ? (
     <InvoiceBuilder
       key={data.id}

@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Field, FormMessage, sendJson } from "@/components/form/field";
 import { formatAudCents } from "@/components/money-display";
 import { day, time } from "@/features/jobs/types";
+import { InvoiceLines } from "./lines";
 import { Totals } from "./totals";
-import { type Invoice, documentName, taxLabel } from "./types";
+import { type Invoice, documentName } from "./types";
 
 type Party = NonNullable<Invoice["customer"]>;
 const lines = (party: Party | null) =>
@@ -194,30 +195,7 @@ export function IssuedInvoice({
             <h2 id="lines-heading" className="text-xl font-semibold">
               Lines
             </h2>
-            <ol className="space-y-3">
-              {invoice.lines.map((line, index) => (
-                <li
-                  key={line.id}
-                  className="rounded-lg border p-4 [overflow-wrap:anywhere]"
-                >
-                  <p className="font-semibold">
-                    {index + 1}. {line.description}
-                  </p>
-                  <p className="text-sm tabular-nums">
-                    {line.quantity}
-                    {line.unit ? ` ${line.unit}` : ""} ×{" "}
-                    {formatAudCents(BigInt(line.unitPriceCents))} (
-                    {invoice.priceEntry === "exclusive" ? "ex" : "incl"} GST) ·{" "}
-                    {taxLabel(line.taxCode)}
-                  </p>
-                  <p className="text-sm tabular-nums">
-                    {formatAudCents(BigInt(line.exclusiveCents))} ex GST ·{" "}
-                    {formatAudCents(BigInt(line.gstCents))} GST ·{" "}
-                    {formatAudCents(BigInt(line.inclusiveCents))} incl GST
-                  </p>
-                </li>
-              ))}
-            </ol>
+            <InvoiceLines invoice={invoice} />
             {invoice.notes ? (
               <>
                 <h3 className="font-semibold">Notes</h3>
