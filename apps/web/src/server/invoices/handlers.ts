@@ -1,5 +1,6 @@
 import {
   type Actor,
+  can,
   companyScope,
   notFound,
   requireSameCompany,
@@ -14,6 +15,7 @@ import {
   invoiceLines,
   invoiceTitle,
   issueProblems,
+  receivable,
   transitionProblem,
 } from "@jobflow/domain";
 import { z } from "zod";
@@ -33,7 +35,7 @@ import { optionalText, requiredText, uuidOrNull } from "../http/fields";
 import { parsePage } from "../http/guards";
 import { log, safeError } from "../log";
 import { Refusal, inTransaction } from "../jobs/handlers";
-import { invoiceMoney } from "../receipts/handlers";
+import { invoiceBalances, invoiceMoney } from "../receipts/handlers";
 
 // #47. Office roles read (invoice.read); owner/manager/accountant draft
 // (invoice.write); owner/accountant issue, credit and void (invoice.issue).
@@ -282,11 +284,34 @@ export function invoiceHandlers(
       }),
       db().invoice.count({ where }),
     ]);
+    // Issued invoices carry what's been received and what's still owed, so
+    // receipt allocation can show balances without a request per invoice.
+    // Payment amounts are payment data: only for roles that may read it.
+    const balances = can(actor.role, "payment.read")
+      ? await invoiceBalances(
+          db(),
+          actor.companyId,
+          rows
+            .filter((row) => row.kind === "invoice" && row.status === "issued")
+            .map((row) => row.id),
+        )
+      : new Map();
     return privateJson({
       page,
       pageSize: take,
       total,
-      invoices: rows.map(view),
+      invoices: rows.map((row) => {
+        const balance = balances.get(row.id);
+        return {
+          ...view(row),
+          ...(balance
+            ? {
+                receivedCents: balance.received.toString(),
+                outstandingCents: receivable(balance).toString(),
+              }
+            : {}),
+        };
+      }),
     });
   };
 
