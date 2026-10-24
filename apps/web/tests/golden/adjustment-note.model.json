@@ -1,0 +1,78 @@
+{
+  "title": "Adjustment Note",
+  "details": [
+    [
+      "Number",
+      "CN-0003"
+    ],
+    [
+      "Date",
+      "15 July 2026"
+    ],
+    [
+      "Adjusts invoice",
+      "INV-0042"
+    ]
+  ],
+  "from": [
+    "Sample Sparks Pty Ltd",
+    "Trading as Sample Sparks",
+    "ABN 61 484 848 484",
+    "1 Example Street",
+    "Sampleville NSW 2000"
+  ],
+  "to": [
+    "Acme Sample Co",
+    "ABN 31 484 848 490",
+    "2 Sample Road",
+    "Level 3",
+    "Testtown VIC 3000",
+    "accounts@example.invalid"
+  ],
+  "site": [
+    "Head office",
+    "2 Sample Road",
+    "Testtown VIC 3000"
+  ],
+  "columns": [
+    "Description",
+    "Qty",
+    "Unit price",
+    "Tax",
+    "GST",
+    "Incl GST"
+  ],
+  "rows": [
+    [
+      "Credit: call-out labour not required",
+      "2.5 h",
+      "$80.00",
+      "GST 10%",
+      "$20.00",
+      "$220.00"
+    ]
+  ],
+  "totals": [
+    [
+      "Total ex GST",
+      "$200.00"
+    ],
+    [
+      "GST",
+      "$20.00"
+    ],
+    [
+      "Total adjustment incl GST",
+      "$220.00"
+    ]
+  ],
+  "notes": null,
+  "footer": [
+    "Unit prices exclude GST.",
+    "All items are taxable supplies."
+  ],
+  "metadata": {
+    "title": "Adjustment Note CN-0003",
+    "date": "2026-07-15"
+  }
+}

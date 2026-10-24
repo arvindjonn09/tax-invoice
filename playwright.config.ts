@@ -28,6 +28,9 @@ export default defineConfig({
     baseURL,
     locale: "en-AU",
     timezoneId: "Australia/Sydney",
+    // No colour transitions mid-axe-scan after theme switches or clicks
+    // (the app's CSS drops transitions under reduced motion).
+    reducedMotion: "reduce",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

@@ -19,6 +19,10 @@ const LOCKABLE = new Set([
   "company_gst_registrations",
   "invoices",
   "quotes",
+  "customer_receipts",
+  "supplier_bills",
+  "supplier_payments",
+  "documents",
 ]);
 
 export type Tx = Prisma.TransactionClient | PrismaClient;
