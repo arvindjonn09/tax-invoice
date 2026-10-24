@@ -17,11 +17,13 @@ describe("job status machine", () => {
       "assigned",
       "in_progress",
       "awaiting_review",
-      "completed",
     ] as const;
     for (let i = 1; i < path.length; i += 1) {
       expect(transitionProblem(path[i - 1]!, path[i]!), path[i]).toBeNull();
     }
+    expect(
+      transitionProblem("awaiting_review", "completed", { byReview: true }),
+    ).toBeNull();
     expect(transitionProblem("completed", "closed")).toBeNull();
     expect(
       transitionProblem("completed", "invoiced", { bySystem: true }),
@@ -32,7 +34,9 @@ describe("job status machine", () => {
   it("allows real backward moves only", () => {
     expect(transitionProblem("quoted", "draft")).toBeNull();
     expect(transitionProblem("assigned", "approved")).toBeNull();
-    expect(transitionProblem("awaiting_review", "in_progress")).toBeNull();
+    expect(
+      transitionProblem("awaiting_review", "in_progress", { byReview: true }),
+    ).toBeNull();
     expect(transitionProblem("completed", "in_progress")).toBe("not-allowed");
     expect(transitionProblem("approved", "quoted")).toBe("not-allowed");
   });
@@ -68,6 +72,19 @@ describe("job status machine", () => {
       transitionProblem("invoiced", "cancelled", { bySystem: true }),
     ).toBeNull();
     expect(transitionProblem("closed", "cancelled")).toBe("not-allowed");
+  });
+
+  it("leaves completion and rework to the review (#42)", () => {
+    expect(transitionProblem("awaiting_review", "completed")).toBe(
+      "review-only",
+    );
+    expect(transitionProblem("awaiting_review", "in_progress")).toBe(
+      "review-only",
+    );
+    expect(transitionProblem("awaiting_review", "cancelled")).toBeNull();
+    expect(
+      transitionProblem("awaiting_review", "closed", { byReview: true }),
+    ).toBe("not-allowed");
   });
 
   it("keeps 'invoiced' for the system (invoice issue)", () => {

@@ -95,11 +95,23 @@ test("owner creates a job, schedules a visit, assigns and ends work, and changes
   await page
     .getByLabel("Agreed price (AUD ex GST)", { exact: true })
     .fill("2500.01");
-  await page.getByRole("button", { name: "Save job", exact: true }).click();
+  const [created] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/jobs" &&
+        response.request().method() === "POST",
+    ),
+    page.getByRole("button", { name: "Save job", exact: true }).click(),
+  ]);
+  expect(created.status()).toBe(201);
+  const { id } = (await created.json()) as { id: string };
+  // The dev server compiles the detail route and API on their first visit.
+  // Check the authoritative created ID, then allow bounded cold-route loading.
+  await expect(page).toHaveURL(new RegExp(`/jobs/${id}$`), { timeout: 30_000 });
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Synthetic screen job",
+    { timeout: 30_000 },
   );
-  const id = page.url().split("/").at(-1)!;
   expect(
     (await (await page.request.get(`/api/jobs/${id}`)).json())
       .agreedPriceExclusiveCents,
@@ -421,4 +433,59 @@ test("directory supports search, retry, keyboard, mobile and both themes", async
   await expect(
     page.getByRole("button", { name: "Next", exact: true }),
   ).toBeVisible();
+});
+test("office reviews submitted work: rework needs a note, approval completes", async ({
+  page,
+}) => {
+  await signIn(page, "owner");
+  const seeded = await fixture(page);
+  const job = seeded.job!;
+  await write(page, `/api/jobs/${job.id}/assignments`, {
+    employeeId: seeded.employee.id,
+  });
+  for (const to of ["approved", "in_progress"])
+    await write(page, `/api/jobs/${job.id}/status`, { to });
+  const submitAsWorker = async () => {
+    await page.context().clearCookies();
+    await signIn(page, "employee");
+    await write(page, `/api/my/work/${job.id}/evidence`, {
+      kind: "note",
+      note: "Synthetic work done",
+    });
+    await write(page, `/api/my/work/${job.id}/submit`, {});
+    await page.context().clearCookies();
+    await signIn(page, "owner");
+    await page.goto(`/jobs/${job.id}`);
+  };
+  const statusOf = async () =>
+    (
+      (await (await page.request.get(`/api/jobs/${job.id}`)).json()) as {
+        status: string;
+      }
+    ).status;
+  const review = page.getByRole("region", { name: "Review submitted work" });
+
+  await submitAsWorker();
+  await expect(review).toBeVisible({ timeout: 30_000 });
+  // Completion is only reachable through the review.
+  await expect(page.getByLabel("Next status")).not.toContainText("Completed");
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .include('[aria-label="Review submitted work"]')
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+  await review.getByRole("button", { name: "Request rework" }).click();
+  await expect(review.getByText("Say what needs redoing")).toBeVisible();
+  expect(await statusOf()).toBe("awaiting_review");
+  await review.getByLabel("Review note").fill("Add a photo of the meter");
+  await review.getByRole("button", { name: "Request rework" }).click();
+  await expect(review).toHaveCount(0);
+  expect(await statusOf()).toBe("in_progress");
+
+  await submitAsWorker();
+  await review.getByRole("button", { name: "Approve completion" }).click();
+  await expect(page.getByText("Review saved.")).toBeVisible();
+  expect(await statusOf()).toBe("completed");
 });

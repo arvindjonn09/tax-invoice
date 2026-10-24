@@ -33,6 +33,8 @@ const COMPANY_FIELDS: FieldRules<Company> = {
   invoicePrefix: "gst_settings.read",
   jobPrefix: "gst_settings.read",
   basPeriod: "gst_settings.read",
+  // Pre-fills every expense form (#40), so every member may read it.
+  defaultExpenseSettlement: true,
 };
 
 export const AUSTRALIAN_STATES = [
@@ -95,6 +97,7 @@ export const UpdateCompany = z
       .nullable(),
     invoicePrefix: prefix,
     jobPrefix: prefix,
+    defaultExpenseSettlement: z.enum(["paid_at_purchase", "on_account"]),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, "Nothing to update");

@@ -276,6 +276,7 @@ type OwnOffer = OfficeOffer & {
 function ownOfferView(offer: OwnOffer) {
   return {
     ...termsView(offer),
+    contractorActive: offer.contractor.archivedAt === null,
     job: {
       reference: offer.job.reference,
       title: offer.job.title,
@@ -708,13 +709,35 @@ export function contractorHandlers(db: () => PrismaClient) {
 
   /** The signed-in subcontractor's own offers (newest first). */
   const myOffers: PolicyHandler<unknown> = async ({ actor, request }) => {
+    if (actor.role !== "subcontractor") throw notFound();
+    const params = new URL(request.url).searchParams;
     const contractor = await db().contractor.findFirst({
       where: { companyId: actor.companyId, userId: actor.userId },
     });
-    const { page, take, skip } = parsePage(new URL(request.url).searchParams);
-    if (!contractor)
+    const { page, take, skip } = parsePage(params);
+    const jobsOnly = params.get("view") === "jobs";
+    const status = z
+      .enum(["offered", "accepted", "declined", "withdrawn"])
+      .optional()
+      .catch(undefined)
+      .parse(params.get("status") || undefined);
+    const q = params.get("q")?.trim().slice(0, 100);
+    if (!contractor || (jobsOnly && contractor.archivedAt))
       return privateJson({ page, pageSize: take, total: 0, offers: [] });
-    const where = { companyId: actor.companyId, contractorId: contractor.id };
+    const where: Prisma.ContractorOfferWhereInput = {
+      companyId: actor.companyId,
+      contractorId: contractor.id,
+      ...(jobsOnly ? { status: "accepted" } : status ? { status } : {}),
+      ...(q
+        ? {
+            OR: [
+              { scope: { contains: q, mode: "insensitive" } },
+              { job: { title: { contains: q, mode: "insensitive" } } },
+              { job: { reference: { contains: q, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+    };
     const [rows, total] = await Promise.all([
       db().contractorOffer.findMany({
         where,
@@ -736,6 +759,34 @@ export function contractorHandlers(db: () => PrismaClient) {
       total,
       offers: rows.map(ownOfferView),
     });
+  };
+
+  /** One own offer, using the same positive projection as the list. */
+  const myOffer: PolicyHandler<IdContext> = async ({ actor, context }) => {
+    if (actor.role !== "subcontractor") throw notFound();
+    const id = uuidOrNull((await context.params).id);
+    const offer = id
+      ? await db().contractorOffer.findFirst({
+          where: {
+            id,
+            companyId: actor.companyId,
+            contractor: { companyId: actor.companyId, userId: actor.userId },
+          },
+          include: {
+            ...OFFER_INCLUDE,
+            job: {
+              select: {
+                reference: true,
+                title: true,
+                status: true,
+                dueOn: true,
+              },
+            },
+          },
+        })
+      : null;
+    if (!offer) throw notFound();
+    return privateJson(ownOfferView(offer));
   };
 
   /**
@@ -885,6 +936,7 @@ export function contractorHandlers(db: () => PrismaClient) {
     createOffer,
     updateOffer,
     myOffers,
+    myOffer,
     respond,
   };
 }
