@@ -863,7 +863,11 @@ describe("corrections", () => {
         one(invoiceId),
       )
     ).json();
-    expect((await routes.invIssue(call({}), one(credit.id))).status).toBe(200);
+    // Dated with the invoice, before the receipts below (#54 chronology).
+    expect(
+      (await routes.invIssue(call({ issueDate: "2026-07-01" }), one(credit.id)))
+        .status,
+    ).toBe(200);
     expect(await invoiceBalance(invoiceId)).toEqual({
       received: "0",
       outstanding: "165000",

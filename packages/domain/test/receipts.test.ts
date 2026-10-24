@@ -14,6 +14,7 @@ const invoice = (overrides: Partial<InvoiceBalance> = {}): InvoiceBalance => ({
   inclusive: 275_000n,
   gst: 25_000n,
   credited: 0n,
+  creditedGst: 0n,
   received: 0n,
   attributed: 0n,
   ...overrides,
