@@ -1,7 +1,7 @@
 # Database and financial rules
 
 ## Tables
-companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, supplier_payment_gst_adjustments, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, receipt_gst_adjustments, gst_adjustments, documents, audit_events, idempotency_keys.
+companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, supplier_payment_gst_adjustments, supplier_bill_evidence, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, receipt_gst_adjustments, gst_adjustments, documents, audit_events, idempotency_keys.
 
 Each company-owned entity has company_id and unique ID; human job/invoice numbers unique per company. All date-times UTC with Australia/Sydney display; AUD cents stored as integer/BigInt with bounds and explicit rounding rules.
 
@@ -71,3 +71,8 @@ rather than silently repairing it; its test-only rollback removes only that inde
 - **Never counted twice:** a decided timesheet is frozen by a trigger (no edits, no deletes); a correction is an approved reversal with negated minutes and cost at the same snapshotted rate (unique per timesheet). Job labour is the sum of `cost_cents` over approved rows.
 - Visibility: employees see their own timesheets without rate or cost. The office list needs `timesheet.approve`; rates and costs additionally need `employee.cost_rate.read` (owner, manager).
 
+## Late bill evidence (#142)
+
+- `supplier_bill_evidence`: at most one per bill, append-only. When the tax invoice for a bill recorded without verified evidence arrives, the office records it (`bill.write`) with the day it is held (`adjusted_on`). The bill's own snapshot is never edited (R6: "post an audited reclassification; never silently rewrite an approved cost").
+- `creditable_gst_cents` is the claimable GST the evidence releases, recomputed from the bill's snapshot (company registration, business-use share). It leaves job cost and becomes creditable GST on `adjusted_on`. On the cash basis, `cash_catch_up_gst_cents` is the credit that amounts already paid by then attribute on that day. Later payments attribute against the new creditable total.
+- Order: evidence can't be dated before the bill or its latest payment, and on the cash basis a payment can't be dated before the evidence. A day inside a finalised GST period posts to the open period, like other late sources. Voiding the bill reverses the reclassification with it. The document is claimed like any purchase document, so it can't also back an expense or another bill.

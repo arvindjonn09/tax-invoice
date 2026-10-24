@@ -204,3 +204,46 @@ export function paymentVoidAdjustment(
     attributedAfter: balance.attributed - allocation.gst,
   });
 }
+
+/**
+ * Late evidence for a bill recorded without it (R6, #142). Recomputes the
+ * bill's creditable GST as if the evidence had been verified at recording,
+ * from the same snapshot (registration, business-use share). Returns the
+ * credit it releases from job cost and, on the cash basis, the credit that
+ * amounts already paid now attribute; or why nothing can be reclassified.
+ */
+export function billEvidenceReclass(
+  lines: readonly GstLine[],
+  input: {
+    companyRegistered: boolean;
+    document: EvidenceDocument;
+    creditableBasisPoints: bigint;
+    recordedCreditableGst: Cents;
+    cash: boolean;
+    paid: Cents;
+    attributed: Cents;
+  },
+): { creditableGst: Cents; cashCatchUp: Cents } | { problem: string } {
+  const cost = billCost(lines, { ...input, evidenceVerified: true });
+  if (!cost.hasEvidence)
+    return {
+      problem:
+        "That document isn't qualifying evidence for this bill: above $82.50 it must be a tax invoice",
+    };
+  const creditableGst = cost.creditableGst - input.recordedCreditableGst;
+  if (creditableGst <= 0n)
+    return {
+      problem:
+        "This bill has no GST the company can claim, so there is nothing to reclassify",
+    };
+  return {
+    creditableGst,
+    cashCatchUp: input.cash
+      ? cumulativeCashGst({
+          documentTotal: cost.inclusive,
+          documentGst: cost.creditableGst,
+          settled: input.paid,
+        }) - input.attributed
+      : 0n,
+  };
+}

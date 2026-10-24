@@ -11,6 +11,7 @@ import {
   supplierPaymentHandlers,
 } from "../../apps/web/src/server/bills/handlers";
 import { expenseHandlers } from "../../apps/web/src/server/expenses/handlers";
+import { financialEvents } from "../../apps/web/src/server/reports/events";
 import { syntheticAbn } from "../helpers/abn";
 import {
   type CommittedDatabase,
@@ -197,6 +198,7 @@ const r = () => ({
   read: withPolicy<One>("bill.read", bills.read),
   list: withPolicy("bill.read", bills.list),
   voidBill: withPolicy<One>("bill.write", bills.void),
+  evidence: withPolicy<One>("bill.write", bills.evidence),
   pay: withPolicy("payment.write", payments.create),
   payment: withPolicy<One>("payment.read", payments.read),
   payments: withPolicy("payment.read", payments.list),
@@ -1231,4 +1233,100 @@ describe("one purchase document backs one record", () => {
       expect(claims.expense?.jobId).toBe(job.id);
     },
   );
+});
+
+describe("late bill evidence (#142)", () => {
+  it("moves GST from job cost to credit on the day the tax invoice is held, cash basis", async () => {
+    const job = await newJob();
+    const recorded = await record({
+      contractorId,
+      jobId: job.id,
+      issuedOn: "2026-07-15",
+      lines: [SUBCONTRACT_LINE],
+      documentId: await document(),
+    });
+    expect(recorded.body).toMatchObject({
+      hasEvidence: false,
+      jobCostCents: "99000",
+      lateEvidence: null,
+    });
+    const id = recorded.body.id;
+    const half = await pay({
+      paidOn: "2026-07-20",
+      amountCents: "49500",
+      method: "bank_transfer",
+      allocations: [{ billId: id, amountCents: "49500" }],
+    });
+    expect(half.body.allocations[0]!.creditableGstAttributedCents).toBe("0");
+    const submit = (body: Record<string, unknown>, who: Who = "accountant") =>
+      r().evidence(call(who, "POST", body), one(id));
+
+    expect((await submit({ heldOn: "2026-07-19" })).status).toBe(400);
+    expect(
+      (
+        await submit({
+          heldOn: "2026-08-05",
+          documentId: await document("receipt"),
+        })
+      ).status,
+    ).toBe(400);
+    expect((await submit({ heldOn: "2026-08-05" }, "manager")).status).toBe(
+      403,
+    );
+
+    const held = await submit({ heldOn: "2026-08-05" });
+    expect(held.status).toBe(200);
+    // The recorded snapshot is untouched; current figures carry the move.
+    expect(await held.json()).toMatchObject({
+      hasEvidence: false,
+      creditableGstCents: "0",
+      jobCostCents: "99000",
+      lateEvidence: { heldOn: "2026-08-05", creditableGstCents: "9000" },
+      currentCreditableGstCents: "9000",
+      currentJobCostCents: "90000",
+    });
+    expect(await jobTotals(job.id)).toMatchObject({
+      incurredCostCents: "90000",
+    });
+    // Half was already paid: half the credit is caught up on 5 August.
+    expect(
+      await db.supplierBillEvidence.findFirstOrThrow({ where: { billId: id } }),
+    ).toMatchObject({ creditableGstCents: 9000n, cashCatchUpGstCents: 4500n });
+    expect((await submit({ heldOn: "2026-08-06" })).status).toBe(409);
+    await expect(
+      db.supplierBillEvidence.updateMany({
+        where: { billId: id },
+        data: { creditableGstCents: 1n },
+      }),
+    ).rejects.toThrow();
+
+    const early = await pay({
+      paidOn: "2026-08-01",
+      amountCents: "49500",
+      method: "bank_transfer",
+      allocations: [{ billId: id, amountCents: "49500" }],
+    });
+    expect(early.status).toBe(400);
+    expect(early.body.fields).toHaveProperty("paidOn");
+    const rest = await pay({
+      paidOn: "2026-08-06",
+      amountCents: "49500",
+      method: "bank_transfer",
+      allocations: [{ billId: id, amountCents: "49500" }],
+    });
+    expect(rest.status).toBe(201);
+    expect(rest.body.allocations[0]!.creditableGstAttributedCents).toBe("4500");
+
+    // Reports: $900 job cost, $90 credit in total, $45 of it on 5 August.
+    const events = (
+      await db.$transaction((tx) => financialEvents(tx, companyId))
+    ).events.filter((event) => event.jobId === job.id);
+    const total = (channel: string, date?: string) =>
+      events
+        .filter((e) => e.channel === channel && (!date || e.date === date))
+        .reduce((sum, e) => sum + e.amount, 0n);
+    expect(total("incurred")).toBe(90_000n);
+    expect(total("gst_purchases")).toBe(9_000n);
+    expect(total("gst_purchases", "2026-08-05")).toBe(4_500n);
+  });
 });

@@ -62,7 +62,10 @@ export async function financialEvents(
     }),
     tx.supplierBill.findMany({
       where: { companyId },
-      include: { allocations: { include: { payment: true } } },
+      include: {
+        allocations: { include: { payment: true } },
+        evidence: true,
+      },
     }),
     tx.expense.findMany({ where: { companyId, status: "approved" } }),
     tx.timesheet.findMany({ where: { companyId, status: "approved" } }),
@@ -405,6 +408,31 @@ export async function financialEvents(
         "incurred",
         -row.jobCostCents,
       );
+    // Late evidence (#142, R6): GST leaves job cost on the day it is held;
+    // a later bill void reverses it with the bill.
+    const evidence = row.evidence,
+      evidenceDay = evidence ? toDay(evidence.adjustedOn) : null;
+    if (evidence && evidenceDay) {
+      emit(
+        `${evidence.id}:cost`,
+        row.id,
+        evidenceDay,
+        row.jobId,
+        customerId,
+        "incurred",
+        -evidence.creditableGstCents,
+      );
+      if (row.voidedAt)
+        emit(
+          `${evidence.id}:cost-void`,
+          row.id,
+          businessDay(row.voidedAt),
+          row.jobId,
+          customerId,
+          "incurred",
+          evidence.creditableGstCents,
+        );
+    }
     const status = gstStatusOn(periods, day);
     const historyProblem = settlementHistoryProblem(
       row.inclusiveCents,
@@ -448,7 +476,45 @@ export async function financialEvents(
           "gst_purchases",
           -row.creditableGstCents,
         );
+      if (evidence && evidenceDay && registered(evidenceDay)) {
+        emit(
+          `${evidence.id}:credit`,
+          evidence.id,
+          evidenceDay,
+          row.jobId,
+          customerId,
+          "gst_purchases",
+          evidence.creditableGstCents,
+        );
+        if (row.voidedAt && registered(businessDay(row.voidedAt)))
+          emit(
+            `${evidence.id}:credit-void`,
+            row.id,
+            businessDay(row.voidedAt),
+            row.jobId,
+            customerId,
+            "gst_purchases",
+            -evidence.creditableGstCents,
+          );
+      }
     }
+    if (
+      status.basis === "cash" &&
+      !historyProblem &&
+      evidence &&
+      evidenceDay &&
+      evidence.cashCatchUpGstCents !== 0n &&
+      registered(evidenceDay)
+    )
+      emit(
+        `${evidence.id}:cash-credit`,
+        evidence.id,
+        evidenceDay,
+        row.jobId,
+        customerId,
+        "gst_purchases",
+        evidence.cashCatchUpGstCents,
+      );
     for (const a of row.allocations) {
       const day = toDay(a.payment.paidOn);
       emit(
