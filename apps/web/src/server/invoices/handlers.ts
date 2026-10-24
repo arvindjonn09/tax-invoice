@@ -716,8 +716,9 @@ export function invoiceHandlers(
       });
       return privateJson(view(row));
     });
-    // Store the PDF now (#48). A storage problem never undoes the issue:
-    // the PDF is rendered from the same frozen snapshot on first request.
+    // Store the PDF (#48; the route defers it past the response, #158). A
+    // storage problem never undoes the issue: the PDF is rendered from the
+    // same frozen snapshot on first request.
     if (response.status === 200 && id && options.afterIssue)
       await options
         .afterIssue({ companyId: actor.companyId, userId: actor.userId }, id)
