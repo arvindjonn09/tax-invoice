@@ -15,12 +15,6 @@ export function cashAttributedGst(input: {
   settlement: Cents;
 }): Cents {
   const { documentTotal, documentGst, previouslySettled, settlement } = input;
-  if (documentTotal <= 0n) {
-    throw new RangeError("Document total must be positive");
-  }
-  if (documentGst < 0n || documentGst > documentTotal) {
-    throw new RangeError("Document GST must be between 0 and the total");
-  }
   if (previouslySettled < 0n || settlement < 0n) {
     throw new RangeError("Settlements must be >= 0");
   }
@@ -28,10 +22,60 @@ export function cashAttributedGst(input: {
     throw new RangeError("Settlements exceed the document total");
   }
   const cumulative = (settled: Cents) =>
-    divideRounded(settled * documentGst, documentTotal);
+    cumulativeCashGst({ documentTotal, documentGst, settled });
   return (
     cumulative(previouslySettled + settlement) - cumulative(previouslySettled)
   );
+}
+
+/**
+ * Cash-basis GST attributable once `settled` of the document has been paid:
+ * the rounded share of its GST. Ledgers whose earlier settlements may be
+ * voided reconcile each new settlement against this (see `allocationGst`).
+ */
+export function cumulativeCashGst(input: {
+  documentTotal: Cents;
+  documentGst: Cents;
+  settled: Cents;
+}): Cents {
+  const { documentTotal, documentGst, settled } = input;
+  if (documentTotal <= 0n) {
+    throw new RangeError("Document total must be positive");
+  }
+  if (documentGst < 0n || documentGst > documentTotal) {
+    throw new RangeError("Document GST must be between 0 and the total");
+  }
+  if (settled < 0n || settled > documentTotal) {
+    throw new RangeError("Settled must be between 0 and the document total");
+  }
+  return divideRounded(settled * documentGst, documentTotal);
+}
+
+/**
+ * Cash-basis GST for one settlement in a ledger whose earlier settlements can
+ * be voided: what brings the live attributed GST to the rounded share once
+ * `settledAfter` is settled. Voids never rewrite history, so the next
+ * settlement absorbs any rounding cent a void left. Kept within 0…`amount`
+ * (−`amount`…0 for a refund, `direction` −1), so a correction never flips a
+ * settlement's sign; settling in full always ends at exactly `documentGst`.
+ */
+export function cashGstToward(input: {
+  documentTotal: Cents;
+  documentGst: Cents;
+  settledAfter: Cents;
+  attributed: Cents;
+  amount: Cents;
+  direction: 1n | -1n;
+}): Cents {
+  const { amount, direction } = input;
+  const target = cumulativeCashGst({
+    documentTotal: input.documentTotal,
+    documentGst: input.documentGst,
+    settled: input.settledAfter,
+  });
+  const share = direction * (target - input.attributed);
+  const kept = share < 0n ? 0n : share > amount ? amount : share;
+  return direction * kept;
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;

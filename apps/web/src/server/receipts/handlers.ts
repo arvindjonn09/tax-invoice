@@ -10,6 +10,7 @@ import {
   allocationGst,
   allocationProblems,
   receivable,
+  voidProblem,
 } from "@jobflow/domain";
 import { z } from "zod";
 import type {
@@ -130,6 +131,7 @@ export async function invoiceBalances(
       select: {
         invoiceId: true,
         amountCents: true,
+        gstAttributedCents: true,
         receipt: { select: { kind: true } },
       },
     }),
@@ -138,12 +140,19 @@ export async function invoiceBalances(
     credits.map((row) => [row.creditsId!, row._sum.inclusiveCents ?? 0n]),
   );
   const received = new Map<string, bigint>();
+  const attributed = new Map<string, bigint>();
   for (const allocation of allocations) {
     const sign = allocation.receipt.kind === "refund" ? -1n : 1n;
     received.set(
       allocation.invoiceId,
       (received.get(allocation.invoiceId) ?? 0n) +
         sign * allocation.amountCents,
+    );
+    // Stored signed: refunds already carry negative GST.
+    attributed.set(
+      allocation.invoiceId,
+      (attributed.get(allocation.invoiceId) ?? 0n) +
+        allocation.gstAttributedCents,
     );
   }
   return new Map(
@@ -155,6 +164,7 @@ export async function invoiceBalances(
         gst: invoice.gstCents,
         credited: credited.get(invoice.id) ?? 0n,
         received: received.get(invoice.id) ?? 0n,
+        attributed: attributed.get(invoice.id) ?? 0n,
       },
     ]),
   );
@@ -384,18 +394,15 @@ export function receiptHandlers(db: () => PrismaClient) {
         if (before.voidedAt) throw new Refusal(fail(409, "It's already void"));
         const ids = before.allocations.map((a) => a.invoiceId);
         await lockInvoices(tx, ids);
-        if (before.kind === "receipt") {
-          const balances = await invoiceBalances(tx, actor.companyId, ids);
-          for (const allocation of before.allocations) {
-            const balance = balances.get(allocation.invoiceId);
-            if (balance && balance.received - allocation.amountCents < 0n)
-              throw new Refusal(
-                fail(
-                  409,
-                  "Refunds already returned this money; void the refund first",
-                ),
-              );
-          }
+        // Under the invoice locks, the money left after this void must stay
+        // between nothing and what's due, for receipts and refunds alike.
+        const balances = await invoiceBalances(tx, actor.companyId, ids);
+        for (const allocation of before.allocations) {
+          const balance = balances.get(allocation.invoiceId);
+          const problem =
+            balance &&
+            voidProblem(before.kind, balance, allocation.amountCents);
+          if (problem) throw new Refusal(fail(409, problem));
         }
         const updated = await tx.customerReceipt.update({
           where: { id },

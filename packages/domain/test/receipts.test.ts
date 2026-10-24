@@ -5,6 +5,7 @@ import {
   allocationProblems,
   jobProfit,
   receivable,
+  voidProblem,
 } from "../src/index";
 
 const invoice = (overrides: Partial<InvoiceBalance> = {}): InvoiceBalance => ({
@@ -13,6 +14,7 @@ const invoice = (overrides: Partial<InvoiceBalance> = {}): InvoiceBalance => ({
   gst: 25_000n,
   credited: 0n,
   received: 0n,
+  attributed: 0n,
   ...overrides,
 });
 const balances = (...list: InvoiceBalance[]) =>
@@ -110,8 +112,124 @@ describe("receipts (#50)", () => {
     // $1,100 of a $2,200 invoice with $200 GST → $100 GST (docs/GST.md #6).
     const half = invoice({ inclusive: 220_000n, gst: 20_000n });
     expect(allocationGst("receipt", 110_000n, half)).toBe(10_000n);
-    const rest = { ...half, received: 110_000n };
+    const rest = { ...half, received: 110_000n, attributed: 10_000n };
     expect(allocationGst("receipt", 110_000n, rest)).toBe(10_000n);
     expect(allocationGst("refund", 110_000n, rest)).toBe(-10_000n);
+  });
+});
+
+describe("cash GST after voids", () => {
+  // Invoice $0.11 with $0.01 GST, replaying allocations as the ledger does:
+  // each new allocation sees the live (unvoided) received and attributed.
+  type Entry = { kind: "receipt" | "refund"; amount: bigint; gst: bigint };
+  const tiny = { inclusive: 11n, gst: 1n };
+  const record = (live: Entry[], kind: Entry["kind"], amount: bigint) => {
+    const received = live.reduce(
+      (t, e) => t + (e.kind === "receipt" ? e.amount : -e.amount),
+      0n,
+    );
+    const attributed = live.reduce((t, e) => t + e.gst, 0n);
+    const entry = {
+      kind,
+      amount,
+      gst: allocationGst(
+        kind,
+        amount,
+        invoice({ ...tiny, received, attributed }),
+      ),
+    };
+    live.push(entry);
+    return entry;
+  };
+  const liveGst = (live: Entry[]) => live.reduce((t, e) => t + e.gst, 0n);
+
+  it("a replacement for a voided middle receipt recovers its rounding cent", () => {
+    const live: Entry[] = [];
+    record(live, "receipt", 5n);
+    const middle = record(live, "receipt", 1n);
+    record(live, "receipt", 5n);
+    expect(live.map((e) => e.gst)).toEqual([0n, 1n, 0n]);
+    live.splice(live.indexOf(middle), 1); // void, history unchanged
+    expect(liveGst(live)).toBe(0n);
+    expect(record(live, "receipt", 1n).gst).toBe(1n);
+    expect(liveGst(live)).toBe(tiny.gst);
+  });
+
+  it("re-receiving after a refund void ends at exactly the invoice's GST", () => {
+    const live: Entry[] = [];
+    record(live, "receipt", 11n);
+    const first = record(live, "refund", 5n);
+    record(live, "refund", 1n);
+    expect(live.map((e) => e.gst)).toEqual([1n, 0n, -1n]);
+    live.splice(live.indexOf(first), 1);
+    expect(record(live, "receipt", 1n).gst).toBe(1n);
+    expect(liveGst(live)).toBe(tiny.gst);
+  });
+
+  it("property: after any voids, settling in full attributes exactly the GST", () => {
+    let seed = 7;
+    const next = (n: number) => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return BigInt(seed % n);
+    };
+    for (let run = 0; run < 300; run += 1) {
+      const inclusive = next(10_000) + 1n;
+      const gst = next(Number(inclusive) + 1);
+      const shape = { inclusive, gst };
+      let live: Entry[] = [];
+      const net = () =>
+        live.reduce(
+          (t, e) => t + (e.kind === "receipt" ? e.amount : -e.amount),
+          0n,
+        );
+      const add = (kind: Entry["kind"], amount: bigint) => {
+        const attributed = live.reduce((t, e) => t + e.gst, 0n);
+        const balance = invoice({ ...shape, received: net(), attributed });
+        live.push({ kind, amount, gst: allocationGst(kind, amount, balance) });
+      };
+      for (let step = 0; step < 8; step += 1) {
+        const room = inclusive - net();
+        const choice = next(3);
+        if (choice === 0n && room > 0n) add("receipt", next(Number(room)) + 1n);
+        else if (choice === 1n && net() > 0n)
+          add("refund", next(Number(net())) + 1n);
+        else if (live.length > 0) {
+          // Void one entry if the ledger stays within 0…total.
+          const index = Number(next(live.length));
+          const rest = live.filter((_, i) => i !== index);
+          const restNet = rest.reduce(
+            (t, e) => t + (e.kind === "receipt" ? e.amount : -e.amount),
+            0n,
+          );
+          if (restNet >= 0n && restNet <= inclusive) live = rest;
+        }
+      }
+      if (net() < inclusive) add("receipt", inclusive - net());
+      expect(live.reduce((t, e) => t + e.gst, 0n)).toBe(gst);
+    }
+  });
+});
+
+describe("voiding receipts and refunds", () => {
+  it("a receipt void can't leave refunds returning money never received", () => {
+    const paid = invoice({ received: 60_000n });
+    expect(voidProblem("receipt", paid, 60_000n)).toBeNull();
+    expect(voidProblem("receipt", paid, 100_000n)).toMatch(
+      /void the refund first/,
+    );
+  });
+
+  it("a refund void can't overpay once a replacement receipt used the capacity", () => {
+    // $100 invoice: receipt 100, refund 100, replacement receipt 100.
+    const replaced = invoice({ inclusive: 10_000n, received: 10_000n });
+    expect(voidProblem("refund", replaced, 10_000n)).toMatch(/overpay/);
+    // Credits reduce what's due, so they count too.
+    const credited = invoice({
+      inclusive: 10_000n,
+      credited: 4_000n,
+      received: 2_000n,
+    });
+    expect(voidProblem("refund", credited, 4_000n)).toBeNull();
+    expect(voidProblem("refund", credited, 4_001n)).toMatch(/overpay/);
   });
 });

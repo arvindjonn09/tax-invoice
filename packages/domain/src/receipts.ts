@@ -1,4 +1,4 @@
-import { cashAttributedGst } from "./attribution";
+import { cashGstToward } from "./attribution";
 import { type Cents, sum } from "./money";
 
 // Customer receipts and refunds (#50). Money received is allocated to issued
@@ -16,6 +16,8 @@ export type InvoiceBalance = {
   credited: Cents;
   /** Net received so far (receipts minus refunds). */
   received: Cents;
+  /** Net cash-basis GST attributed by the live (unvoided) allocations. */
+  attributed: Cents;
 };
 
 export type AllocationProblem = { field: string; message: string };
@@ -91,25 +93,44 @@ export function allocationProblems(
 
 /**
  * Cash-basis GST attributed to one allocation (positive for a receipt,
- * negative for a refund), cumulative so the invoice's GST is attributed
- * exactly once in total.
+ * negative for a refund), reconciled against the live attributed GST so the
+ * invoice's GST is attributed exactly once in total, even after voids.
  */
 export function allocationGst(
   kind: "receipt" | "refund",
   amount: Cents,
   balance: InvoiceBalance,
 ): Cents {
-  if (kind === "receipt")
-    return cashAttributedGst({
-      documentTotal: balance.inclusive,
-      documentGst: balance.gst,
-      previouslySettled: balance.received,
-      settlement: amount,
-    });
-  return -cashAttributedGst({
+  const receipt = kind === "receipt";
+  return cashGstToward({
     documentTotal: balance.inclusive,
     documentGst: balance.gst,
-    previouslySettled: balance.received - amount,
-    settlement: amount,
+    settledAfter: receipt
+      ? balance.received + amount
+      : balance.received - amount,
+    attributed: balance.attributed,
+    amount,
+    direction: receipt ? 1n : -1n,
   });
+}
+
+/**
+ * Why voiding a receipt or refund of `amount` on this invoice can't happen,
+ * or null if it can. Voiding a receipt removes money received, so refunds
+ * must not then exceed it; voiding a refund restores money received, so it
+ * must not then overpay what's due after credits (for example once a
+ * replacement receipt has used that capacity).
+ */
+export function voidProblem(
+  kind: "receipt" | "refund",
+  balance: InvoiceBalance,
+  amount: Cents,
+): string | null {
+  const received =
+    kind === "receipt" ? balance.received - amount : balance.received + amount;
+  if (received < 0n)
+    return "Refunds already returned this money; void the refund first";
+  if (received > balance.inclusive - balance.credited)
+    return "Voiding this refund would overpay the invoice; void or refund the later receipt first";
+  return null;
 }

@@ -523,7 +523,7 @@ model UserInvitation {
   createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   createdBy  String         @map("created_by") @db.Uuid
   company    Company        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  creator    Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  creator    Membership     @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction, map: "user_invitations_creator_fkey")
 
   @@index([companyId, createdAt, id])
   @@index([companyId, createdBy])
@@ -777,7 +777,8 @@ model ContractorAcceptance {
 
   bills SupplierBill[]
 
-  @@unique([companyId, offerId, jobId, contractorId])
+  /// PostgreSQL truncated the generated name to its 63-byte identifier limit.
+  @@unique([companyId, offerId, jobId, contractorId], map: "contractor_acceptances_company_id_offer_id_job_id_contractor_id")
   @@index([companyId, jobId])
   @@index([companyId, contractorId])
   @@index([companyId, acceptedBy])
