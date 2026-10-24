@@ -452,3 +452,60 @@ test("real evidence workflow uploads privately, denies another uploader's file a
   ).json()) as { job: { status: string } };
   expect(own.job.status).toBe("awaiting_review");
 });
+
+test("subcontractor reads office rework instructions and resubmits (#147)", async ({
+  page,
+}) => {
+  await signIn(page, "owner");
+  const seeded = await fixture(page);
+  for (const to of ["approved", "assigned", "in_progress"])
+    await write(page, `/api/jobs/${seeded.job.id}/status`, { to });
+  await signIn(page, "subcontractor");
+  await write(page, `/api/my/offers/${seeded.offer.id}`, {
+    decision: "accept",
+  });
+  await write(page, `/api/my/work/${seeded.job.id}/evidence`, {
+    kind: "note",
+    note: "Synthetic first completion",
+  });
+  await write(page, `/api/my/work/${seeded.job.id}/submit`, {});
+  await signIn(page, "owner");
+  const instructions =
+    "Synthetic rework: inspect the meter.\nRecord <script> as text, then resubmit.";
+  await write(page, `/api/jobs/${seeded.job.id}/review`, {
+    decision: "rework",
+    note: instructions,
+  });
+  await signIn(page, "subcontractor");
+  await page.goto(`/offers/${seeded.offer.id}`);
+  const rework = page.getByRole("region", {
+    name: "Rework instructions",
+    exact: true,
+  });
+  await expect(rework).toBeVisible({ timeout: 30_000 });
+  await expect(rework.getByText(instructions, { exact: true })).toBeVisible();
+  await expect(rework.locator("script")).toHaveCount(0);
+  await expect(rework.getByRole("listitem")).toHaveCount(1);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page
+    .getByLabel("Work note *", { exact: true })
+    .fill("Synthetic rework completed");
+  await page
+    .getByRole("button", { name: "Save evidence", exact: true })
+    .click();
+  await expect(
+    page.getByText("Synthetic rework completed", { exact: true }),
+  ).toBeVisible();
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page
+    .getByRole("button", { name: "Submit job for review", exact: true })
+    .click();
+  await expect(
+    page.getByText("Job submitted for review.", { exact: true }),
+  ).toBeVisible();
+  await expect(rework).toBeVisible();
+  const own = (await (
+    await page.request.get(`/api/my/offers/${seeded.offer.id}`)
+  ).json()) as { job: { status: string } };
+  expect(own.job.status).toBe("awaiting_review");
+});
