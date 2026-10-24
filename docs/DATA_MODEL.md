@@ -20,6 +20,11 @@ Every invoice, quote, bill and expense line stores: tax code, GST rate snapshot,
 - On-account expenses (#141): an approved original expense settled "on account" owes its supplier its GST-inclusive total, less live supplier payments allocated to it.
   - A supplier payment settles either bills or on-account expenses, never both in one payment, and pays one supplier: the same contractor, or the same supplier name.
   - The rules match bills: an idempotency key, no overpayment, cash-basis input tax credit attributed per allocation, and append-only corrections (`supplier_payment_expense_gst_adjustments`) when a payment is voided.
+  - **Reports (#54):**
+    - The cash moves on the payment date.
+    - On the cash basis, the attributed input tax credit moves on the payment date too.
+    - A void reverses on the void day. Its correction is dated on its own `adjusted_on`.
+    - Allocations and corrections post to `gst_source_postings` like bill payments, and payment dates follow the same date-ordering check.
   - A supplier-credit reversal cancels the balance. It's refused while live payments are allocated, so void them first. Payments and reversals take the same expense row lock, so whichever comes first wins.
   - A cost-only reversal leaves the supplier balance payable.
 - Supplier credits (#140): an adjustment note against one bill. It snapshots the creditable GST it takes back, its non-creditable GST and the job cost it removes, all at the bill's own creditable share and worked out on the cumulative credited GST.
