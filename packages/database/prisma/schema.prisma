@@ -226,6 +226,9 @@ model Membership {
   invoicesVoided        Invoice[]      @relation("InvoiceVoider")
   workEvidenceSubmitted WorkEvidence[]
 
+  receiptsCreated CustomerReceipt[] @relation("ReceiptCreator")
+  receiptsVoided  CustomerReceipt[] @relation("ReceiptVoider")
+
   @@unique([companyId, userId])
   @@index([userId])
   @@index([companyId, createdBy])
@@ -321,6 +324,7 @@ model Customer {
   jobs         Job[]
 
   invoices Invoice[]
+  receipts CustomerReceipt[]
 
   @@unique([companyId, id])
   @@index([companyId, archivedAt, name])
@@ -831,6 +835,9 @@ model Invoice {
   voider            Membership?       @relation("InvoiceVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   items             InvoiceItem[]
 
+  allocations    ReceiptAllocation[]
+  gstAdjustments ReceiptGstAdjustment[]
+
   @@unique([companyId, id])
   @@unique([companyId, kind, number])
   @@index([companyId, status, issueDate])
@@ -861,6 +868,91 @@ model InvoiceItem {
   @@unique([invoiceId, position])
   @@index([companyId, invoiceId])
   @@map("invoice_items")
+}
+
+enum ReceiptKind {
+  receipt
+  refund
+
+  @@map("receipt_kind")
+}
+
+enum ReceiptMethod {
+  bank_transfer
+  card
+  cash
+  cheque
+  other
+
+  @@map("receipt_method")
+}
+
+/// Money received from (or refunded to) a customer (#50). Idempotent by
+/// (company, idempotencyKey); immutable except a one-way void.
+model CustomerReceipt {
+  id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String              @map("company_id") @db.Uuid
+  customerId     String              @map("customer_id") @db.Uuid
+  kind           ReceiptKind         @default(receipt)
+  receivedOn     DateTime            @map("received_on") @db.Date
+  amountCents    BigInt              @map("amount_cents")
+  method         ReceiptMethod
+  reference      String?             @db.VarChar(100)
+  idempotencyKey String              @map("idempotency_key") @db.VarChar(200)
+  requestHash    String              @map("request_hash") @db.Char(64)
+  voidReason     String?             @map("void_reason") @db.VarChar(500)
+  voidedAt       DateTime?           @map("voided_at") @db.Timestamptz(3)
+  voidedBy       String?             @map("voided_by") @db.Uuid
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy      String              @map("created_by") @db.Uuid
+  customer       Customer            @relation(fields: [companyId, customerId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator        Membership          @relation("ReceiptCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  voider         Membership?         @relation("ReceiptVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  allocations    ReceiptAllocation[]
+  gstAdjustments ReceiptGstAdjustment[]
+
+  @@unique([companyId, idempotencyKey])
+  @@unique([companyId, id])
+  @@index([companyId, customerId])
+  @@index([companyId, receivedOn])
+  @@index([companyId, createdBy])
+  @@map("customer_receipts")
+}
+
+model ReceiptAllocation {
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId          String          @map("company_id") @db.Uuid
+  receiptId          String          @map("receipt_id") @db.Uuid
+  invoiceId          String          @map("invoice_id") @db.Uuid
+  amountCents        BigInt          @map("amount_cents")
+  /// Cash-basis GST attributed (negative for a refund).
+  gstAttributedCents BigInt          @map("gst_attributed_cents")
+  receipt            CustomerReceipt @relation(fields: [companyId, receiptId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  invoice            Invoice         @relation(fields: [companyId, invoiceId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([receiptId, invoiceId])
+  @@index([companyId, invoiceId])
+  @@map("receipt_allocations")
+}
+
+/// Cash-basis GST correction written when a receipt or refund is voided, so
+/// an invoice's live GST (unvoided allocations plus adjustments) is always the
+/// rounded share of the money still received. Append-only; dated on the void.
+model ReceiptGstAdjustment {
+  id         String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId  String          @map("company_id") @db.Uuid
+  /// The voided receipt or refund.
+  receiptId  String          @map("receipt_id") @db.Uuid
+  invoiceId  String          @map("invoice_id") @db.Uuid
+  gstCents   BigInt          @map("gst_cents")
+  adjustedOn DateTime        @map("adjusted_on") @db.Date
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  receipt    CustomerReceipt @relation(fields: [companyId, receiptId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  invoice    Invoice         @relation(fields: [companyId, invoiceId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([receiptId, invoiceId])
+  @@index([companyId, invoiceId])
+  @@map("receipt_gst_adjustments")
 }
 
 enum ExpenseCategory {
