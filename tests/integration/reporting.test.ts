@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAuth } from "../../apps/web/src/server/auth/config";
@@ -480,6 +481,573 @@ describe("database reports reconcile GST and profit together", () => {
       expect(after.positions[0].estimated.quoteIds).toHaveLength(2);
       expect(after.totals.profit).toBe("0");
     });
+  for (const basis of ["cash", "non_cash"] as const)
+    it(`excludes pre-registration supplies without changing profit (${basis})`, async () => {
+      const f = await fixture(false, "non_cash");
+      await db.companyGstRegistration.create({
+        data: {
+          companyId: f.company.id,
+          startsOn: new Date("2026-08-01"),
+          basis,
+          createdBy: f.user.id,
+        },
+      });
+      const invoices = invoiceHandlers(() => db);
+      const draft = await invoices.create({
+        actor: f.actor,
+        request: req({
+          customerId: f.customer.id,
+          jobId: f.job.id,
+          lines: [
+            {
+              description: "Synthetic registered supply",
+              quantity: "1",
+              unitPriceCents: "1000",
+              taxCode: "TAXABLE_10",
+            },
+          ],
+        }),
+        context: undefined,
+      });
+      expect(draft.status, await draft.clone().text()).toBe(201);
+      const id = (await draft.json()).id as string;
+      const issued = await invoices.issue({
+        actor: f.actor,
+        request: req({ issueDate: "2026-08-15" }),
+        context: context(id),
+      });
+      expect(issued.status, await issued.clone().text()).toBe(200);
+      const receipt = await receiptHandlers(() => db).create({
+        actor: f.actor,
+        request: req({
+          customerId: f.customer.id,
+          receivedOn: "2026-08-20",
+          amountCents: "1100",
+          method: "card",
+          allocations: [{ invoiceId: id, amountCents: "1100" }],
+        }),
+        context: undefined,
+      });
+      expect(receipt.status, await receipt.clone().text()).toBe(201);
+      const report = await reports(f.actor);
+      expect(report.gst).toMatchObject({
+        g1: "1100",
+        oneA: "100",
+        oneB: "0",
+        netGst: "100",
+      });
+      expect(report.profit.totals).toMatchObject({
+        revenue: "251000",
+        cost: "145000",
+        profit: "106000",
+      });
+      const before = await reportHandlers(() => db).gst({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports/gst?from=2026-07-01&to=2026-07-31`,
+        ),
+        context: undefined,
+      });
+      expect(await before.json()).toMatchObject({
+        g1: "0",
+        oneA: "0",
+        oneB: "0",
+      });
+    });
+  for (const [partialFirst, closeBeforeCredit] of [
+    [false, false],
+    [true, false],
+    [true, true],
+  ] as const)
+    it(`cash mixed-tax credit preserves taxable attribution (partial first=${partialFirst}, closed=${closeBeforeCredit})`, async () => {
+      const f = await fixture(true, "cash"),
+        invoices = invoiceHandlers(() => db),
+        receipts = receiptHandlers(() => db);
+      const created = await invoices.create({
+        actor: f.actor,
+        request: req({
+          customerId: f.customer.id,
+          jobId: f.job.id,
+          lines: [
+            {
+              description: "Synthetic taxable supply",
+              quantity: "1",
+              unitPriceCents: "100000",
+              taxCode: "TAXABLE_10",
+            },
+            {
+              description: "Synthetic out of scope",
+              quantity: "1",
+              unitPriceCents: "50000",
+              taxCode: "OUT_OF_SCOPE",
+            },
+          ],
+        }),
+        context: undefined,
+      });
+      expect(created.status).toBe(201);
+      const id = (await created.json()).id as string;
+      expect(
+        (
+          await invoices.issue({
+            actor: f.actor,
+            request: req({ issueDate: "2026-08-01" }),
+            context: context(id),
+          })
+        ).status,
+      ).toBe(200);
+      const receive = async (amount: string, date: string) =>
+        receipts.create({
+          actor: f.actor,
+          request: req({
+            customerId: f.customer.id,
+            receivedOn: date,
+            amountCents: amount,
+            method: "card",
+            allocations: [{ invoiceId: id, amountCents: amount }],
+          }),
+          context: undefined,
+        });
+      if (partialFirst)
+        expect((await receive("80000", "2026-08-05")).status).toBe(201);
+      if (!partialFirst) {
+        const invalid = await invoices.credit({
+          actor: f.actor,
+          request: req({
+            lines: [
+              {
+                description: "Invalid tax reclassification",
+                quantity: "1",
+                unitPriceCents: "120000",
+                taxCode: "TAXABLE_10",
+              },
+            ],
+          }),
+          context: context(id),
+        });
+        expect(invalid.status).toBe(201);
+        const invalidId = (await invalid.json()).id as string;
+        const issue = await invoices.issue({
+          actor: f.actor,
+          request: req({ issueDate: "2026-08-02" }),
+          context: context(invalidId),
+        });
+        expect(issue.status).toBe(400);
+        expect(
+          await db.creditCashAdjustment.count({
+            where: { companyId: f.company.id },
+          }),
+        ).toBe(0);
+      }
+      let finalised: unknown;
+      if (closeBeforeCredit) {
+        const close = await periodHandlers(() => db).close({
+          actor: f.actor,
+          request: req({
+            from: "2026-07-01",
+            to: "2026-09-30",
+            note: "Synthetic credit boundary",
+          }),
+          context: undefined,
+        });
+        expect(close.status).toBe(201);
+        finalised = (await reports(f.actor)).gst;
+      }
+      const read = async () => {
+        if (!closeBeforeCredit) return reports(f.actor);
+        const handler = reportHandlers(() => db),
+          request = new Request(
+            `${origin}/api/reports?from=2026-07-01&to=${sydneyToday()}`,
+          );
+        return {
+          gst: await (
+            await handler.gst({ actor: f.actor, request, context: undefined })
+          ).json(),
+          profit: await (
+            await handler.profitability({
+              actor: f.actor,
+              request,
+              context: undefined,
+            })
+          ).json(),
+        };
+      };
+      const credit = await invoices.credit({
+        actor: f.actor,
+        request: req({
+          lines: [
+            {
+              description: "Reverse out of scope only",
+              quantity: "1",
+              unitPriceCents: "50000",
+              taxCode: "OUT_OF_SCOPE",
+            },
+          ],
+        }),
+        context: context(id),
+      });
+      expect(credit.status).toBe(201);
+      const creditId = (await credit.json()).id as string;
+      if (partialFirst) {
+        const backdated = await invoices.issue({
+          actor: f.actor,
+          request: req({ issueDate: "2026-08-04" }),
+          context: context(creditId),
+        });
+        expect(backdated.status).toBe(400);
+        expect(
+          await db.creditCashAdjustment.count({
+            where: { companyId: f.company.id },
+          }),
+        ).toBe(0);
+      }
+      const issued = await invoices.issue({
+        actor: f.actor,
+        request: req({ issueDate: "2026-08-10" }),
+        context: context(creditId),
+      });
+      expect(issued.status, await issued.clone().text()).toBe(200);
+      const receipt = await receive(
+        partialFirst ? "30000" : "110000",
+        "2026-08-12",
+      );
+      expect(receipt.status, await receipt.clone().text()).toBe(201);
+      expect((await receipt.json()).allocations[0].gstAttributedCents).toBe(
+        partialFirst ? "2727" : "10000",
+      );
+      const report = await read();
+      expect(report.gst).toMatchObject({
+        g1: "110000",
+        oneA: "10000",
+        oneB: "1500",
+      });
+      expect(report.profit.totals).toMatchObject({
+        revenue: "350000",
+        cost: "145000",
+        profit: "205000",
+      });
+      const corrections = await db.creditCashAdjustment.findMany({
+        where: { companyId: f.company.id },
+      });
+      expect(corrections.map((row) => row.gstCents)).toEqual(
+        partialFirst ? [2273n] : [],
+      );
+      const refund = await receipts.create({
+        actor: f.actor,
+        request: req({
+          customerId: f.customer.id,
+          kind: "refund",
+          receivedOn: "2026-08-20",
+          amountCents: "110000",
+          method: "card",
+          allocations: [{ invoiceId: id, amountCents: "110000" }],
+        }),
+        context: undefined,
+      });
+      expect(refund.status, await refund.clone().text()).toBe(201);
+      expect((await read()).gst).toMatchObject({
+        g1: "0",
+        oneA: "0",
+      });
+      expect((await read()).profit.totals.profit).toBe("205000");
+      if (closeBeforeCredit)
+        expect((await reports(f.actor)).gst).toEqual(finalised);
+      if (corrections.length)
+        await expect(
+          db.creditCashAdjustment.deleteMany({
+            where: { companyId: f.company.id },
+          }),
+        ).rejects.toThrow();
+    });
+  it("voiding a mixed credit records a new correction without editing old allocations", async () => {
+    const f = await fixture(true, "cash"),
+      invoices = invoiceHandlers(() => db),
+      receipts = receiptHandlers(() => db);
+    const created = await invoices.create({
+      actor: f.actor,
+      request: req({
+        customerId: f.customer.id,
+        lines: [
+          {
+            description: "Taxable",
+            quantity: "1",
+            unitPriceCents: "100000",
+            taxCode: "TAXABLE_10",
+          },
+          {
+            description: "Outside",
+            quantity: "1",
+            unitPriceCents: "50000",
+            taxCode: "OUT_OF_SCOPE",
+          },
+        ],
+      }),
+      context: undefined,
+    });
+    const id = (await created.json()).id as string;
+    expect(
+      (
+        await invoices.issue({
+          actor: f.actor,
+          request: req({ issueDate: "2026-08-01" }),
+          context: context(id),
+        })
+      ).status,
+    ).toBe(200);
+    const credit = await invoices.credit({
+      actor: f.actor,
+      request: req({
+        lines: [
+          {
+            description: "Outside credit",
+            quantity: "1",
+            unitPriceCents: "50000",
+            taxCode: "OUT_OF_SCOPE",
+          },
+        ],
+      }),
+      context: context(id),
+    });
+    const creditId = (await credit.json()).id as string;
+    expect(
+      (
+        await invoices.issue({
+          actor: f.actor,
+          request: req({ issueDate: "2026-08-02" }),
+          context: context(creditId),
+        })
+      ).status,
+    ).toBe(200);
+    const receive = async (amount: string) =>
+      receipts.create({
+        actor: f.actor,
+        request: req({
+          customerId: f.customer.id,
+          receivedOn: sydneyToday(),
+          amountCents: amount,
+          method: "card",
+          allocations: [{ invoiceId: id, amountCents: amount }],
+        }),
+        context: undefined,
+      });
+    const paid = await receive("110000");
+    expect(paid.status).toBe(201);
+    const before = await db.receiptAllocation.findFirstOrThrow({
+      where: { invoiceId: id },
+    });
+    expect(before.gstAttributedCents).toBe(10000n);
+    const voided = await invoices.void({
+      actor: f.actor,
+      request: req({ reason: "Synthetic credit was incorrect" }),
+      context: context(creditId),
+    });
+    expect(voided.status, await voided.clone().text()).toBe(200);
+    expect(
+      (
+        await db.receiptAllocation.findUniqueOrThrow({
+          where: { id: before.id },
+        })
+      ).gstAttributedCents,
+    ).toBe(10000n);
+    expect(
+      (
+        await db.creditCashAdjustment.findMany({ where: { invoiceId: id } })
+      ).map((row) => row.gstCents),
+    ).toEqual([-3125n]);
+    const current = async () =>
+      (
+        await reportHandlers(() => db).gst({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/reports/gst?from=2026-07-01&to=${sydneyToday()}`,
+          ),
+          context: undefined,
+        })
+      ).json();
+    expect(await current()).toMatchObject({ g1: "75625", oneA: "6875" });
+    const rest = await receive("50000");
+    expect(rest.status).toBe(201);
+    expect((await rest.json()).allocations[0].gstAttributedCents).toBe("3125");
+    expect(await current()).toMatchObject({ g1: "110000", oneA: "10000" });
+  });
+  it("migration corrects legacy attributed GST without rewriting allocations", async () => {
+    const f = await fixture(true, "cash"),
+      invoices = invoiceHandlers(() => db);
+    const draft = await invoices.create({
+      actor: f.actor,
+      request: req({
+        customerId: f.customer.id,
+        lines: [
+          {
+            description: "Taxable",
+            quantity: "1",
+            unitPriceCents: "100000",
+            taxCode: "TAXABLE_10",
+          },
+          {
+            description: "Outside",
+            quantity: "1",
+            unitPriceCents: "50000",
+            taxCode: "OUT_OF_SCOPE",
+          },
+        ],
+      }),
+      context: undefined,
+    });
+    const id = (await draft.json()).id as string;
+    expect(
+      (
+        await invoices.issue({
+          actor: f.actor,
+          request: req({ issueDate: "2026-08-01" }),
+          context: context(id),
+        })
+      ).status,
+    ).toBe(200);
+    const credit = await invoices.credit({
+      actor: f.actor,
+      request: req({
+        lines: [
+          {
+            description: "Outside credit",
+            quantity: "1",
+            unitPriceCents: "50000",
+            taxCode: "OUT_OF_SCOPE",
+          },
+        ],
+      }),
+      context: context(id),
+    });
+    const creditId = (await credit.json()).id as string;
+    expect(
+      (
+        await invoices.issue({
+          actor: f.actor,
+          request: req({ issueDate: "2026-08-02" }),
+          context: context(creditId),
+        })
+      ).status,
+    ).toBe(200);
+    // Reproduce the immutable allocation written by the pre-M4 implementation.
+    await db.customerReceipt.create({
+      data: {
+        companyId: f.company.id,
+        customerId: f.customer.id,
+        receivedOn: new Date("2026-08-03"),
+        amountCents: 110000n,
+        method: "card",
+        createdBy: f.user.id,
+        idempotencyKey: randomUUID(),
+        requestHash: "b".repeat(64),
+        allocations: {
+          create: {
+            invoiceId: id,
+            amountCents: 110000n,
+            gstAttributedCents: 6875n,
+          },
+        },
+      },
+    });
+    const migration = readFileSync(
+      new URL(
+        "../../packages/database/prisma/migrations/20261023210000_reporting_periods/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const statement = migration
+      .slice(
+        migration.indexOf("WITH credits AS ("),
+        migration.indexOf("CREATE TRIGGER credit_cash_adjustments_immutable"),
+      )
+      .replace(
+        "WHERE t.target<>t.attributed",
+        "WHERE t.company_id=$1::uuid AND t.target<>t.attributed",
+      );
+    expect(await db.$executeRawUnsafe(statement, f.company.id)).toBe(1);
+    expect(
+      (
+        await db.receiptAllocation.findFirstOrThrow({
+          where: { invoiceId: id },
+        })
+      ).gstAttributedCents,
+    ).toBe(6875n);
+    const correction = await db.creditCashAdjustment.findFirstOrThrow({
+      where: { invoiceId: id },
+    });
+    expect(correction.gstCents).toBe(3125n);
+    expect(correction.adjustedOn.toISOString().slice(0, 10)).toBe(
+      sydneyToday(),
+    );
+    const report = await reportHandlers(() => db).gst({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports/gst?from=2026-07-01&to=${sydneyToday()}`,
+      ),
+      context: undefined,
+    });
+    expect(await report.json()).toMatchObject({ g1: "110000", oneA: "10000" });
+  });
+  it("cash credit of a paid supply waits for the actual refund", async () => {
+    const f = await fixture(true, "cash"),
+      invoices = invoiceHandlers(() => db),
+      receipts = receiptHandlers(() => db);
+    const receive = async (
+      kind: "receipt" | "refund",
+      amount: string,
+      day: string,
+    ) =>
+      receipts.create({
+        actor: f.actor,
+        request: req({
+          kind,
+          customerId: f.customer.id,
+          receivedOn: day,
+          amountCents: amount,
+          method: "card",
+          allocations: [{ invoiceId: f.invoice.id, amountCents: amount }],
+        }),
+        context: undefined,
+      });
+    expect((await receive("receipt", "275000", "2026-08-01")).status).toBe(201);
+    const credit = await invoices.credit({
+      actor: f.actor,
+      request: req(),
+      context: context(f.invoice.id),
+    });
+    expect(credit.status).toBe(201);
+    const id = (await credit.json()).id as string;
+    expect(
+      (
+        await invoices.issue({
+          actor: f.actor,
+          request: req({ issueDate: "2026-08-02" }),
+          context: context(id),
+        })
+      ).status,
+    ).toBe(200);
+    expect((await reports(f.actor)).gst).toMatchObject({
+      g1: "275000",
+      oneA: "25000",
+    });
+    expect((await reports(f.actor)).profit.totals).toMatchObject({
+      revenue: "0",
+      cost: "145000",
+      profit: "-145000",
+    });
+    const refund = await receive("refund", "110000", "2026-08-03");
+    expect(refund.status, await refund.clone().text()).toBe(201);
+    expect((await refund.json()).allocations[0].gstAttributedCents).toBe(
+      "-10000",
+    );
+    expect((await reports(f.actor)).gst).toMatchObject({
+      g1: "165000",
+      oneA: "15000",
+    });
+    expect((await reports(f.actor)).profit.totals.profit).toBe("-145000");
+    expect((await receive("refund", "165000", "2026-08-04")).status).toBe(201);
+    expect((await reports(f.actor)).gst).toMatchObject({ g1: "0", oneA: "0" });
+  });
   it("authenticates reports, denies workers and manager GST, and hides foreign objects", async () => {
     const f = await fixture(false, "non_cash");
     const foreign = await fixture(false, "non_cash");
@@ -728,92 +1296,130 @@ describe("locked GST periods and explicit amendment history", () => {
       oneB: "10500",
     });
   });
-  it("records late costs on their business dates and GST in the open period", async () => {
-    const f = await fixture(true, "non_cash");
-    const closed = await periodHandlers(() => db).close({
-      actor: f.actor,
-      request: req({
-        from: "2026-07-01",
-        to: "2026-09-30",
-        note: "Synthetic close",
-      }),
-      context: undefined,
+  for (const basis of ["non_cash", "cash"] as const)
+    it(`records late costs on business dates and GST in the open period (${basis})`, async () => {
+      const f = await fixture(true, basis);
+      const closed = await periodHandlers(() => db).close({
+        actor: f.actor,
+        request: req({
+          from: "2026-07-01",
+          to: "2026-09-30",
+          note: "Synthetic close",
+        }),
+        context: undefined,
+      });
+      expect(closed.status).toBe(201);
+      const snapshot = (await reports(f.actor)).gst;
+      const bill = await billHandlers(() => db).create({
+        actor: f.actor,
+        request: req({
+          jobId: f.job.id,
+          supplierName: "Synthetic late supplier",
+          supplierGstRegistered: true,
+          supplierAbn: syntheticAbn("545454547"),
+          issuedOn: "2026-08-15",
+          lines: [
+            {
+              description: "Late work",
+              taxCode: "TAXABLE_10",
+              exclusiveCents: "10000",
+              gstCents: "1000",
+            },
+          ],
+          documentId: await f.doc(),
+          evidenceVerified: true,
+        }),
+        context: undefined,
+      });
+      expect(bill.status, await bill.clone().text()).toBe(201);
+      const billId = (await bill.json()).id as string;
+      if (basis === "cash") {
+        const payment = await supplierPaymentHandlers(() => db).create({
+          actor: f.actor,
+          request: req({
+            paidOn: "2026-08-20",
+            amountCents: "11000",
+            method: "card",
+            allocations: [{ billId, amountCents: "11000" }],
+          }),
+          context: undefined,
+        });
+        expect(payment.status, await payment.clone().text()).toBe(201);
+      }
+      // A late approved labour snapshot has cost but no GST. The source trigger
+      // must allow its true work date even when that quarter is finalised.
+      const labour = await db.timesheet.findFirstOrThrow({
+        where: { companyId: f.company.id },
+      });
+      await db.timesheet.create({
+        data: {
+          companyId: f.company.id,
+          employeeId: labour.employeeId,
+          jobId: f.job.id,
+          workDate: new Date("2026-08-17"),
+          minutes: 60,
+          status: "approved",
+          rateId: labour.rateId,
+          hourlyCostCents: labour.hourlyCostCents,
+          costCents: 6000n,
+          submittedBy: f.user.id,
+          decidedBy: f.user.id,
+          decidedAt: new Date(),
+        },
+      });
+      const handler = expenseHandlers(() => db);
+      const expense = await handler.create({
+        actor: f.actor,
+        request: req({
+          jobId: f.job.id,
+          category: "materials",
+          description: "Late materials",
+          purchasedOn: "2026-08-16",
+          priceEntry: "exclusive",
+          amountCents: "2000",
+          taxCode: "TAXABLE_10",
+          receiptDocumentId: await f.doc(),
+          settlement: "paid_at_purchase",
+          paymentMethod: "card",
+        }),
+        context: undefined,
+      });
+      expect(expense.status, await expense.clone().text()).toBe(201);
+      const id = (await expense.json()).id as string;
+      const approval = await handler.decide({
+        actor: f.actor,
+        request: req({ decision: "approve", evidenceVerified: true }),
+        context: context(id),
+      });
+      expect(approval.status, await approval.clone().text()).toBe(200);
+      const report = await reports(f.actor);
+      expect(report.profit.totals).toMatchObject({
+        cost: "163000",
+        profit: "87000",
+      });
+      expect(report.gst).toEqual(snapshot);
+      if (basis === "cash")
+        expect(report.profit.totals.paidInclusive).toBe("39700");
+      const current = await reportHandlers(() => db).gst({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports/gst?from=2026-10-01&to=${sydneyToday()}`,
+        ),
+        context: undefined,
+      });
+      expect(await current.json()).toMatchObject({ oneB: "1200" });
+      const rows = await db.$queryRaw<
+        { effective_on: Date }[]
+      >`SELECT effective_on FROM gst_source_postings WHERE company_id=${f.company.id}::uuid AND source_id=${id}::uuid`;
+      expect(
+        rows.some(
+          (r) => r.effective_on.toISOString().slice(0, 10) === sydneyToday(),
+        ),
+      ).toBe(true);
+      await expect(
+        db.$executeRaw`DELETE FROM gst_source_postings WHERE company_id=${f.company.id}::uuid`,
+      ).rejects.toThrow();
     });
-    expect(closed.status).toBe(201);
-    const snapshot = (await reports(f.actor)).gst;
-    const bill = await billHandlers(() => db).create({
-      actor: f.actor,
-      request: req({
-        jobId: f.job.id,
-        supplierName: "Synthetic late supplier",
-        supplierGstRegistered: true,
-        supplierAbn: syntheticAbn("545454547"),
-        issuedOn: "2026-08-15",
-        lines: [
-          {
-            description: "Late work",
-            taxCode: "TAXABLE_10",
-            exclusiveCents: "10000",
-            gstCents: "1000",
-          },
-        ],
-        documentId: await f.doc(),
-        evidenceVerified: true,
-      }),
-      context: undefined,
-    });
-    expect(bill.status, await bill.clone().text()).toBe(201);
-    const handler = expenseHandlers(() => db);
-    const expense = await handler.create({
-      actor: f.actor,
-      request: req({
-        jobId: f.job.id,
-        category: "materials",
-        description: "Late materials",
-        purchasedOn: "2026-08-16",
-        priceEntry: "exclusive",
-        amountCents: "2000",
-        taxCode: "TAXABLE_10",
-        receiptDocumentId: await f.doc(),
-        settlement: "paid_at_purchase",
-        paymentMethod: "card",
-      }),
-      context: undefined,
-    });
-    expect(expense.status, await expense.clone().text()).toBe(201);
-    const id = (await expense.json()).id as string;
-    const approval = await handler.decide({
-      actor: f.actor,
-      request: req({ decision: "approve", evidenceVerified: true }),
-      context: context(id),
-    });
-    expect(approval.status, await approval.clone().text()).toBe(200);
-    const report = await reports(f.actor);
-    expect(report.profit.totals).toMatchObject({
-      cost: "157000",
-      profit: "93000",
-    });
-    expect(report.gst).toEqual(snapshot);
-    const current = await reportHandlers(() => db).gst({
-      actor: f.actor,
-      request: new Request(
-        `${origin}/api/reports/gst?from=2026-10-01&to=${sydneyToday()}`,
-      ),
-      context: undefined,
-    });
-    expect(await current.json()).toMatchObject({ oneB: "1200" });
-    const rows = await db.$queryRaw<
-      { effective_on: Date }[]
-    >`SELECT effective_on FROM gst_source_postings WHERE company_id=${f.company.id}::uuid AND source_id=${id}::uuid`;
-    expect(
-      rows.some(
-        (r) => r.effective_on.toISOString().slice(0, 10) === sydneyToday(),
-      ),
-    ).toBe(true);
-    await expect(
-      db.$executeRaw`DELETE FROM gst_source_postings WHERE company_id=${f.company.id}::uuid`,
-    ).rejects.toThrow();
-  });
   it("freezes source dates/settings and records an immutable amended revision", async () => {
     const f = await fixture(true, "non_cash");
     const periods = periodHandlers(() => db);

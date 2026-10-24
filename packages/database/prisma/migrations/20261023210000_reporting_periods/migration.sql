@@ -34,6 +34,44 @@ CREATE TABLE gst_source_postings (
  PRIMARY KEY(company_id,source_id,original_on), CHECK(effective_on>=original_on)
 );
 CREATE TRIGGER gst_source_postings_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON gst_source_postings FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
+CREATE TABLE credit_cash_adjustments (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), company_id uuid NOT NULL REFERENCES companies(id),
+ invoice_id uuid NOT NULL, credit_id uuid NOT NULL, event varchar(5) NOT NULL CHECK(event IN ('issue','void')),
+ adjusted_on date NOT NULL, gst_cents bigint NOT NULL, created_by uuid NOT NULL,
+ FOREIGN KEY(company_id,invoice_id) REFERENCES invoices(company_id,id),
+ FOREIGN KEY(company_id,credit_id) REFERENCES invoices(company_id,id),
+ FOREIGN KEY(company_id,created_by) REFERENCES memberships(company_id,user_id),
+ UNIQUE(company_id,credit_id,event)
+);
+-- Existing immutable allocations are never rewritten. Bring valid existing
+-- credited invoices to the new cash target through an explicit dated correction.
+WITH credits AS (
+ SELECT company_id,credits_id AS invoice_id,sum(inclusive_cents) AS credited,sum(gst_cents) AS credited_gst,
+ (array_agg(id ORDER BY issued_at DESC,id DESC))[1] AS credit_id
+ FROM invoices WHERE status='issued' AND kind='credit_note' GROUP BY company_id,credits_id
+), cash AS (
+ SELECT a.company_id,a.invoice_id,sum(CASE WHEN r.kind='refund' THEN -a.amount_cents ELSE a.amount_cents END) AS received,
+ sum(a.gst_attributed_cents) AS attributed
+ FROM receipt_allocations a JOIN customer_receipts r ON r.id=a.receipt_id
+ WHERE r.voided_at IS NULL GROUP BY a.company_id,a.invoice_id
+), rounding AS (
+ SELECT company_id,invoice_id,sum(gst_cents) AS attributed FROM receipt_gst_adjustments GROUP BY company_id,invoice_id
+), balances AS (
+ SELECT c.*,i.inclusive_cents AS total,i.gst_cents AS gst,i.inclusive_cents-c.credited AS remaining,
+ COALESCE(p.received,0) AS received,COALESCE(p.attributed,0)+COALESCE(r.attributed,0) AS attributed
+ FROM credits c JOIN invoices i ON i.id=c.invoice_id AND i.status='issued'
+ LEFT JOIN cash p ON p.company_id=c.company_id AND p.invoice_id=c.invoice_id
+ LEFT JOIN rounding r ON r.company_id=c.company_id AND r.invoice_id=c.invoice_id
+), targets AS (
+ SELECT *,
+ (CASE WHEN remaining>0 THEN round(least(received,remaining)::numeric*(gst-credited_gst)/remaining) ELSE 0 END)+
+ (CASE WHEN credited>0 THEN round(greatest(received-remaining,0)::numeric*credited_gst/credited) ELSE 0 END) AS target
+ FROM balances WHERE total>0 AND remaining>=0 AND credited_gst<=gst AND gst-credited_gst<=remaining AND received BETWEEN 0 AND total
+)
+INSERT INTO credit_cash_adjustments(company_id,invoice_id,credit_id,event,adjusted_on,gst_cents,created_by)
+SELECT t.company_id,t.invoice_id,t.credit_id,'issue',(clock_timestamp() AT TIME ZONE 'Australia/Sydney')::date,
+ (t.target-t.attributed)::bigint,c.created_by FROM targets t JOIN invoices c ON c.id=t.credit_id WHERE t.target<>t.attributed;
+CREATE TRIGGER credit_cash_adjustments_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON credit_cash_adjustments FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
 -- Writers share this gate; finalisation takes it exclusively before reading.
 -- Finalisation never takes source-row locks, avoiding reversed row-lock order.
 CREATE FUNCTION jobflow_reporting_gate(cid uuid) RETURNS void LANGUAGE sql AS $$
@@ -114,7 +152,7 @@ BEGIN
   IF day<parent_day AND EXISTS(SELECT 1 FROM company_gst_registrations WHERE company_id=cid AND basis='non_cash' AND parent_day>=starts_on AND (ends_on IS NULL OR parent_day<=ends_on)) THEN
    PERFORM jobflow_assert_open_period(cid,parent_day);
   END IF;
- ELSE day:=(r->>'adjusted_on')::date; sid:=COALESCE((r->>'receipt_id')::uuid,(r->>'payment_id')::uuid,sid); END IF;
+ ELSE day:=(r->>'adjusted_on')::date; sid:=COALESCE((r->>'receipt_id')::uuid,(r->>'payment_id')::uuid,(r->>'credit_id')::uuid,sid); END IF;
  PERFORM jobflow_record_gst_posting(cid,sid,day);
  -- A paid-at-purchase expense may have a distinct cash date.
  IF TG_TABLE_NAME='expenses' AND r->>'paid_on' IS NOT NULL THEN
@@ -133,6 +171,8 @@ CREATE TRIGGER receipt_allocations_reporting_period BEFORE INSERT OR UPDATE ON r
 CREATE TRIGGER supplier_payment_allocations_reporting_period BEFORE INSERT OR UPDATE ON supplier_payment_allocations FOR EACH ROW EXECUTE FUNCTION jobflow_guard_report_source();
 CREATE TRIGGER receipt_gst_adjustments_reporting_period BEFORE INSERT OR UPDATE ON receipt_gst_adjustments FOR EACH ROW EXECUTE FUNCTION jobflow_guard_report_source();
 CREATE TRIGGER supplier_payment_gst_adjustments_reporting_period BEFORE INSERT OR UPDATE ON supplier_payment_gst_adjustments FOR EACH ROW EXECUTE FUNCTION jobflow_guard_report_source();
+
+CREATE TRIGGER credit_cash_adjustments_reporting_period BEFORE INSERT ON credit_cash_adjustments FOR EACH ROW EXECUTE FUNCTION jobflow_guard_report_source();
 
 -- Effective registration/basis coverage of closed days cannot be changed.
 CREATE FUNCTION jobflow_guard_locked_registration() RETURNS trigger LANGUAGE plpgsql AS $$

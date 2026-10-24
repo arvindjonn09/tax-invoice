@@ -7,6 +7,7 @@ import {
 } from "@jobflow/authz";
 import {
   type InvoiceBalance,
+  adjustedCashShare,
   allocationGst,
   voidAdjustmentGst,
   allocationProblems,
@@ -121,27 +122,40 @@ export async function invoiceBalances(
     select: { id: true, inclusiveCents: true, gstCents: true },
   });
   const ids = invoices.map((invoice) => invoice.id);
-  const [credits, allocations, adjustments] = await Promise.all([
-    db.invoice.groupBy({
-      by: ["creditsId"],
-      where: { companyId, creditsId: { in: ids }, status: "issued" },
-      _sum: { inclusiveCents: true },
-    }),
-    db.receiptAllocation.findMany({
-      where: { companyId, invoiceId: { in: ids }, receipt: { voidedAt: null } },
-      select: {
-        invoiceId: true,
-        amountCents: true,
-        gstAttributedCents: true,
-        receipt: { select: { kind: true } },
-      },
-    }),
-    db.receiptGstAdjustment.groupBy({
-      by: ["invoiceId"],
-      where: { companyId, invoiceId: { in: ids } },
-      _sum: { gstCents: true },
-    }),
-  ]);
+  const [credits, allocations, adjustments, creditAdjustments] =
+    await Promise.all([
+      db.invoice.groupBy({
+        by: ["creditsId"],
+        where: { companyId, creditsId: { in: ids }, status: "issued" },
+        _sum: { inclusiveCents: true, gstCents: true },
+      }),
+      db.receiptAllocation.findMany({
+        where: {
+          companyId,
+          invoiceId: { in: ids },
+          receipt: { voidedAt: null },
+        },
+        select: {
+          invoiceId: true,
+          amountCents: true,
+          gstAttributedCents: true,
+          receipt: { select: { kind: true } },
+        },
+      }),
+      db.receiptGstAdjustment.groupBy({
+        by: ["invoiceId"],
+        where: { companyId, invoiceId: { in: ids } },
+        _sum: { gstCents: true },
+      }),
+      db.creditCashAdjustment.groupBy({
+        by: ["invoiceId"],
+        where: { companyId, invoiceId: { in: ids } },
+        _sum: { gstCents: true },
+      }),
+    ]);
+  const creditedGst = new Map(
+    credits.map((row) => [row.creditsId!, row._sum.gstCents ?? 0n]),
+  );
   const credited = new Map(
     credits.map((row) => [row.creditsId!, row._sum.inclusiveCents ?? 0n]),
   );
@@ -151,6 +165,11 @@ export async function invoiceBalances(
   const attributed = new Map<string, bigint>(
     adjustments.map((row) => [row.invoiceId, row._sum.gstCents ?? 0n]),
   );
+  for (const a of creditAdjustments)
+    attributed.set(
+      a.invoiceId,
+      (attributed.get(a.invoiceId) ?? 0n) + (a._sum.gstCents ?? 0n),
+    );
   for (const allocation of allocations) {
     const sign = allocation.receipt.kind === "refund" ? -1n : 1n;
     received.set(
@@ -172,6 +191,7 @@ export async function invoiceBalances(
         inclusive: invoice.inclusiveCents,
         gst: invoice.gstCents,
         credited: credited.get(invoice.id) ?? 0n,
+        creditedGst: creditedGst.get(invoice.id) ?? 0n,
         received: received.get(invoice.id) ?? 0n,
         attributed: attributed.get(invoice.id) ?? 0n,
       },
@@ -484,4 +504,40 @@ export async function invoiceMoney(
     receivedCents: balance.received.toString(),
     outstandingCents: receivable(balance).toString(),
   };
+}
+
+/** Caller holds the original invoice row lock, serializing with settlements. */
+export async function reconcileCreditCashGst(
+  tx: Prisma.TransactionClient,
+  actor: Actor,
+  invoiceId: string,
+  creditId: string,
+  event: "issue" | "void",
+  day: string,
+) {
+  const balance = (await invoiceBalances(tx, actor.companyId, [invoiceId])).get(
+    invoiceId,
+  );
+  if (!balance) throw notFound();
+  const target = adjustedCashShare({
+    total: balance.inclusive,
+    eligible: balance.gst,
+    credited: balance.credited,
+    creditedEligible: balance.creditedGst,
+    received: balance.received,
+  });
+  const delta = target - balance.attributed;
+  if (delta !== 0n)
+    await tx.creditCashAdjustment.create({
+      data: {
+        companyId: actor.companyId,
+        invoiceId,
+        creditId,
+        event,
+        adjustedOn: new Date(day),
+        gstCents: delta,
+        createdBy: actor.userId,
+      },
+    });
+  return delta;
 }

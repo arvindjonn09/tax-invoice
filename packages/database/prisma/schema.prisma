@@ -152,6 +152,7 @@ model Company {
   gstPeriods GstPeriod[]
   gstManualAdjustments GstManualAdjustment[]
   gstSourcePostings GstSourcePosting[]
+  creditCashAdjustments CreditCashAdjustment[]
 
 }
 
@@ -189,6 +190,7 @@ model CompanyGstRegistration {
 }
 
 model Membership {
+  creditCashAdjustments CreditCashAdjustment[]
   id                 String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId          String                   @map("company_id") @db.Uuid
   userId             String                   @map("user_id") @db.Uuid
@@ -830,6 +832,8 @@ enum InvoicePriceEntry {
 /// assigns the number and freezes amounts, lines and party snapshots
 /// (database guard). Corrections are credit notes or a void.
 model Invoice {
+  cashAdjustments CreditCashAdjustment[] @relation("CashAdjustmentInvoice")
+  creditCashAdjustments CreditCashAdjustment[] @relation("CashAdjustmentCredit")
   id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId         String            @map("company_id") @db.Uuid
   kind              InvoiceKind       @default(invoice)
@@ -1452,4 +1456,22 @@ model GstSourcePosting {
   company Company @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   @@id([companyId, sourceId, originalOn])
   @@map("gst_source_postings")
+}
+
+/// Cash GST correction caused by issuing or voiding an adjustment note.
+model CreditCashAdjustment {
+ id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+ companyId String @map("company_id") @db.Uuid
+ invoiceId String @map("invoice_id") @db.Uuid
+ creditId String @map("credit_id") @db.Uuid
+ event String @db.VarChar(5)
+ adjustedOn DateTime @map("adjusted_on") @db.Date
+ gstCents BigInt @map("gst_cents")
+ createdBy String @map("created_by") @db.Uuid
+ company Company @relation(fields:[companyId],references:[id],onDelete:NoAction,onUpdate:NoAction)
+ invoice Invoice @relation("CashAdjustmentInvoice",fields:[companyId,invoiceId],references:[companyId,id],onDelete:NoAction,onUpdate:NoAction)
+ credit Invoice @relation("CashAdjustmentCredit",fields:[companyId,creditId],references:[companyId,id],onDelete:NoAction,onUpdate:NoAction)
+ creator Membership @relation(fields:[companyId,createdBy],references:[companyId,userId],onDelete:NoAction,onUpdate:NoAction)
+ @@unique([companyId,creditId,event])
+ @@map("credit_cash_adjustments")
 }

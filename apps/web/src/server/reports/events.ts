@@ -1,5 +1,5 @@
 import {
-  divideRounded,
+  adjustedCashShare,
   gstStatusOn,
   type GstRegistrationPeriod,
   type ReportEvent,
@@ -39,6 +39,7 @@ export async function financialEvents(
     acceptances,
     postings,
     quotes,
+    creditAdjustments,
   ] = await Promise.all([
     tx.job.findMany({
       where: { companyId },
@@ -80,6 +81,7 @@ export async function financialEvents(
         estimatedCostCents: true,
       },
     }),
+    tx.creditCashAdjustment.findMany({ where: { companyId } }),
   ]);
   const periods: GstRegistrationPeriod[] = registrations.map((p) => ({
     startsOn: toDay(p.startsOn),
@@ -206,6 +208,7 @@ export async function financialEvents(
             date: toDay(a.receipt.receivedOn),
             amount: a.amountCents * (a.receipt.kind === "refund" ? -1n : 1n),
             gst: a.gstAttributedCents,
+            recorded: a.receipt.createdAt.toISOString(),
           },
           ...(a.receipt.voidedAt
             ? [
@@ -216,18 +219,82 @@ export async function financialEvents(
                   amount:
                     a.amountCents * (a.receipt.kind === "refund" ? 1n : -1n),
                   gst: -a.gstAttributedCents,
+                  recorded: a.receipt.voidedAt.toISOString(),
                 },
               ]
             : []),
         ])
+        .map((c) => ({
+          ...c,
+          date: taxDay(c.source, c.date),
+          creditAmount: 0n,
+          creditG1: 0n,
+        }))
+        .concat(
+          invoices
+            .filter((credit) => credit.creditsId === row.id && credit.issueDate)
+            .flatMap((credit) => {
+              const eligible = credit.items
+                .filter((item) => item.taxCode !== "OUT_OF_SCOPE")
+                .reduce((sum, item) => sum + item.inclusiveCents, 0n);
+              const make = (
+                suffix: string,
+                date: string,
+                recorded: string,
+                sign: bigint,
+              ) => ({
+                id: `${credit.id}:cash-credit-${suffix}`,
+                source: credit.id,
+                date: taxDay(credit.id, date),
+                recorded,
+                amount: 0n,
+                gst: 0n,
+                creditAmount: sign * credit.inclusiveCents,
+                creditG1: sign * eligible,
+              });
+              return [
+                make(
+                  "issue",
+                  toDay(credit.issueDate!),
+                  credit.issuedAt!.toISOString(),
+                  1n,
+                ),
+                ...(credit.voidedAt
+                  ? [
+                      make(
+                        "void",
+                        businessDay(credit.voidedAt),
+                        credit.voidedAt.toISOString(),
+                        -1n,
+                      ),
+                    ]
+                  : []),
+              ];
+            }),
+        )
         .sort(
-          (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
+          (a, b) =>
+            a.date.localeCompare(b.date) ||
+            a.recorded.localeCompare(b.recorded) ||
+            a.id.localeCompare(b.id),
         );
-      let received = 0n;
+      let received = 0n,
+        credited = 0n,
+        creditedEligible = 0n;
+      const target = () =>
+        adjustedCashShare({
+          total: row.inclusiveCents,
+          eligible: g1,
+          credited,
+          creditedEligible,
+          received,
+        });
       for (const c of cash) {
-        const before = divideRounded(received * g1, row.inclusiveCents);
+        const before = target();
         received += c.amount;
-        const share = divideRounded(received * g1, row.inclusiveCents) - before;
+        credited += c.creditAmount;
+        creditedEligible += c.creditG1;
+        const share = target() - before;
         if (registered(c.date))
           emit(
             c.id,
@@ -240,6 +307,18 @@ export async function financialEvents(
             share,
           );
       }
+      for (const a of creditAdjustments.filter((a) => a.invoiceId === row.id))
+        if (registered(toDay(a.adjustedOn)))
+          emit(
+            a.id,
+            a.creditId,
+            toDay(a.adjustedOn),
+            row.jobId,
+            row.customerId,
+            "gst_sales",
+            a.gstCents,
+            0n,
+          );
       for (const a of receiptAdjustments.filter((a) => a.invoiceId === row.id))
         if (registered(toDay(a.adjustedOn)))
           emit(

@@ -32,8 +32,13 @@ historical reports. Dates are inclusive. Cancelled jobs retain their costs.
   summary — not lodged**. Profit responses contain no GST channels.
 - A foreign job/customer ID returns404, rather than an empty report.
 - Registration and source-date accounting basis select cash/non-cash facts. Cash
-  uses stored allocation GST plus dated void adjustments; mixed out-of-scope G1
-  uses cumulative integer rounding. Non-cash uses the earlier invoice/payment
+  uses stored allocation GST plus dated void and credit adjustments. Mixed
+  out-of-scope G1 uses cumulative integer rounding against the remaining supply.
+  A paid credit retains the credited cash component until it is refunded;
+  issuing or voiding a credit appends a GST correction under the original invoice
+  lock, without editing allocations. Credits cannot exceed the original amounts
+  per tax treatment. Cash credit dates precede neither recorded settlements nor
+  earlier corrections, so a new credit cannot rewrite their tax attribution. Non-cash uses the earlier invoice/payment
   date, excluding voided settlements. Explicit accountant adjustments are separate dated facts.
 
 Basis changes and complex adjustments require accountant review: manual
@@ -71,6 +76,11 @@ period. Voiding an earlier non-cash settlement also checks the period it would
 remove attribution from. The shared API policy maps SQLSTATE55000 with the fixed
 lock marker to409; user text alone cannot select that response. Old documents can be
 voided in an open current period: this posts a reversal, not a historical edit.
+
+Cash adjustment timing follows the refund distinction in
+[ATO GSTR2000/12, paragraph28](https://www.ato.gov.au/law/view/pdf?DocID=GST%2FGSTR200012%2FNAT%2FATO%2F00001&PiT=20131120000001&filename=law%2Fview%2Fpdf%2Fpbr%2Fgstr2000-012c3.pdf).
+The migration brings valid legacy credited-invoice GST balances forward with a
+dated correction; immutable historical allocations remain unchanged.
 
 ## Verification and remaining work
 

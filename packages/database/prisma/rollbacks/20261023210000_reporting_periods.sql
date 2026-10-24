@@ -11,6 +11,7 @@ DROP TRIGGER IF EXISTS receipt_gst_adjustments_reporting_period ON receipt_gst_a
 DROP TRIGGER IF EXISTS supplier_payment_gst_adjustments_reporting_period ON supplier_payment_gst_adjustments;
 DROP TRIGGER company_gst_registrations_locked ON company_gst_registrations;
 DROP FUNCTION jobflow_guard_locked_registration();
+DROP TABLE credit_cash_adjustments;
 DROP FUNCTION jobflow_guard_report_source();
 DROP FUNCTION jobflow_record_gst_posting(uuid,uuid,date);
 DROP TABLE gst_source_postings;
