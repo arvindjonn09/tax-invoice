@@ -33,6 +33,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Job screens — #33 directory, role-scoped detail tabs, visits, assignments and status timeline; [verification](testing/job-screens.md); pending CI/cross-review
 
 ## M2 Contractors, timesheets and job expenses
+- [ ] Subcontractor portal — #37 own offers/accepted work, redacted direct reads and evidence UI; [contract](architecture/subcontractor-portal.md); pending #42 integration, CI and cross-review
 - [x] Private document storage with signed URLs — #34: app-mediated upload with content sniffing, random keys, 5-minute HMAC download links after authz
 - [ ] Contractors, offers, approvals and acceptance history; restricted contractor portal
   - #35 schema + API: contractors (ABN, GST flag, optional subcontractor login), fixed/hourly offers in GST-exclusive cents with a tax code, accept/decline with immutable acceptance snapshots and committed cost recorded once; portal screens remain #37
