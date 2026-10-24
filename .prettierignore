@@ -12,3 +12,5 @@ README.md
 packages/database/src/generated/
 
 coverage/
+# Golden files are compared byte for byte (#48).
+apps/web/tests/golden/
