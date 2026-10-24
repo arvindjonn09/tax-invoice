@@ -8,7 +8,13 @@ import { NAV_ITEMS, navItemFor } from "@/server/navigation";
 // database work runs.
 export const dynamicParams = false;
 /** Modules with their own pages; this placeholder no longer serves them. */
-const BUILT_MODULES = new Set(["settings", "customers", "jobs", "offers"]);
+const BUILT_MODULES = new Set([
+  "settings",
+  "customers",
+  "jobs",
+  "offers",
+  "expenses",
+]);
 export function generateStaticParams() {
   return NAV_ITEMS.filter((item) => !BUILT_MODULES.has(item.slug)).map(
     (item) => ({ module: item.slug }),
