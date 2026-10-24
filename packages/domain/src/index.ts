@@ -13,3 +13,4 @@ export * from "./jobs";
 export * from "./contractors";
 export * from "./expenses";
 export * from "./labour";
+export * from "./invoices";

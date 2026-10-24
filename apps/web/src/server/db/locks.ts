@@ -17,6 +17,7 @@ const LOCKABLE = new Set([
   "timesheets",
   "expenses",
   "company_gst_registrations",
+  "invoices",
 ]);
 
 export type Tx = Prisma.TransactionClient | PrismaClient;
