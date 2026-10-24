@@ -6,7 +6,14 @@ import { PageHeader } from "@/components/shell/page-header";
 import { Field, TextField } from "@/components/form/field";
 import { Button } from "@/components/ui/button";
 import { day, statusLabel } from "@/features/jobs/types";
+import { StatusPill } from "@/components/status-pill";
 import type { OwnOffer } from "./types";
+/** Job statuses where accepted work is over, so it isn't read as actionable. */
+const FINISHED: Record<string, string | undefined> = {
+  cancelled: "Job cancelled",
+  invoiced: "Job invoiced",
+  closed: "Job closed",
+};
 export function PortalDirectory({ jobsOnly }: { jobsOnly: boolean }) {
   const [q, setQ] = useState(""),
     [search, setSearch] = useState(""),
@@ -103,6 +110,19 @@ export function PortalDirectory({ jobsOnly }: { jobsOnly: boolean }) {
                     Offer: {statusLabel(offer.status)} · Job:{" "}
                     {statusLabel(offer.job.status)}
                   </p>
+                  {offer.status === "accepted" && FINISHED[offer.job.status] ? (
+                    <p>
+                      <StatusPill
+                        status={
+                          offer.job.status === "cancelled"
+                            ? "void"
+                            : "completed"
+                        }
+                        label={FINISHED[offer.job.status]!}
+                      />{" "}
+                      No further work is needed on this job.
+                    </p>
+                  ) : null}
                   <p>Due {day(offer.job.dueOn)}</p>
                   <p className="whitespace-pre-wrap">{offer.scope}</p>
                 </li>

@@ -453,6 +453,128 @@ test("real evidence workflow uploads privately, denies another uploader's file a
   expect(own.job.status).toBe("awaiting_review");
 });
 
+test("switching to a work note after an upload leaves the image unattached (#129)", async ({
+  page,
+}) => {
+  await signIn(page, "owner");
+  const seeded = await fixture(page);
+  for (const to of ["approved", "assigned", "in_progress"])
+    await write(page, `/api/jobs/${seeded.job.id}/status`, { to });
+  await signIn(page, "subcontractor");
+  await write(page, `/api/my/offers/${seeded.offer.id}`, {
+    decision: "accept",
+  });
+  // Storage and attachment are mocked: this checks the form's contract only.
+  let uploads = 0;
+  const posted: Record<string, unknown>[] = [];
+  await page.route("**/api/documents", async (route) => {
+    uploads++;
+    await route.fulfill({
+      status: 201,
+      json: { id: randomUUID(), fileName: "synthetic-switch.png" },
+    });
+  });
+  await page.route(
+    `**/api/my/work/${seeded.job.id}/evidence`,
+    async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({ json: { evidence: [] } });
+        return;
+      }
+      posted.push(route.request().postDataJSON() as Record<string, unknown>);
+      await route.fulfill(
+        posted.length === 1
+          ? { status: 409, json: { error: "Synthetic attachment failure" } }
+          : {
+              status: 201,
+              json: {
+                id: randomUUID(),
+                kind: "note",
+                note: "Synthetic switched note",
+                documentId: null,
+                createdAt: new Date().toISOString(),
+              },
+            },
+      );
+    },
+  );
+  await page.goto(`/offers/${seeded.offer.id}`);
+  const type = page.getByLabel("Evidence type", { exact: true });
+  await expect(type).toBeVisible({ timeout: 30_000 });
+  await type.selectOption("photo");
+  await page.getByLabel("Image *", { exact: true }).setInputFiles({
+    name: "synthetic-switch.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await page
+    .getByRole("button", { name: "Save evidence", exact: true })
+    .click();
+  const pending = page.getByText(/Private upload ready: synthetic-switch\.png/);
+  await expect(pending).toBeVisible();
+
+  // Declining the warning keeps the photo and its pending upload.
+  page.once("dialog", (dialog) => void dialog.dismiss());
+  await type.selectOption("note");
+  await expect(type).toHaveValue("photo");
+  await expect(pending).toBeVisible();
+
+  page.once("dialog", (dialog) => {
+    expect(dialog.message()).toContain("uploaded but not attached");
+    void dialog.accept();
+  });
+  await type.selectOption("note");
+  await expect(type).toHaveValue("note");
+  await expect(pending).toHaveCount(0);
+  await expect(
+    page.getByText("synthetic-switch.png won't be attached to this job.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Work note *", { exact: true })
+    .fill("Synthetic switched note");
+  await page
+    .getByRole("button", { name: "Save evidence", exact: true })
+    .click();
+  await expect(
+    page.getByText("Evidence attached to this job.", { exact: true }),
+  ).toBeVisible();
+  expect(uploads).toBe(1);
+  expect(posted).toHaveLength(2);
+  expect(posted[1]).toEqual({ kind: "note", note: "Synthetic switched note" });
+});
+
+test("a cancelled job in My jobs shows it needs no further work (#129)", async ({
+  page,
+}) => {
+  await signIn(page, "owner");
+  const seeded = await fixture(page);
+  await signIn(page, "subcontractor");
+  await write(page, `/api/my/offers/${seeded.offer.id}`, {
+    decision: "accept",
+  });
+  await signIn(page, "owner");
+  await write(page, `/api/jobs/${seeded.job.id}/status`, { to: "cancelled" });
+  await signIn(page, "subcontractor");
+  await page.goto("/jobs");
+  await page
+    .getByLabel("Search my jobs", { exact: true })
+    .fill(seeded.job.reference);
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  const card = page.getByRole("listitem").filter({
+    hasText: seeded.job.reference,
+  });
+  await expect(card).toHaveCount(1);
+  await expect(card).toContainText("Job: Cancelled");
+  await expect(card.getByText("Job cancelled", { exact: true })).toBeVisible();
+  await expect(card).toContainText("No further work is needed on this job.");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
 test("subcontractor reads office rework instructions and resubmits (#147)", async ({
   page,
 }) => {
