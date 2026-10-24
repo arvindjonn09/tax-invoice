@@ -14,6 +14,7 @@ const BUILT_MODULES = new Set([
   "jobs",
   "offers",
   "contractors",
+  "quotes",
   "employees",
   "expenses",
   "timesheets",
