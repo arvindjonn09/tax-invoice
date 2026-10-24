@@ -2,11 +2,12 @@ BEGIN;
 
 -- #140 Supplier credit notes (adjustment notes) against bills. A credit is
 -- its own document linked to one bill in the same company. It snapshots, once,
--- how much it takes off the bill's claimable GST (a 1B decreasing adjustment
--- on the non-cash basis), non-creditable GST and job cost, at the bill's own
--- creditable share. The application never credits beyond what is still owing.
--- Cash-basis attribution is re-based on the net bill with append-only
--- adjustments, as payment voids do. Immutable except a one-way, audited void.
+-- how much it takes off the bill's claimable GST (for the purchaser an
+-- increasing adjustment, s19-80: credit paid back), non-creditable GST and
+-- job cost, at the bill's own creditable share. The application never
+-- credits beyond what is still owing. Cash-basis attribution is re-based on
+-- the net bill with append-only, dated corrections, as payment voids do.
+-- Immutable except a one-way, audited void.
 
 -- CreateTable
 CREATE TABLE "supplier_credits" (
@@ -15,7 +16,11 @@ CREATE TABLE "supplier_credits" (
     "bill_id" UUID NOT NULL,
     "supplier_reference" VARCHAR(100),
     "issued_on" DATE NOT NULL,
+    -- When the note was received (became known); adjustments are attributed
+    -- to the later of this and the issue date.
+    "received_on" DATE NOT NULL,
     "document_id" UUID,
+    "evidence_verified" BOOLEAN NOT NULL DEFAULT false,
     "exclusive_cents" BIGINT NOT NULL,
     "gst_cents" BIGINT NOT NULL,
     "inclusive_cents" BIGINT NOT NULL,
@@ -30,6 +35,8 @@ CREATE TABLE "supplier_credits" (
     "created_by" UUID NOT NULL,
 
     CONSTRAINT "supplier_credits_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "supplier_credits_received" CHECK ("received_on" >= "issued_on"),
+    CONSTRAINT "supplier_credits_evidence" CHECK (NOT "evidence_verified" OR "document_id" IS NOT NULL),
     CONSTRAINT "supplier_credits_amounts" CHECK (
       "exclusive_cents" >= 0 AND "gst_cents" >= 0 AND "inclusive_cents" > 0
       AND "inclusive_cents" <= 1000000000000
@@ -88,7 +95,12 @@ CREATE TABLE "supplier_credit_gst_adjustments" (
 
 -- CreateIndex
 CREATE UNIQUE INDEX "supplier_credits_company_id_id_key" ON "supplier_credits"("company_id", "id");
+CREATE UNIQUE INDEX "supplier_credits_company_id_id_bill_id_key" ON "supplier_credits"("company_id", "id", "bill_id");
 CREATE UNIQUE INDEX "supplier_credits_company_id_document_id_key" ON "supplier_credits"("company_id", "document_id");
+-- One live credit per supplier note reference on a bill, so a double-submit
+-- can't record the same note twice. Voided credits free the reference.
+CREATE UNIQUE INDEX "supplier_credits_live_reference_key" ON "supplier_credits"("company_id", "bill_id", lower("supplier_reference"))
+  WHERE "voided_at" IS NULL AND "supplier_reference" IS NOT NULL;
 CREATE INDEX "supplier_credits_company_id_bill_id_idx" ON "supplier_credits"("company_id", "bill_id");
 CREATE INDEX "supplier_credits_company_id_issued_on_idx" ON "supplier_credits"("company_id", "issued_on");
 CREATE INDEX "supplier_credits_company_id_created_by_idx" ON "supplier_credits"("company_id", "created_by");
@@ -104,7 +116,8 @@ ALTER TABLE "supplier_credits" ADD CONSTRAINT "supplier_credits_company_id_docum
 ALTER TABLE "supplier_credits" ADD CONSTRAINT "supplier_credits_company_id_created_by_fkey" FOREIGN KEY ("company_id", "created_by") REFERENCES "memberships"("company_id", "user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "supplier_credits" ADD CONSTRAINT "supplier_credits_company_id_voided_by_fkey" FOREIGN KEY ("company_id", "voided_by") REFERENCES "memberships"("company_id", "user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "supplier_credit_items" ADD CONSTRAINT "supplier_credit_items_company_id_credit_id_fkey" FOREIGN KEY ("company_id", "credit_id") REFERENCES "supplier_credits"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
-ALTER TABLE "supplier_credit_gst_adjustments" ADD CONSTRAINT "supplier_credit_gst_adjustments_company_id_credit_id_fkey" FOREIGN KEY ("company_id", "credit_id") REFERENCES "supplier_credits"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+-- Same credit, same bill: a correction can never land on another bill.
+ALTER TABLE "supplier_credit_gst_adjustments" ADD CONSTRAINT "supplier_credit_gst_adjustments_company_id_credit_id_bill_id_fkey" FOREIGN KEY ("company_id", "credit_id", "bill_id") REFERENCES "supplier_credits"("company_id", "id", "bill_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 ALTER TABLE "supplier_credit_gst_adjustments" ADD CONSTRAINT "supplier_credit_gst_adjustments_company_id_bill_id_fkey" FOREIGN KEY ("company_id", "bill_id") REFERENCES "supplier_bills"("company_id", "id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- Credits are never deleted; the only change is a one-way void.

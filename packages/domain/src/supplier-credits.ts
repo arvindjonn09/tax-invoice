@@ -8,8 +8,11 @@ import { type Purchase, calculatePurchase } from "./purchases";
 // the job cost and the claimable GST of that bill — at the bill's own
 // creditable share — and is never more than is still owing (no overcredit:
 // money already paid comes back as a supplier refund, not a credit here).
-// Its creditable GST is a decreasing adjustment to 1B on the non-cash basis;
-// on the cash basis the bill's live credit is re-based on the net amounts.
+// For the purchaser its creditable GST is an increasing adjustment (s19-80:
+// input tax credit paid back) on the non-cash basis — whether or not a note
+// is held. On the cash basis the bill's live credit is re-based on the net
+// amounts; where that *raises* the credit (a decreasing adjustment, e.g. a
+// GST-free line credited on a mixed bill) the note is needed above $75 GST.
 
 /** What a bill was recorded with (its snapshot). */
 export type CreditableBill = {
@@ -120,4 +123,38 @@ export function creditCashAdjustment(input: {
       settled: input.paid,
     }) - input.attributed
   );
+}
+
+/** GST at or below which no adjustment note is needed (ATO: $75). */
+export const ADJUSTMENT_NOTE_THRESHOLD_CENTS = 7_500n;
+
+/**
+ * Why a cash-basis correction can't be written yet, or null. A correction
+ * that raises the claim is a decreasing adjustment: it needs a verified
+ * adjustment note unless the credit's GST is $75 or less. A correction that
+ * lowers the claim never waits for a note.
+ */
+export function cashCorrectionProblem(input: {
+  adjustment: Cents;
+  creditGst: Cents;
+  noteVerified: boolean;
+}): string | null {
+  if (
+    input.adjustment > 0n &&
+    input.creditGst > ADJUSTMENT_NOTE_THRESHOLD_CENTS &&
+    !input.noteVerified
+  )
+    return "This credit raises the GST you can claim; attach and verify the supplier's adjustment note";
+  return null;
+}
+
+/**
+ * The date a credit's GST correction belongs to: the latest of its issue
+ * date, the day it was received (became known) and the latest live payment
+ * it re-splits, so a late note never lands in an earlier period.
+ */
+export function adjustmentDate(dates: readonly (string | null)[]): string {
+  const known = dates.filter((date): date is string => date !== null);
+  if (known.length === 0) throw new RangeError("No date to attribute to");
+  return known.reduce((latest, date) => (date > latest ? date : latest));
 }

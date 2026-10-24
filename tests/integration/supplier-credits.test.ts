@@ -245,6 +245,7 @@ const credit = (
     call(who, {
       supplierReference: `CN-${randomUUID().slice(0, 8)}`,
       issuedOn: "2026-07-20",
+      receivedOn: "2026-07-20",
       lines: [
         {
           description: "Synthetic price adjustment",
@@ -320,6 +321,47 @@ async function profitOf(jobId: string) {
     profit: result.profit.toString(),
     margin: result.marginBasisPoints?.toString() ?? null,
   };
+}
+
+async function documentId(kind: "tax_invoice" | "other" = "tax_invoice") {
+  return (
+    await db.document.create({
+      data: {
+        companyId,
+        kind,
+        objectKey: `documents/${companyId}/${randomBytes(32).toString("hex")}`,
+        fileName: "synthetic.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 1234,
+        sha256: "c".repeat(64),
+        createdBy: userIds.accountant,
+      },
+    })
+  ).id;
+}
+
+/** A bill from any lines, with a verified tax invoice. */
+async function billOf(
+  jobId: string,
+  lines: { taxCode: string; exclusiveCents: string; gstCents: string }[],
+  extra: Record<string, unknown> = {},
+) {
+  const response = await routes.bill(
+    call("accountant", {
+      jobId,
+      supplierName: `Sample Supplies ${randomUUID().slice(0, 6)}`,
+      supplierAbn: syntheticAbn("142142142"),
+      supplierGstRegistered: true,
+      issuedOn: "2026-07-15",
+      lines: lines.map((line) => ({ description: "Synthetic", ...line })),
+      documentId: await documentId(),
+      evidenceVerified: true,
+      ...extra,
+    }),
+    undefined,
+  );
+  expect(response.status).toBe(201);
+  return ((await response.json()) as { id: string }).id;
 }
 
 describe("supplier credits (#140)", () => {
@@ -602,6 +644,11 @@ describe("supplier credits (#140)", () => {
     });
     expect((await profitOf(job)).cost).toBe("90000");
     expect(
+      await db.auditEvent.count({
+        where: { companyId, action: "supplier_credit.voided" },
+      }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
       (
         await routes.voidBill(
           call("accountant", { reason: "Synthetic" }),
@@ -633,6 +680,292 @@ describe("supplier credits (#140)", () => {
     expect(await bill(billId)).toMatchObject({ outstandingCents: "44000" });
     expect((await pay(billId, "44000")).status).toBe(201);
     expect(await cashClaim(billId)).toBe("9000");
+  });
+
+  it("dates a cash correction no earlier than the payments it re-splits or the note's arrival", async () => {
+    const job = await newJob();
+    const billId = await billOf(job, [
+      { taxCode: "TAXABLE_10", exclusiveCents: "90000", gstCents: "9000" },
+      { taxCode: "GST_FREE", exclusiveCents: "10000", gstCents: "0" },
+    ]);
+    const late = await routes.pay(
+      call(
+        "accountant",
+        {
+          paidOn: "2026-07-25",
+          amountCents: "54500",
+          method: "bank_transfer",
+          allocations: [{ billId, amountCents: "54500" }],
+        },
+        { "idempotency-key": `key-${randomUUID()}` },
+      ),
+      undefined,
+    );
+    expect(late.status).toBe(201);
+    const issued = await routes.credit(
+      call("accountant", {
+        issuedOn: "2026-07-20",
+        receivedOn: "2026-07-22",
+        lines: [
+          {
+            description: "Freight",
+            taxCode: "GST_FREE",
+            exclusiveCents: "10000",
+            gstCents: "0",
+          },
+        ],
+      }),
+      one(billId),
+    );
+    expect(issued.status).toBe(201);
+    // Payment on 25 Jul is after the credit (20 Jul) and its arrival (22 Jul).
+    expect(
+      (
+        (await issued.json()) as {
+          cashGstAdjustments: { adjustedOn: string }[];
+        }
+      ).cashGstAdjustments.map((row) => row.adjustedOn),
+    ).toEqual(["2026-07-25"]);
+    // Received before it was issued, or in the future: refused.
+    for (const receivedOn of ["2026-07-19", "2999-01-01"])
+      expect(
+        (
+          await routes.credit(
+            call("accountant", {
+              issuedOn: "2026-07-20",
+              receivedOn,
+              lines: [
+                {
+                  description: "x",
+                  taxCode: "GST_FREE",
+                  exclusiveCents: "100",
+                  gstCents: "0",
+                },
+              ],
+            }),
+            one(billId),
+          )
+        ).status,
+      ).toBe(400);
+  });
+
+  it("a credit that raises the cash claim by more than $75 GST needs a verified note", async () => {
+    const job = await newJob();
+    // $1,000 + $100 taxable and $2,000 GST-free: $3,100 with $100 claimable.
+    const billId = await billOf(job, [
+      { taxCode: "TAXABLE_10", exclusiveCents: "100000", gstCents: "10000" },
+      { taxCode: "GST_FREE", exclusiveCents: "200000", gstCents: "0" },
+    ]);
+    expect((await pay(billId, "20000")).status).toBe(201);
+    expect(await cashClaim(billId)).toBe("645"); // round(200 × 100 / 3100)
+    const lines = [
+      {
+        description: "Returned stock",
+        taxCode: "GST_FREE",
+        exclusiveCents: "190000",
+        gstCents: "0",
+      },
+      {
+        description: "Discount",
+        taxCode: "TAXABLE_10",
+        exclusiveCents: "76000",
+        gstCents: "7600",
+      },
+    ];
+    const body = (extra: Record<string, unknown>) =>
+      call("accountant", {
+        issuedOn: "2026-07-20",
+        receivedOn: "2026-07-20",
+        lines,
+        ...extra,
+      });
+    const refused = await routes.credit(body({}), one(billId));
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).error).toMatch(/adjustment note/);
+    expect(await db.supplierCredit.count({ where: { billId } })).toBe(0);
+    // Net $364 with $24 claimable: round(200 × 24 / 364) = 1319 → +674.
+    const held = await routes.credit(
+      body({ documentId: await documentId("other"), evidenceVerified: true }),
+      one(billId),
+    );
+    expect(held.status).toBe(201);
+    expect(await cashClaim(billId)).toBe("1319");
+    expect(await bill(billId)).toMatchObject({
+      creditedCents: "273600",
+      outstandingCents: "16400",
+      netCreditableGstCents: "2400",
+    });
+    // Cost: $3,000 ex GST less $2,660 credited = $340.
+    expect((await profitOf(job)).cost).toBe("34000");
+  });
+
+  it("refuses the same supplier note twice on a bill, even concurrently", async () => {
+    const job = await newJob();
+    const billId = await fixtureBill(job);
+    const same = () =>
+      routes.credit(
+        call("accountant", {
+          supplierReference: "CN-SAME-1",
+          issuedOn: "2026-07-20",
+          lines: [
+            {
+              description: "x",
+              taxCode: "TAXABLE_10",
+              exclusiveCents: "1000",
+              gstCents: "100",
+            },
+          ],
+        }),
+        one(billId),
+      );
+    const statuses = (await Promise.all([same(), same()]))
+      .map((r) => r.status)
+      .sort();
+    expect(statuses).toEqual([201, 409]);
+    expect(await bill(billId)).toMatchObject({ creditedCents: "1100" });
+    expect((await profitOf(job)).cost).toBe("89000");
+  });
+
+  it("a credit racing a payment never takes the bill below zero", async () => {
+    const job = await newJob();
+    const billId = await fixtureBill(job);
+    const [credited, paid] = await Promise.all([
+      credit(billId, "60000", "6000"),
+      pay(billId, "50000"),
+    ]);
+    // $660 credit + $500 payment > $990: exactly one fits.
+    expect([credited.status, paid.status].sort()).toEqual([201, 400]);
+    const view = await bill(billId);
+    expect(BigInt(view.outstandingCents)).toBeGreaterThanOrEqual(0n);
+    expect(
+      BigInt(view.creditedCents) +
+        BigInt(view.paidCents) +
+        BigInt(view.outstandingCents),
+    ).toBe(99_000n);
+    expect((await profitOf(job)).cost).toBe(
+      credited.status === 201 ? "30000" : "90000",
+    );
+  });
+
+  it("credits a partly claimable bill at its share; commitment stays with the gross bill", async () => {
+    const job = await newJob();
+    const contractor = await db.contractor.create({
+      data: {
+        companyId,
+        createdBy: userIds.owner,
+        name: `Sample Sparks ${randomUUID().slice(0, 6)}`,
+        abn: syntheticAbn("143143143"),
+        gstRegistered: true,
+      },
+    });
+    const offer = await db.contractorOffer.create({
+      data: {
+        companyId,
+        jobId: job,
+        contractorId: contractor.id,
+        scope: "Synthetic wiring",
+        rateType: "fixed",
+        rateExclusiveCents: 90_000n,
+        taxCode: "TAXABLE_10",
+        status: "accepted",
+        respondedAt: new Date(),
+        respondedBy: userIds.owner,
+        createdBy: userIds.owner,
+      },
+    });
+    await db.contractorAcceptance.create({
+      data: {
+        companyId,
+        offerId: offer.id,
+        jobId: job,
+        contractorId: contractor.id,
+        rateType: "fixed",
+        rateExclusiveCents: 90_000n,
+        taxCode: "TAXABLE_10",
+        gstRateBasisPoints: 1000,
+        exclusiveCents: 90_000n,
+        gstCents: 9_000n,
+        inclusiveCents: 99_000n,
+        contractorGstRegistered: true,
+        companyGstRegistered: true,
+        committedCostCents: 90_000n,
+        acceptedBy: userIds.owner,
+      },
+    });
+    const recorded = await routes.bill(
+      call("accountant", {
+        contractorId: contractor.id,
+        offerId: offer.id,
+        issuedOn: "2026-07-15",
+        lines: [
+          {
+            description: "Wiring",
+            taxCode: "TAXABLE_10",
+            exclusiveCents: "90000",
+            gstCents: "9000",
+          },
+        ],
+        documentId: await documentId(),
+        evidenceVerified: true,
+        creditableBasisPoints: 5000,
+        creditableReason: "Synthetic: half private use",
+      }),
+      undefined,
+    );
+    expect(recorded.status).toBe(201);
+    const billId = ((await recorded.json()) as { id: string }).id;
+    expect(await jobBillCosts(db, companyId, job)).toEqual({
+      incurred: 94_500n,
+      committed: 0n,
+    });
+    const response = await credit(billId, "10000", "1000");
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      creditableGstCents: "500",
+      nonCreditableGstCents: "500",
+      jobCostCents: "10500",
+    });
+    // Incurred falls by $105; the offer stays fully billed (no new commitment).
+    expect(await jobBillCosts(db, companyId, job)).toEqual({
+      incurred: 84_000n,
+      committed: 0n,
+    });
+    expect(await bill(billId)).toMatchObject({ netCreditableGstCents: "4000" });
+  });
+
+  it("an unregistered company's credit claims nothing back; all of its GST is cost", async () => {
+    const job = await newJob();
+    // Before the 1 Jul 2025 registration: no credit was ever claimable.
+    const response = await routes.bill(
+      call("accountant", {
+        jobId: job,
+        supplierName: "Early Sample Supplies",
+        supplierAbn: syntheticAbn("144144144"),
+        supplierGstRegistered: true,
+        issuedOn: "2025-06-30",
+        lines: [
+          {
+            description: "Early",
+            taxCode: "TAXABLE_10",
+            exclusiveCents: "90000",
+            gstCents: "9000",
+          },
+        ],
+      }),
+      undefined,
+    );
+    expect(response.status).toBe(201);
+    const billId = ((await response.json()) as { id: string }).id;
+    expect((await profitOf(job)).cost).toBe("99000");
+    const created = await credit(billId, "10000", "1000");
+    expect(created.status).toBe(201);
+    expect(await created.json()).toMatchObject({
+      creditableGstCents: "0",
+      nonCreditableGstCents: "1000",
+      jobCostCents: "11000",
+    });
+    expect((await profitOf(job)).cost).toBe("88000");
+    expect(await bill(billId)).toMatchObject({ netCreditableGstCents: "0" });
   });
 
   it("is immutable in the database: no edits, deletes or line changes", async () => {

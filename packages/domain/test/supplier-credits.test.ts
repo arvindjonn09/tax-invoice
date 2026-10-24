@@ -6,6 +6,8 @@ import {
   billLine,
   creditAmounts,
   creditCashAdjustment,
+  adjustmentDate,
+  cashCorrectionProblem,
   creditProblem,
 } from "../src/index";
 
@@ -164,5 +166,44 @@ describe("supplier credits (#140)", () => {
         attributed: 0n,
       }),
     ).toBe(0n);
+  });
+
+  it("needs a verified note only when a cash correction raises the claim above $75 GST", () => {
+    expect(
+      cashCorrectionProblem({
+        adjustment: 455n,
+        creditGst: 7_501n,
+        noteVerified: false,
+      }),
+    ).toMatch(/adjustment note/);
+    expect(
+      cashCorrectionProblem({
+        adjustment: 455n,
+        creditGst: 7_501n,
+        noteVerified: true,
+      }),
+    ).toBeNull();
+    expect(
+      cashCorrectionProblem({
+        adjustment: 455n,
+        creditGst: 7_500n,
+        noteVerified: false,
+      }),
+    ).toBeNull();
+    expect(
+      cashCorrectionProblem({
+        adjustment: -455n,
+        creditGst: 9_000n,
+        noteVerified: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("dates a correction on the latest of issue, receipt and payment", () => {
+    expect(adjustmentDate(["2026-06-20", "2026-07-10", "2026-07-05"])).toBe(
+      "2026-07-10",
+    );
+    expect(adjustmentDate(["2026-06-20", null])).toBe("2026-06-20");
+    expect(() => adjustmentDate([null])).toThrow(RangeError);
   });
 });

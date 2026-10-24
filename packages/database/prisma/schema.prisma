@@ -1260,7 +1260,8 @@ model SupplierPaymentGstAdjustment {
 /// A supplier credit note (adjustment note) against one bill (#140). It
 /// lowers what is owed, the job cost and the claimable GST of that bill at
 /// the bill's creditable share, and never credits beyond what is owing.
-/// Its creditable GST is a 1B decreasing adjustment (non-cash basis).
+/// For the purchaser its creditable GST is an increasing adjustment (s19-80:
+/// input tax credit paid back), on the non-cash basis.
 /// Immutable except a one-way, audited void.
 model SupplierCredit {
   id                    String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -1268,7 +1269,12 @@ model SupplierCredit {
   billId                String                        @map("bill_id") @db.Uuid
   supplierReference     String?                       @map("supplier_reference") @db.VarChar(100)
   issuedOn              DateTime                      @map("issued_on") @db.Date
+  /// When the company received (became aware of) the note; adjustments
+  /// are attributed to the later of this and the issue date.
+  receivedOn            DateTime                      @map("received_on") @db.Date
   documentId            String?                       @map("document_id") @db.Uuid
+  /// The recorder checked the attached document is a valid adjustment note.
+  evidenceVerified      Boolean                       @default(false) @map("evidence_verified")
   exclusiveCents        BigInt                        @map("exclusive_cents")
   gstCents              BigInt                        @map("gst_cents")
   inclusiveCents        BigInt                        @map("inclusive_cents")
@@ -1290,6 +1296,7 @@ model SupplierCredit {
   gstAdjustments        SupplierCreditGstAdjustment[]
 
   @@unique([companyId, id])
+  @@unique([companyId, id, billId])
   @@unique([companyId, documentId])
   @@index([companyId, billId])
   @@index([companyId, issuedOn])

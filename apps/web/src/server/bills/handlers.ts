@@ -14,6 +14,8 @@ import {
   billLine,
   billLineProblem,
   billOutstanding,
+  adjustmentDate,
+  cashCorrectionProblem,
   creditAmounts,
   creditCashAdjustment,
   creditProblem,
@@ -174,6 +176,7 @@ export function creditSummary(credit: SupplierCredit) {
     id: credit.id,
     supplierReference: credit.supplierReference,
     issuedOn: toDay(credit.issuedOn),
+    receivedOn: toDay(credit.receivedOn),
     exclusiveCents: credit.exclusiveCents.toString(),
     gstCents: credit.gstCents.toString(),
     inclusiveCents: credit.inclusiveCents.toString(),
@@ -1060,12 +1063,16 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
 const CreateCredit = z.object({
   supplierReference: optionalText(100).optional(),
   issuedOn: day,
+  /** When the note arrived (became known); defaults to today. */
+  receivedOn: day.optional(),
   lines: z
     .array(Line)
     .min(1, "Add at least one line")
     .max(100, "At most 100 lines"),
   /** The supplier's adjustment note, if uploaded. */
   documentId: z.uuid().nullable().optional(),
+  /** The recorder checked the attached document is a valid adjustment note. */
+  evidenceVerified: z.boolean().default(false),
   note: optionalText(500).optional(),
 });
 
@@ -1084,6 +1091,7 @@ function creditView(row: CreditRow) {
     ...creditSummary(row),
     billId: row.billId,
     documentId: row.documentId,
+    evidenceVerified: row.evidenceVerified,
     nonCreditableGstCents: row.nonCreditableGstCents.toString(),
     note: row.note,
     voidReason: row.voidReason,
@@ -1135,135 +1143,191 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
     const data = parsed.data;
     const billId = uuidOrNull((await context.params).id);
     if (!billId) throw notFound();
-    if (data.issuedOn > sydneyToday())
+    const today = sydneyToday();
+    const receivedOn = data.receivedOn ?? today;
+    if (data.issuedOn > today)
       return fail(400, "The credit date can't be in the future", "issuedOn");
-    return inTransaction(async () => {
-      const row = await withAudit(db(), async (tx, audit) => {
-        await lockRow(tx, "supplier_bills", billId);
-        const bill = requireSameCompany(
-          actor,
-          await tx.supplierBill.findUnique({ where: { id: billId } }),
-        );
-        if (bill.voidedAt) throw refuse(409, "A void bill can't be credited");
-        if (data.issuedOn < toDay(bill.issuedOn))
-          throw refuse(
-            400,
-            "A credit can't be dated before its bill",
-            "issuedOn",
+    if (receivedOn > today || receivedOn < data.issuedOn)
+      return fail(
+        400,
+        "Received on or after the credit date, and not in the future",
+        "receivedOn",
+      );
+    if (data.evidenceVerified && !data.documentId)
+      return fail(
+        400,
+        "Attach the adjustment note before marking it verified",
+        "documentId",
+      );
+    try {
+      return await inTransaction(async () => {
+        const row = await withAudit(db(), async (tx, audit) => {
+          await lockRow(tx, "supplier_bills", billId);
+          const bill = requireSameCompany(
+            actor,
+            await tx.supplierBill.findUnique({ where: { id: billId } }),
           );
-        const lines = data.lines.map((line, index) => {
-          const input = {
-            taxCode: line.taxCode as (typeof TAX_CODES)[number],
-            exclusive: line.exclusiveCents,
-            gst: line.gstCents,
-          };
-          const problem = billLineProblem(input, bill.supplierGstRegistered);
-          if (problem) throw refuse(400, problem, `lines.${index}`);
-          return { ...billLine(input), description: line.description };
-        });
-        if (data.documentId) {
-          const found = await lockDocumentClaim(
-            tx,
-            actor.companyId,
-            data.documentId,
-          );
-          if (
-            !found ||
-            !["tax_invoice", "receipt", "other"].includes(found.kind)
-          )
+          if (bill.voidedAt) throw refuse(409, "A void bill can't be credited");
+          if (data.issuedOn < toDay(bill.issuedOn))
             throw refuse(
               400,
-              "Attach the supplier's uploaded adjustment note",
-              "documentId",
+              "A credit can't be dated before its bill",
+              "issuedOn",
             );
-          if (
-            found.expense ||
-            found.workEvidence ||
-            found.supplierBill ||
-            found.supplierCredit
-          )
-            throw refuse(
-              400,
-              "That document is already attached to another record",
-              "documentId",
+          const lines = data.lines.map((line, index) => {
+            const input = {
+              taxCode: line.taxCode as (typeof TAX_CODES)[number],
+              exclusive: line.exclusiveCents,
+              gst: line.gstCents,
+            };
+            const problem = billLineProblem(input, bill.supplierGstRegistered);
+            if (problem) throw refuse(400, problem, `lines.${index}`);
+            return { ...billLine(input), description: line.description };
+          });
+          if (data.documentId) {
+            const found = await lockDocumentClaim(
+              tx,
+              actor.companyId,
+              data.documentId,
             );
-        }
-        const balance = (await billBalances(tx, actor.companyId, [billId])).get(
-          billId,
-        )!;
-        const credited = liveCredited(balance.bill.credits);
-        const snapshot = creditableBill(bill);
-        const problem = creditProblem(lines, snapshot, credited, balance.paid);
-        if (problem) throw refuse(400, problem, "lines");
-        const amounts = creditAmounts(lines, snapshot, credited);
-        const created = await tx.supplierCredit.create({
-          data: {
-            companyId: actor.companyId,
-            billId,
-            supplierReference: data.supplierReference ?? null,
-            issuedOn: new Date(`${data.issuedOn}T00:00:00Z`),
-            documentId: data.documentId ?? null,
-            exclusiveCents: amounts.exclusive,
-            gstCents: amounts.gst,
-            inclusiveCents: amounts.inclusive,
-            creditableGstCents: amounts.creditableGst,
-            nonCreditableGstCents: amounts.nonCreditableGst,
-            jobCostCents: amounts.jobCost,
-            note: data.note ?? null,
-            createdBy: actor.userId,
-          },
-        });
-        await tx.supplierCreditItem.createMany({
-          data: lines.map((line, index) => ({
-            companyId: actor.companyId,
-            creditId: created.id,
-            position: index + 1,
-            description: line.description,
-            taxCode: line.taxCode,
-            gstRateBasisPoints: Number(line.rateBasisPoints),
-            exclusiveCents: line.exclusive,
-            gstCents: line.gst,
-            inclusiveCents: line.inclusive,
-          })),
-        });
-        // Cash basis: re-base what payments attributed on the net bill.
-        const adjustment = creditCashAdjustment({
-          netInclusive: balance.inclusive - amounts.inclusive,
-          netCreditableGst: balance.creditableGst - amounts.creditableGst,
-          paid: balance.paid,
-          attributed: balance.attributed,
-        });
-        if (adjustment !== 0n)
-          await tx.supplierCreditGstAdjustment.create({
+            if (
+              !found ||
+              !["tax_invoice", "receipt", "other"].includes(found.kind)
+            )
+              throw refuse(
+                400,
+                "Attach the supplier's uploaded adjustment note",
+                "documentId",
+              );
+            if (
+              found.expense ||
+              found.workEvidence ||
+              found.supplierBill ||
+              found.supplierCredit
+            )
+              throw refuse(
+                400,
+                "That document is already attached to another record",
+                "documentId",
+              );
+          }
+          const balance = (
+            await billBalances(tx, actor.companyId, [billId])
+          ).get(billId)!;
+          const credited = liveCredited(balance.bill.credits);
+          const snapshot = creditableBill(bill);
+          const problem = creditProblem(
+            lines,
+            snapshot,
+            credited,
+            balance.paid,
+          );
+          if (problem) throw refuse(400, problem, "lines");
+          const amounts = creditAmounts(lines, snapshot, credited);
+          const created = await tx.supplierCredit.create({
             data: {
               companyId: actor.companyId,
-              creditId: created.id,
               billId,
-              event: "recorded",
-              creditableGstCents: adjustment,
-              adjustedOn: new Date(`${data.issuedOn}T00:00:00Z`),
+              supplierReference: data.supplierReference ?? null,
+              issuedOn: new Date(`${data.issuedOn}T00:00:00Z`),
+              receivedOn: new Date(`${receivedOn}T00:00:00Z`),
+              documentId: data.documentId ?? null,
+              evidenceVerified: data.evidenceVerified,
+              exclusiveCents: amounts.exclusive,
+              gstCents: amounts.gst,
+              inclusiveCents: amounts.inclusive,
+              creditableGstCents: amounts.creditableGst,
+              nonCreditableGstCents: amounts.nonCreditableGst,
+              jobCostCents: amounts.jobCost,
+              note: data.note ?? null,
+              createdBy: actor.userId,
             },
           });
-        await audit({
-          companyId: actor.companyId,
-          actorUserId: actor.userId,
-          action: "supplier_credit.recorded",
-          target: { type: "supplier_credit", id: created.id },
-          after: {
-            billId,
-            inclusiveCents: amounts.inclusive,
-            creditableGstCents: amounts.creditableGst,
-            jobCostCents: amounts.jobCost,
-            cashGstAdjustmentCents: adjustment,
-          },
+          await tx.supplierCreditItem.createMany({
+            data: lines.map((line, index) => ({
+              companyId: actor.companyId,
+              creditId: created.id,
+              position: index + 1,
+              description: line.description,
+              taxCode: line.taxCode,
+              gstRateBasisPoints: Number(line.rateBasisPoints),
+              exclusiveCents: line.exclusive,
+              gstCents: line.gst,
+              inclusiveCents: line.inclusive,
+            })),
+          });
+          // Cash basis: re-base what payments attributed on the net bill.
+          const adjustment = creditCashAdjustment({
+            netInclusive: balance.inclusive - amounts.inclusive,
+            netCreditableGst: balance.creditableGst - amounts.creditableGst,
+            paid: balance.paid,
+            attributed: balance.attributed,
+          });
+          const noteProblem = cashCorrectionProblem({
+            adjustment,
+            creditGst: amounts.gst,
+            noteVerified: data.evidenceVerified,
+          });
+          if (noteProblem) throw refuse(400, noteProblem, "documentId");
+          if (adjustment !== 0n) {
+            // Dated no earlier than the note arrived or the payments it
+            // re-splits, so it never lands in an earlier period.
+            const lastPaid = await tx.supplierPaymentAllocation.findFirst({
+              where: {
+                companyId: actor.companyId,
+                billId,
+                payment: { voidedAt: null },
+              },
+              orderBy: { payment: { paidOn: "desc" } },
+              select: { payment: { select: { paidOn: true } } },
+            });
+            await tx.supplierCreditGstAdjustment.create({
+              data: {
+                companyId: actor.companyId,
+                creditId: created.id,
+                billId,
+                event: "recorded",
+                creditableGstCents: adjustment,
+                adjustedOn: new Date(
+                  `${adjustmentDate([
+                    data.issuedOn,
+                    receivedOn,
+                    lastPaid ? toDay(lastPaid.payment.paidOn) : null,
+                  ])}T00:00:00Z`,
+                ),
+              },
+            });
+          }
+          await audit({
+            companyId: actor.companyId,
+            actorUserId: actor.userId,
+            action: "supplier_credit.recorded",
+            target: { type: "supplier_credit", id: created.id },
+            after: {
+              billId,
+              inclusiveCents: amounts.inclusive,
+              creditableGstCents: amounts.creditableGst,
+              jobCostCents: amounts.jobCost,
+              cashGstAdjustmentCents: adjustment,
+            },
+          });
+          return tx.supplierCredit.findUniqueOrThrow({
+            where: { id: created.id },
+            include: CREDIT_INCLUDE,
+          });
         });
-        return tx.supplierCredit.findUniqueOrThrow({
-          where: { id: created.id },
-          include: CREDIT_INCLUDE,
-        });
+        return privateJson(creditView(row), { status: 201 });
       });
-      return privateJson(creditView(row), { status: 201 });
-    });
+    } catch (error) {
+      // A concurrent copy of this supplier note committed first.
+      if (isUniqueViolation(error, "supplier_credits_live_reference_key"))
+        return fail(
+          409,
+          "This supplier credit note is already recorded on the bill",
+          "supplierReference",
+        );
+      throw error;
+    }
   };
 
   const read: PolicyHandler<IdContext> = async ({ actor, context }) => {
@@ -1339,7 +1403,9 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
           action: "supplier_credit.voided",
           target: { type: "supplier_credit", id },
           before: {
+            billId: before.billId,
             inclusiveCents: before.inclusiveCents,
+            creditableGstCents: before.creditableGstCents,
             jobCostCents: before.jobCostCents,
           },
           after: {
