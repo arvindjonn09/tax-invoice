@@ -40,6 +40,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
   - #35 schema + API: contractors (ABN, GST flag, optional subcontractor login), fixed/hourly offers in GST-exclusive cents with a tax code, accept/decline with immutable acceptance snapshots and committed cost recorded once; portal screens remain #37
 - [ ] Employee timesheets with cost-rate snapshots
   - #38 schema + API: append-only effective-dated employee cost rates; timesheets per job/visit by live-assigned employees (re-checked under job→employee locks); approval snapshots the rate on the work date and the cost once; decided timesheets frozen, reversal corrections; rates/costs only with employee.cost_rate.read; screens remain #39
+  - #131 screens: `/employees` directory and detail (create/edit, link a login via employee-role-only `GET /api/employees/linkable-users`, deactivate/reactivate) and the append-only cost-rate history (add with employee.write, read with employee.cost_rate.read; accountant read-only without rates)
 - [ ] Expenses with GST code, creditable portion, receipts and approvals
   - #40 schema + API: job/general expenses, ex/incl entry, tax code, creditable share, receipt, settlement (paid at purchase / on account, company default), approval snapshots the cost once, decided expenses frozen, reversal corrections; screens remain #41
 - [x] Work evidence and completion approval — #42: append-only photos/notes/signatures from workers on the job; submit → review (approve or rework) via the status machine; completion and rework only through the review, workers locked and rechecked before every write, visit-only workers kept to their visits
@@ -49,7 +50,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Supplier bills with creditable GST and payment allocations
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
-- [ ] Customer receipts and allocations
+- [x] Customer receipts and allocations — #50: idempotent, transactional, no overpayment, refunds, cash-basis GST attribution per allocation
 - [ ] Financial concurrency/idempotency tests
 
 ## M4 Profit, GST reporting and dashboard

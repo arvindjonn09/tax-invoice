@@ -32,6 +32,7 @@ import { nextNumber } from "../db/numbering";
 import { optionalText, requiredText, uuidOrNull } from "../http/fields";
 import { parsePage } from "../http/guards";
 import { Refusal, inTransaction } from "../jobs/handlers";
+import { invoiceMoney } from "../receipts/handlers";
 
 // #47. Office roles read (invoice.read); owner/manager/accountant draft
 // (invoice.write); owner/accountant issue, credit and void (invoice.issue).
@@ -292,8 +293,13 @@ export function invoiceHandlers(db: () => PrismaClient) {
       where: { companyId: actor.companyId, creditsId: row.id },
       select: { id: true, status: true, reference: true, inclusiveCents: true },
     });
+    const money_ =
+      row.kind === "invoice" && row.status === "issued"
+        ? await invoiceMoney(db(), actor.companyId, row.id)
+        : null;
     return privateJson({
       ...view(row),
+      ...(money_ ?? {}),
       creditNotes: credits.map((credit) => ({
         ...credit,
         inclusiveCents: money(credit.inclusiveCents),
@@ -777,6 +783,17 @@ export function invoiceHandlers(db: () => PrismaClient) {
             fail(
               409,
               "This invoice has issued credit notes; credit the rest instead of voiding",
+            ),
+          );
+        if (
+          (await tx.receiptAllocation.count({
+            where: { invoiceId: before.id, receipt: { voidedAt: null } },
+          })) > 0
+        )
+          throw new Refusal(
+            fail(
+              409,
+              "Money has been received against this invoice; credit it, or void the receipts first",
             ),
           );
         const updated = await tx.invoice.update({
