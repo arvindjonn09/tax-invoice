@@ -70,7 +70,7 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
    sudo install -o root -g root -m 0755 infra/staging/deploy.sh /usr/local/sbin/jobflow-deploy
    ```
 
-   Re-install it whenever `infra/staging/deploy.sh` changes. Then start the stack: `sudo -u deploy SSH_ORIGINAL_COMMAND="deploy $(git rev-parse origin/main)" /usr/local/sbin/jobflow-deploy`.
+   Re-install it whenever `infra/staging/deploy.sh` changes. Then start the stack: `sudo -u deploy git -C /opt/jobflow fetch origin main && sudo -u deploy SSH_ORIGINAL_COMMAND="deploy $(sudo -u deploy git -C /opt/jobflow rev-parse origin/main)" /usr/local/sbin/jobflow-deploy`.
 7. **Renewal:** a weekly cron job on the host:
 
    ```sh
@@ -114,7 +114,7 @@ Its `deploy` job runs only on pushes to `main`, and only when every item below i
 
 The job then polls `/api/health/ready` until it answers 200.
 
-**Rolling back:** revert on `main` and let the job deploy the revert. Migrations only go forward. If one has to be undone, use its file in `packages/database/prisma/rollbacks/` during a maintenance window, or restore a backup.
+**Rolling back:** see [deployment.md § Roll back](deployment.md#roll-back). Migrations only go forward. The files in `packages/database/prisma/rollbacks/` are test-only: never run them against staging or production.
 
 ## Before you call staging done
 

@@ -6,7 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
-- Subcontractors send their own tax invoices for accepted work; the office verifies and approves them into supplier bills (#139, in review).
+- Subcontractors send their own tax invoices for accepted work; the office verifies them and approves them into supplier bills (#139).
 - Deployment and rollback runbook, and user guides for invoices, payments and GST (#66).
 
 ## M5 Production pilot (in progress)
@@ -74,6 +74,10 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 - Design previews of the dashboard and invoice builder (#22, #23).
 - A web security baseline, CSRF origin checks and safe logging (#71).
 - CI quality gates (#10).
+
+### Security
+
+- Updated Zod for a resource-exhaustion advisory (#121).
 
 ## Release log
 

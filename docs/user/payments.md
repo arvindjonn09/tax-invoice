@@ -11,7 +11,7 @@ Owners and accountants record bills and payments, and managers can see them.
 
 1. Go to **Payments**, then **Record bill**.
 2. Choose who the bill is from:
-   - **A contractor:** their name, ABN and GST status come from their contractor record. You can link the accepted offer the bill is for, and its committed cost is then treated as billed.
+   - **A contractor:** their name, ABN and GST status come from their contractor record.
    - **Any other supplier:** enter the name, whether they're registered for GST, and their ABN if they are.
 3. Enter the **Supplier's bill number**, the **Bill date** and an optional **Due date**.
 4. Add lines, each with an amount ex GST, the GST shown on the bill, and the GST treatment.
@@ -27,7 +27,9 @@ A recorded bill can't be edited. Void it with a reason if it was a mistake (unpa
 
 ### Supplier credits
 
-When a supplier sends a credit note (an adjustment note) for a bill, open the bill and record the credit. It lowers what you owe, the job cost and the GST credit. You can't credit more than is still owing. If the bill is already fully paid, adjust it with your accountant.
+When a supplier sends a credit note (an adjustment note) for a bill, record it against the bill. It lowers what you owe, the job cost and the GST credit. You can't credit more than is still owing. If the bill is already fully paid, adjust it with your accountant.
+
+> The screen for recording supplier credits is still to come. For now, they're recorded through the API (`POST /api/bills/<id>/credits`), so ask whoever administers JobFlow.
 
 ### Invoices from subcontractors
 
@@ -44,8 +46,10 @@ Subcontractors never see the job's price, your costs or your profit.
 
 1. Go to **Payments**, then **Record payment**.
 2. Choose who you **Paid**, the date, the **Method** and the amount.
-3. Allocate the amount across that supplier's bills. You can also pay expenses you bought **on account**, but not in the same payment as bills.
+3. Allocate the amount across that supplier's bills.
 4. Save. Each payment has a one-time key, so pressing save twice never records it twice.
+
+> Expenses bought **on account** can be paid through supplier payments too, but not in the same payment as bills. That isn't on the payment screen yet, so for now it's done through the API.
 
 A payment can't be edited. Void it with a reason, and its bills become owing again. On the cash basis, a payment can't be dated before the bill's latest credit or GST correction.
 

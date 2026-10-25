@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const docs = [
   "CHANGELOG.md",
+  "README.md",
   ...readdirSync(join(root, "docs/ops"))
     .filter((f) => f.endsWith(".md"))
     .map((f) => `docs/ops/${f}`),

@@ -1,6 +1,6 @@
 # Invoices and credit notes
 
-This is for owners and accountants who bill customers. Managers can prepare drafts, but only an owner or accountant can issue them.
+This is for owners and accountants, who prepare, issue and correct invoices. Managers can see invoices but can't change them.
 
 ## Before your first invoice
 
@@ -31,7 +31,7 @@ On an issued invoice, choose **Get PDF**. You get a private download link that e
 ## Fix an issued invoice
 
 - **Credit note:** use **Create credit note** for a full or part refund of a price. It opens a draft credit note linked to the invoice. Adjust its lines, then issue it like an invoice. It takes GST off in the period it's issued, and the original stays as it was. Credit notes are listed on the invoice.
-- **Void:** use **Void invoice** when an invoice was a mistake and nothing has been paid. You must give a reason. Voiding reverses the invoice on the day of the void, so earlier reports don't change.
+- **Void:** use **Void invoice** when an invoice was a mistake. You must give a reason. A void is refused once money has been received against the invoice, or once it has an issued credit note. In those cases, credit it instead, or void the receipts first. Voiding reverses the invoice on the day of the void, so earlier reports don't change.
 
 ## Getting paid
 

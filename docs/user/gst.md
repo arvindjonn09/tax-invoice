@@ -26,11 +26,11 @@ When your accountant has checked a period, an owner or accountant **closes** it.
 
 ## Where to see it
 
-The report screens with filters and CSV export are still being built (#58). Until then, office users with report access can use these endpoints. They return the same figures the screens will show.
+The report screens with filters and CSV export are still being built (#58). Until then, these endpoints return the same figures the screens will show:
 
-- `GET /api/reports/gst?from=2026-07-01&to=2026-09-30`: the draft summary.
-- `GET /api/reports/profitability?from=…&to=…`: job profit (ex GST).
-- `GET /api/reports/gst/periods` lists closed periods.
-- `POST /api/reports/gst/periods` closes a period (owner or accountant).
+- `GET /api/reports/gst?from=2026-07-01&to=2026-09-30` gives the draft summary. Owners and accountants only.
+- `GET /api/reports/profitability?from=…&to=…` gives job profit ex GST, for anyone allowed to see job profit.
+- `GET /api/reports/gst/periods` lists closed periods. Owners and accountants only.
+- `POST /api/reports/gst/periods` closes a period. Owners and accountants only.
 
 Always have your accountant review the draft before you lodge your BAS.
