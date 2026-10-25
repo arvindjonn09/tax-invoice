@@ -123,6 +123,7 @@ describe("unattached document cleanup (#137)", () => {
     const audit = await db.auditEvent.findFirstOrThrow({
       where: { companyId, targetId: old.id },
     });
+    expect(audit.metadata).toMatchObject({ by: "unattached-document-cleanup" });
     expect(audit).toMatchObject({
       action: "document.unattached_deleted",
       targetType: "document",
@@ -167,8 +168,50 @@ describe("unattached document cleanup (#137)", () => {
     await attach;
     const result = await cleanup;
     expect(result.deleted.map((d) => d.id)).not.toContain(doc.id);
+    // It really waited on the lock and re-checked, rather than missing it.
+    expect(result.skipped).toBe(1);
     expect(await db.document.count({ where: { id: doc.id } })).toBe(1);
     expect(await store.get(doc.objectKey)).not.toBeNull();
+  });
+
+  it("keeps an upload that was once part of a record (a swapped-out receipt)", async () => {
+    const swapped = await upload(daysAgo(12));
+    await db.auditEvent.create({
+      data: {
+        companyId,
+        createdBy: userId,
+        action: "expense.updated",
+        targetType: "expense",
+        targetId: jobId,
+        metadata: { before: { receiptDocumentId: swapped.id } },
+      },
+    });
+    const result = await cleanUnattachedDocuments(db, store, { now: NOW });
+    expect(result.deleted.map((d) => d.id)).not.toContain(swapped.id);
+    expect(await store.get(swapped.objectKey)).not.toBeNull();
+  });
+
+  it("counts a storage failure and carries on with the batch", async () => {
+    const failing = await upload(daysAgo(20));
+    const fine = await upload(daysAgo(19));
+    const flaky = {
+      put: store.put.bind(store),
+      get: store.get.bind(store),
+      delete: async (key: string) => {
+        if (key === failing.objectKey) throw new Error("storage unavailable");
+        return store.delete(key);
+      },
+    } as unknown as MemoryStore;
+    const result = await cleanUnattachedDocuments(db, flaky, { now: NOW });
+    expect(result.failed).toBe(1);
+    expect(result.deleted.map((d) => d.id)).toContain(fine.id);
+    // The failed one is untouched and retried next time.
+    expect(await db.document.count({ where: { id: failing.id } })).toBe(1);
+    expect(
+      (await cleanUnattachedDocuments(db, store, { now: NOW })).deleted.map(
+        (d) => d.id,
+      ),
+    ).toEqual([failing.id]);
   });
 
   it("refuses a grace period under one day", async () => {

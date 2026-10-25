@@ -30,15 +30,23 @@ export async function documentReferences(
     ORDER BY 1, 2`;
 }
 
-/** SQL that is true when document `d` is referenced anywhere. */
+/**
+ * SQL that is true when document `d` is referenced anywhere, or was ever
+ * part of a record: an audit event other than its own upload names it (for
+ * example a receipt swapped out of a submitted expense, kept as evidence of
+ * what was submitted).
+ */
 function attachedSql(references: Reference[]): string {
-  return references
-    .map(
+  return [
+    ...references.map(
       // Identifiers come from the catalog, already quoted by PostgreSQL.
       ({ tbl, col }) =>
         `EXISTS (SELECT 1 FROM ${tbl} r WHERE r.${col} = d.id AND r.company_id = d.company_id)`,
-    )
-    .join(" OR ");
+    ),
+    `EXISTS (SELECT 1 FROM audit_events e WHERE e.company_id = d.company_id
+       AND e.action <> 'document.uploaded' AND e.target_id <> d.id::text
+       AND strpos(e.metadata::text, d.id::text) > 0)`,
+  ].join(" OR ");
 }
 
 export type CleanupResult = {
@@ -46,6 +54,8 @@ export type CleanupResult = {
   deleted: { id: string; companyId: string; kind: string; sizeBytes: number }[];
   /** Candidates skipped because they were attached or changed meanwhile. */
   skipped: number;
+  /** Candidates that failed (left for the next run; never half-deleted). */
+  failed: number;
 };
 
 export async function cleanUnattachedDocuments(
@@ -74,61 +84,78 @@ export async function cleanUnattachedDocuments(
     cutoff,
     limit,
   );
-  const result: CleanupResult = { deleted: [], skipped: 0 };
+  const result: CleanupResult = { deleted: [], skipped: 0, failed: 0 };
   for (const { id } of candidates) {
-    const done = await db.$transaction(async (tx) => {
-      // FOR UPDATE: the same lock bills and expenses take to attach, and it
-      // conflicts with the KEY SHARE lock any new referencing row takes, so
-      // nothing can attach this document until we commit.
-      await lockRow(tx, "documents", id);
-      const [row] = await tx.$queryRawUnsafe<
-        {
-          id: string;
-          company_id: string;
-          kind: string;
-          size_bytes: number;
-          object_key: string;
-          created_by: string;
-          created_at: Date;
-        }[]
-      >(
-        `SELECT d.id, d.company_id, d.kind::text AS kind, d.size_bytes, d.object_key, d.created_by, d.created_at
-         FROM documents d WHERE d.id = $1::uuid AND d.created_at < $2 AND NOT (${attached})`,
-        id,
-        cutoff,
-      );
-      if (!row) return null;
-      const summary = {
-        id: row.id,
-        companyId: row.company_id,
-        kind: row.kind,
-        sizeBytes: row.size_bytes,
-      };
-      if (dryRun) return summary;
-      // Object first: if the row delete then failed, a retry finds the row
-      // again (deleting a missing object is a no-op); the reverse order
-      // could leave an unreachable private file behind.
-      await store.delete(row.object_key);
-      await tx.document.delete({ where: { id: row.id } });
-      await tx.auditEvent.create({
-        data: {
-          companyId: row.company_id,
-          createdBy: row.created_by,
-          action: "document.unattached_deleted",
-          targetType: "document",
-          targetId: row.id,
-          metadata: {
-            kind: row.kind,
-            sizeBytes: row.size_bytes,
-            uploadedAt: row.created_at.toISOString(),
-            graceDays,
-          },
-        },
-      });
-      return summary;
-    });
+    let done: CleanupResult["deleted"][number] | null;
+    try {
+      done = await deleteOne(id);
+    } catch {
+      // One storage or database error doesn't stop the batch; the row is
+      // still there (rolled back), so the next run retries it.
+      result.failed += 1;
+      continue;
+    }
     if (done) result.deleted.push(done);
     else result.skipped += 1;
   }
   return result;
+
+  async function deleteOne(id: string) {
+    return db.$transaction(
+      async (tx) => {
+        // FOR UPDATE: the same lock bills and expenses take to attach, and it
+        // conflicts with the KEY SHARE lock any new referencing row takes, so
+        // nothing can attach this document until we commit.
+        await lockRow(tx, "documents", id);
+        const [row] = await tx.$queryRawUnsafe<
+          {
+            id: string;
+            company_id: string;
+            kind: string;
+            size_bytes: number;
+            object_key: string;
+            created_by: string;
+            created_at: Date;
+          }[]
+        >(
+          `SELECT d.id, d.company_id, d.kind::text AS kind, d.size_bytes, d.object_key, d.created_by, d.created_at
+         FROM documents d WHERE d.id = $1::uuid AND d.created_at < $2 AND NOT (${attached})`,
+          id,
+          cutoff,
+        );
+        if (!row) return null;
+        const summary = {
+          id: row.id,
+          companyId: row.company_id,
+          kind: row.kind,
+          sizeBytes: row.size_bytes,
+        };
+        if (dryRun) return summary;
+        // Object first: if the row delete then failed, a retry finds the row
+        // again (deleting a missing object is a no-op); the reverse order
+        // could leave an unreachable private file behind.
+        await store.delete(row.object_key);
+        await tx.document.delete({ where: { id: row.id } });
+        await tx.auditEvent.create({
+          data: {
+            companyId: row.company_id,
+            createdBy: row.created_by,
+            action: "document.unattached_deleted",
+            targetType: "document",
+            targetId: row.id,
+            metadata: {
+              kind: row.kind,
+              sizeBytes: row.size_bytes,
+              uploadedAt: row.created_at.toISOString(),
+              graceDays,
+              by: "unattached-document-cleanup",
+            },
+          },
+        });
+        return summary;
+      },
+      // Room for the storage delete inside the transaction.
+      { timeout: 30_000 },
+    );
+  }
 }

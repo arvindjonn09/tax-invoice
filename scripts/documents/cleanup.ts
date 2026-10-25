@@ -1,6 +1,7 @@
 // Delete documents that were uploaded but never attached, after the grace
 // period (#137). Run daily on staging/production (docs/ops/documents.md):
 //   pnpm documents:cleanup [--dry-run] [--grace-days 7]
+import { parseArgs } from "node:util";
 import { createDatabaseClient } from "../../packages/database/src/index";
 import {
   UNATTACHED_GRACE_DAYS,
@@ -14,10 +15,23 @@ import {
 
 async function main() {
   loadLocalEnvironment();
-  const args = process.argv.slice(2);
-  const dryRun = args.includes("--dry-run");
-  const at = args.indexOf("--grace-days");
-  const graceDays = at >= 0 ? Number(args[at + 1]) : UNATTACHED_GRACE_DAYS;
+  // Strict: a typo like --dryrun must fail, never turn into a real run.
+  const { values } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      "dry-run": { type: "boolean", default: false },
+      "grace-days": { type: "string" },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  const dryRun = values["dry-run"];
+  const grace = values["grace-days"];
+  if (grace !== undefined && !/^[1-9][0-9]*$/.test(grace))
+    throw new RangeError(
+      "--grace-days must be a whole number of days, 1 or more",
+    );
+  const graceDays = grace === undefined ? UNATTACHED_GRACE_DAYS : Number(grace);
   const store = storeFromEnvironment();
   if (!store) throw new Error("Document storage isn't configured");
   const db = createDatabaseClient(
@@ -36,8 +50,10 @@ async function main() {
         deleted: result.deleted.length,
         bytes: result.deleted.reduce((sum, d) => sum + d.sizeBytes, 0),
         skipped: result.skipped,
+        failed: result.failed,
       }),
     );
+    if (result.failed > 0) process.exitCode = 1;
   } finally {
     await db.$disconnect();
   }
@@ -47,7 +63,9 @@ main().catch((error: unknown) => {
   // Only our own messages: database errors can carry connection details.
   const message = error instanceof Error ? error.message : "";
   console.error(
-    error instanceof RangeError || /^Document /.test(message)
+    error instanceof RangeError ||
+      /^Document /.test(message) ||
+      (error as { code?: string }).code?.startsWith("ERR_PARSE_ARGS")
       ? `Cleanup failed: ${message}`
       : "Cleanup failed (details redacted)",
   );
