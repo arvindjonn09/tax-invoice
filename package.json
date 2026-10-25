@@ -22,6 +22,7 @@
     "db:migrate": "node scripts/database/cli.mjs migrate deploy",
     "db:migrate:dev": "node scripts/database/cli.mjs migrate dev",
     "db:test:reset": "node scripts/database/reset-test.mjs",
+    "db:runtime-role": "node scripts/database/apply-runtime-role.mjs",
     "db:seed:demo": "tsx scripts/database/seed-demo.ts",
     "test:coverage": "vitest run --project unit --coverage",
     "backup:create": "tsx scripts/backup/cli.ts create",
