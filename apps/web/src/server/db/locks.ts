@@ -23,6 +23,7 @@ const LOCKABLE = new Set([
   "supplier_bills",
   "supplier_payments",
   "supplier_credits",
+  "subcontractor_bill_submissions",
   "documents",
 ]);
 
