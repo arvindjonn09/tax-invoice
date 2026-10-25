@@ -159,46 +159,48 @@ async function decryptFile(
   binding: { id: string; file: string },
   out: string | null,
 ): Promise<string> {
-  const { size } = await stat(path);
-  if (size < HEADER + TAG_BYTES)
-    throw new Error("Not a JobFlow backup file (or it is truncated)");
+  // One open handle for the size check, the header/tag and the body, so
+  // the file can't be swapped between checking and reading it.
   const file = await open(path, "r");
-  let iv: Buffer;
-  const tag = Buffer.alloc(TAG_BYTES);
   try {
+    const { size } = await file.stat();
+    if (size < HEADER + TAG_BYTES)
+      throw new Error("Not a JobFlow backup file (or it is truncated)");
     const head = Buffer.alloc(HEADER);
+    const tag = Buffer.alloc(TAG_BYTES);
     await file.read(head, 0, HEADER, 0);
     await file.read(tag, 0, TAG_BYTES, size - TAG_BYTES);
-    iv = parseHeader(Buffer.concat([head, tag]));
+    const iv = parseHeader(Buffer.concat([head, tag]));
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAAD(aad(binding.id, binding.file));
+    decipher.setAuthTag(tag);
+    const hash = createHash("sha256");
+    const tee = new Transform({
+      transform(chunk: Buffer, _encoding, done) {
+        hash.update(chunk);
+        done(null, out ? chunk : undefined);
+      },
+    });
+    const body = file.createReadStream({
+      start: HEADER,
+      end: size - TAG_BYTES - 1,
+      autoClose: false,
+    });
+    if (out)
+      await pipeline(
+        body,
+        decipher,
+        tee,
+        createWriteStream(out, { mode: 0o600, flags: "wx" }),
+      );
+    else
+      await pipeline(body, decipher, tee, async function* (source) {
+        for await (const _ of source) void _;
+      });
+    return hash.digest("hex");
   } finally {
     await file.close();
   }
-  const decipher = createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAAD(aad(binding.id, binding.file));
-  decipher.setAuthTag(tag);
-  const hash = createHash("sha256");
-  const tee = new Transform({
-    transform(chunk: Buffer, _encoding, done) {
-      hash.update(chunk);
-      done(null, out ? chunk : undefined);
-    },
-  });
-  const body = createReadStream(path, {
-    start: HEADER,
-    end: size - TAG_BYTES - 1,
-  });
-  if (out)
-    await pipeline(
-      body,
-      decipher,
-      tee,
-      createWriteStream(out, { mode: 0o600, flags: "wx" }),
-    );
-  else
-    await pipeline(body, decipher, tee, async function* (source) {
-      for await (const _ of source) void _;
-    });
-  return hash.digest("hex");
 }
 
 async function sha256File(path: string): Promise<string> {
