@@ -13,10 +13,11 @@ umask 077
 mkdir -p "$ROOT"
 pnpm --silent backup:create "$TARGET"
 pnpm --silent backup:verify "$TARGET"
-pnpm --silent backup:prune "$ROOT" --keep-daily 30 --keep-monthly 12
 
-# Off-site copy (a different account/bucket from the live documents).
+# Off-site copy first (a different account/bucket from the live
+# documents), so a pruning problem can never hold it back.
 if [ -n "${BACKUP_OFFSITE_S3_URI:-}" ]; then
   aws s3 sync --only-show-errors "$TARGET" "$BACKUP_OFFSITE_S3_URI/$STAMP"
 fi
+pnpm --silent backup:prune "$ROOT" --keep-daily 30 --keep-monthly 12
 echo "jobflow backup $STAMP ok"

@@ -17,6 +17,7 @@ import { join } from "node:path";
 import {
   backupKey,
   createBackup,
+  isBackupName,
   prunePlan,
   restoreBackup,
   verifyBackup,
@@ -273,16 +274,30 @@ async function main() {
         throw new Error(`${flag} must be a whole number above 0`);
       return value;
     };
-    const doomed = prunePlan(await readdir(root), {
+    // Only complete backups (with a manifest) count for retention; an
+    // incomplete one left by a failed run is reported, never deleted or
+    // allowed to stop the nightly job.
+    const complete: string[] = [];
+    const incomplete: string[] = [];
+    for (const name of await readdir(root)) {
+      if (!isBackupName(name)) continue;
+      try {
+        await access(join(root, name, "manifest.json"));
+        complete.push(name);
+      } catch {
+        incomplete.push(name);
+      }
+    }
+    const doomed = prunePlan(complete, {
       daily: option("--keep-daily", 30),
       monthly: option("--keep-monthly", 12),
     });
-    for (const name of doomed) {
-      // Only ever delete what is recognisably a backup.
-      await access(join(root, name, "manifest.json"));
-      await rm(join(root, name), { recursive: true });
-    }
+    for (const name of doomed) await rm(join(root, name), { recursive: true });
     console.log(`Pruned ${doomed.length} old backups.`);
+    if (incomplete.length > 0)
+      console.warn(
+        `Left ${incomplete.length} incomplete backup directories for review: ${incomplete.join(", ")}`,
+      );
   } else if (command === "drill") {
     const at = rest.indexOf("--record");
     await drill(env, at >= 0 ? (rest[at + 1] ?? null) : null);

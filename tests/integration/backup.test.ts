@@ -1,5 +1,14 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -328,4 +337,41 @@ describe("encrypted backups (#63)", () => {
       "2026-10-25T021500Z",
     ]);
   });
+
+  it("prunes only complete backups and leaves an incomplete one without failing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jobflow-prune-test-"));
+    try {
+      for (const name of [
+        "2026-10-25T021500Z",
+        "2026-10-24T021500Z",
+        "2026-10-23T021500Z",
+      ]) {
+        await mkdir(join(root, name));
+        await writeFile(join(root, name, "manifest.json"), "{}");
+      }
+      await mkdir(join(root, "2026-10-24T120000Z")); // a failed run's leftover
+      await mkdir(join(root, "notes"));
+      const { stdout, stderr } = await promisify(execFile)(
+        new URL("../../node_modules/.bin/tsx", import.meta.url).pathname,
+        [
+          new URL("../../scripts/backup/cli.ts", import.meta.url).pathname,
+          "prune",
+          root,
+          "--keep-daily",
+          "1",
+          "--keep-monthly",
+          "1",
+        ],
+      );
+      expect(stdout).toContain("Pruned 2 old backups.");
+      expect(stderr).toContain("2026-10-24T120000Z");
+      expect((await readdir(root)).sort()).toEqual([
+        "2026-10-24T120000Z",
+        "2026-10-25T021500Z",
+        "notes",
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

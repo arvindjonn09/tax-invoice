@@ -48,8 +48,8 @@ pnpm backup:drill --record docs/ops/restore-drills
 - **Nightly** at 02:15 Australia/Sydney, the job will:
   - back up
   - verify
-  - prune to **30 daily + 12 monthly** backups
   - copy the new backup off-site (`BACKUP_OFFSITE_S3_URI`)
+  - prune to **30 daily + 12 monthly** complete backups. A directory without a `manifest.json`, left by a failed run, is never counted or deleted: it's reported for review instead.
 - **Runs as** user `jobflow-backup` with a hardened unit: `ProtectSystem=strict`, and it may write only to `/var/backups/jobflow`.
 - **Database role:** `DATABASE_URL` in `/etc/jobflow/backup.env` should be a **read-only** role with `pg_read_all_data`, not the app or owner role.
 - **Off-site copies:** the off-site bucket belongs to a different account from the live documents. It has versioning, plus object lock or retention, so a compromised server can't delete its own backups.

@@ -506,6 +506,9 @@ const STAMP = /^\d{4}-\d{2}-\d{2}T\d{6}Z$/;
  * newest backup of each of the last `daily` days and of each of the last
  * `monthly` months. Names that aren't backup timestamps are never touched.
  */
+/** Whether a directory name is a backup's UTC timestamp name. */
+export const isBackupName = (name: string) => STAMP.test(name);
+
 export function prunePlan(
   names: readonly string[],
   policy: { daily: number; monthly: number },
