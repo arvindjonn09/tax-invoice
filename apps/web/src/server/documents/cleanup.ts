@@ -13,6 +13,12 @@ import type { ObjectStore } from "./store";
  */
 export const UNATTACHED_GRACE_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const KNOWN_REFERENCES = [
+  "expenses.receipt_document_id",
+  "invoice_pdfs.document_id",
+  "supplier_bills.document_id",
+  "work_evidence.document_id",
+];
 
 type Reference = { tbl: string; col: string };
 
@@ -43,9 +49,14 @@ function attachedSql(references: Reference[]): string {
       ({ tbl, col }) =>
         `EXISTS (SELECT 1 FROM ${tbl} r WHERE r.${col} = d.id AND r.company_id = d.company_id)`,
     ),
+    // Only the document-reference keys, never free text a user typed.
     `EXISTS (SELECT 1 FROM audit_events e WHERE e.company_id = d.company_id
-       AND e.action <> 'document.uploaded' AND e.target_id <> d.id::text
-       AND strpos(e.metadata::text, d.id::text) > 0)`,
+       AND e.action <> 'document.uploaded'
+       AND jsonb_path_exists(e.metadata,
+         'lax $.**.receiptDocumentId ? (@ == $id)', jsonb_build_object('id', d.id::text))
+       OR e.company_id = d.company_id AND e.action <> 'document.uploaded'
+       AND jsonb_path_exists(e.metadata,
+         'lax $.**.documentId ? (@ == $id)', jsonb_build_object('id', d.id::text)))`,
   ].join(" OR ");
 }
 
@@ -54,8 +65,13 @@ export type CleanupResult = {
   deleted: { id: string; companyId: string; kind: string; sizeBytes: number }[];
   /** Candidates skipped because they were attached or changed meanwhile. */
   skipped: number;
-  /** Candidates that failed (left for the next run; never half-deleted). */
+  /** Candidates whose database step failed (left for the next run). */
   failed: number;
+  /**
+   * Rows deleted whose storage object couldn't be removed after retries: a
+   * private file nothing points to any more (safe, but it should be swept).
+   */
+  objectsLeft: number;
 };
 
 export async function cleanUnattachedDocuments(
@@ -71,10 +87,12 @@ export async function cleanUnattachedDocuments(
   if (!Number.isInteger(graceDays) || graceDays < 1)
     throw new RangeError("The grace period is at least one day");
   const references = await documentReferences(db);
-  // Expenses, work evidence, supplier bills and invoice PDFs at least: an
-  // empty or short list means the catalog lookup is wrong, so stop.
-  if (references.length < 4)
-    throw new Error("Document references not found; refusing to clean up");
+  // Expenses, work evidence, supplier bills and invoice PDFs at least: if
+  // any is missing, the catalog lookup is wrong, so stop.
+  const found = new Set(references.map((r) => `${r.tbl}.${r.col}`));
+  for (const expected of KNOWN_REFERENCES)
+    if (!found.has(expected))
+      throw new Error("Document references not found; refusing to clean up");
   const attached = attachedSql(references);
   const cutoff = new Date(now.getTime() - graceDays * DAY_MS);
   const candidates = await db.$queryRawUnsafe<{ id: string }[]>(
@@ -84,21 +102,47 @@ export async function cleanUnattachedDocuments(
     cutoff,
     limit,
   );
-  const result: CleanupResult = { deleted: [], skipped: 0, failed: 0 };
+  const result: CleanupResult = {
+    deleted: [],
+    skipped: 0,
+    failed: 0,
+    objectsLeft: 0,
+  };
   for (const { id } of candidates) {
-    let done: CleanupResult["deleted"][number] | null;
+    let done: Awaited<ReturnType<typeof deleteOne>>;
     try {
       done = await deleteOne(id);
     } catch {
-      // One storage or database error doesn't stop the batch; the row is
-      // still there (rolled back), so the next run retries it.
+      // One database error doesn't stop the batch; the row is still there
+      // (rolled back) with its file, so the next run retries it.
       result.failed += 1;
       continue;
     }
-    if (done) result.deleted.push(done);
-    else result.skipped += 1;
+    if (!done) {
+      result.skipped += 1;
+      continue;
+    }
+    result.deleted.push(done.summary);
+    // The file goes only after the row's delete has committed, so a failure
+    // can never leave a row that points to a missing file.
+    if (done.objectKey && !(await deleteObject(done.objectKey)))
+      result.objectsLeft += 1;
   }
   return result;
+
+  async function deleteObject(key: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await store.delete(key);
+        return true;
+      } catch {
+        await new Promise((resolve) =>
+          setTimeout(resolve, 200 * (attempt + 1)),
+        );
+      }
+    }
+    return false;
+  }
 
   async function deleteOne(id: string) {
     return db.$transaction(
@@ -130,11 +174,7 @@ export async function cleanUnattachedDocuments(
           kind: row.kind,
           sizeBytes: row.size_bytes,
         };
-        if (dryRun) return summary;
-        // Object first: if the row delete then failed, a retry finds the row
-        // again (deleting a missing object is a no-op); the reverse order
-        // could leave an unreachable private file behind.
-        await store.delete(row.object_key);
+        if (dryRun) return { summary, objectKey: null };
         await tx.document.delete({ where: { id: row.id } });
         await tx.auditEvent.create({
           data: {
@@ -152,9 +192,8 @@ export async function cleanUnattachedDocuments(
             },
           },
         });
-        return summary;
+        return { summary, objectKey: row.object_key };
       },
-      // Room for the storage delete inside the transaction.
       { timeout: 30_000 },
     );
   }

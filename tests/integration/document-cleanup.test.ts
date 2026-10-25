@@ -191,27 +191,43 @@ describe("unattached document cleanup (#137)", () => {
     expect(await store.get(swapped.objectKey)).not.toBeNull();
   });
 
-  it("counts a storage failure and carries on with the batch", async () => {
-    const failing = await upload(daysAgo(20));
+  it("deletes the file only after the row is gone, and reports files left behind", async () => {
+    const stuck = await upload(daysAgo(20));
     const fine = await upload(daysAgo(19));
     const flaky = {
       put: store.put.bind(store),
       get: store.get.bind(store),
       delete: async (key: string) => {
-        if (key === failing.objectKey) throw new Error("storage unavailable");
+        if (key === stuck.objectKey) throw new Error("storage unavailable");
         return store.delete(key);
       },
     } as unknown as MemoryStore;
     const result = await cleanUnattachedDocuments(db, flaky, { now: NOW });
-    expect(result.failed).toBe(1);
-    expect(result.deleted.map((d) => d.id)).toContain(fine.id);
-    // The failed one is untouched and retried next time.
-    expect(await db.document.count({ where: { id: failing.id } })).toBe(1);
-    expect(
-      (await cleanUnattachedDocuments(db, store, { now: NOW })).deleted.map(
-        (d) => d.id,
-      ),
-    ).toEqual([failing.id]);
+    expect(result.failed).toBe(0);
+    expect(result.objectsLeft).toBe(1);
+    expect(result.deleted.map((d) => d.id)).toEqual(
+      expect.arrayContaining([stuck.id, fine.id]),
+    );
+    // No row points to a missing file; the leftover file is unreachable.
+    expect(await db.document.count({ where: { id: stuck.id } })).toBe(0);
+    expect(await store.get(stuck.objectKey)).not.toBeNull();
+    expect(await store.get(fine.objectKey)).toBeNull();
+  });
+
+  it("ignores a document id typed into free text in the audit trail", async () => {
+    const typed = await upload(daysAgo(15));
+    await db.auditEvent.create({
+      data: {
+        companyId,
+        createdBy: userId,
+        action: "expense.updated",
+        targetType: "expense",
+        targetId: jobId,
+        metadata: { after: { description: `see ${typed.id}` } },
+      },
+    });
+    const result = await cleanUnattachedDocuments(db, store, { now: NOW });
+    expect(result.deleted.map((d) => d.id)).toContain(typed.id);
   });
 
   it("refuses a grace period under one day", async () => {

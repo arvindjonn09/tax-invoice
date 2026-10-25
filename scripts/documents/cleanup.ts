@@ -51,9 +51,10 @@ async function main() {
         bytes: result.deleted.reduce((sum, d) => sum + d.sizeBytes, 0),
         skipped: result.skipped,
         failed: result.failed,
+        objectsLeft: result.objectsLeft,
       }),
     );
-    if (result.failed > 0) process.exitCode = 1;
+    if (result.failed > 0 || result.objectsLeft > 0) process.exitCode = 1;
   } finally {
     await db.$disconnect();
   }
