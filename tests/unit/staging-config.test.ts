@@ -141,8 +141,9 @@ describe("deploy gate (#64)", () => {
     );
     expect(deploy).toMatch(/\/usr\/local\/sbin\/jobflow-deploy/);
     // Migrations run before the new app replaces the old one.
+    expect(deploy).toMatch(/--force-recreate --wait --wait-timeout \d+ nginx/);
     expect(deploy.indexOf("run --rm migrate")).toBeLessThan(
-      deploy.indexOf("up -d --no-deps"),
+      deploy.indexOf("up -d --no-deps --wait --wait-timeout 300 web"),
     );
   });
 });

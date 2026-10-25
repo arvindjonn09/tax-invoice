@@ -40,5 +40,8 @@ compose build migrate web
 compose up -d --wait postgres
 # Migrations and grants first; a failure stops here with the old app running.
 compose run --rm migrate
-compose up -d --no-deps --wait --wait-timeout 300 web nginx
+compose up -d --no-deps --wait --wait-timeout 300 web
+# Recreate nginx so it re-renders its templates and picks up the new web
+# container (its upstream also re-resolves, but a fresh start is certain).
+compose up -d --no-deps --force-recreate --wait --wait-timeout 120 nginx
 echo "deployed $SHA"
