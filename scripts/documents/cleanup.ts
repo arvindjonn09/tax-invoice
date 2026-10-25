@@ -52,6 +52,7 @@ async function main() {
         skipped: result.skipped,
         failed: result.failed,
         objectsLeft: result.objectsLeft,
+        errors: result.errors,
       }),
     );
     if (result.failed > 0 || result.objectsLeft > 0) process.exitCode = 1;

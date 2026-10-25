@@ -13,7 +13,7 @@ pnpm documents:cleanup --grace-days 14
 ```
 
 - **Settings:** it uses the app's `DATABASE_URL` and document storage settings.
-- **Output:** a single JSON line with counts: deleted, bytes, skipped, failed and objectsLeft. It never prints file names, keys or connection details.
+- **Output:** a single JSON line with counts: deleted, bytes, skipped, failed, objectsLeft, and the error classes seen (codes or names only, never messages). It never prints file names, keys or connection details.
 - **Flags:** unknown or malformed flags are refused, so a typo like `--dryrun` can't turn into a real run.
 - **Failures:** a failure on one document doesn't stop the batch. That document is left in place for the next run, and the command exits 1.
 - **Schedule:** run it daily on staging and production, for example from the same timer host as the backups.
@@ -26,7 +26,7 @@ pnpm documents:cleanup --grace-days 14
   - commits first, and the document is then seen as attached and kept; or
   - waits until the delete commits, and then fails on its foreign key.
 - **The foreign keys are a last line.** They refuse deleting a referenced row.
-- **Order of deletion:** the row and its audit event commit first, and only then is the storage object deleted (with retries). A failure can therefore never leave a row pointing at a missing file, which could be attached later as empty evidence. If the object delete still fails, the file stays private but unreachable. The run reports it as `objectsLeft` and exits 1; sweep those files with a storage listing.
+- **Order of deletion:** the row and its audit event commit first, and only then is the storage object deleted (with retries). A failure can therefore never leave a row pointing at a missing file, which could be attached later as empty evidence. If the object delete still fails, the file stays private but unreachable. The run reports it as `objectsLeft` and exits 1; sweep them by comparing a storage listing against the `documents` table (a follow-up will record these keys for automatic retry).
 
 ## Retention (#62)
 

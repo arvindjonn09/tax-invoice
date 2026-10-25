@@ -1,4 +1,5 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { auditChanges } from "../../packages/database/src/audit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
 import {
@@ -183,7 +184,13 @@ describe("unattached document cleanup (#137)", () => {
         action: "expense.updated",
         targetType: "expense",
         targetId: jobId,
-        metadata: { before: { receiptDocumentId: swapped.id } },
+        // The exact shape withAudit stores for an edited expense.
+        metadata: {
+          changes: auditChanges(
+            { receiptDocumentId: swapped.id },
+            { receiptDocumentId: randomUUID() },
+          ),
+        } as never,
       },
     });
     const result = await cleanUnattachedDocuments(db, store, { now: NOW });

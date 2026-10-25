@@ -50,13 +50,15 @@ function attachedSql(references: Reference[]): string {
         `EXISTS (SELECT 1 FROM ${tbl} r WHERE r.${col} = d.id AND r.company_id = d.company_id)`,
     ),
     // Only the document-reference keys, never free text a user typed.
+    // Audit changes are stored as {field: {before, after}}; `.**` matches
+    // both values, and a plain string value too.
     `EXISTS (SELECT 1 FROM audit_events e WHERE e.company_id = d.company_id
        AND e.action <> 'document.uploaded'
        AND jsonb_path_exists(e.metadata,
-         'lax $.**.receiptDocumentId ? (@ == $id)', jsonb_build_object('id', d.id::text))
+         'lax $.**.receiptDocumentId.** ? (@ == $id)', jsonb_build_object('id', d.id::text))
        OR e.company_id = d.company_id AND e.action <> 'document.uploaded'
        AND jsonb_path_exists(e.metadata,
-         'lax $.**.documentId ? (@ == $id)', jsonb_build_object('id', d.id::text)))`,
+         'lax $.**.documentId.** ? (@ == $id)', jsonb_build_object('id', d.id::text)))`,
   ].join(" OR ");
 }
 
@@ -72,6 +74,8 @@ export type CleanupResult = {
    * private file nothing points to any more (safe, but it should be swept).
    */
   objectsLeft: number;
+  /** Error classes seen (a Prisma/storage code or error name, no messages). */
+  errors: string[];
 };
 
 export async function cleanUnattachedDocuments(
@@ -107,12 +111,24 @@ export async function cleanUnattachedDocuments(
     skipped: 0,
     failed: 0,
     objectsLeft: 0,
+    errors: [],
+  };
+  const note = (error: unknown) => {
+    const e = error as { code?: unknown; name?: unknown };
+    const kind =
+      typeof e?.code === "string"
+        ? e.code
+        : typeof e?.name === "string"
+          ? e.name
+          : "Error";
+    if (!result.errors.includes(kind)) result.errors.push(kind.slice(0, 40));
   };
   for (const { id } of candidates) {
     let done: Awaited<ReturnType<typeof deleteOne>>;
     try {
       done = await deleteOne(id);
-    } catch {
+    } catch (error) {
+      note(error);
       // One database error doesn't stop the batch; the row is still there
       // (rolled back) with its file, so the next run retries it.
       result.failed += 1;
@@ -135,7 +151,8 @@ export async function cleanUnattachedDocuments(
       try {
         await store.delete(key);
         return true;
-      } catch {
+      } catch (error) {
+        note(error);
         await new Promise((resolve) =>
           setTimeout(resolve, 200 * (attempt + 1)),
         );
