@@ -923,9 +923,20 @@ export function expenseHandlers(db: () => PrismaClient) {
           // the one supplier payments take, so the two can't race.
           // A cost-only reversal changes the GST payments attribute: refused
           // too while payments are allocated (void them, reverse, re-pay).
+          // Reversing a correction changes its on-account original's GST
+          // too: lock that original (correction, then original, as decide
+          // does) and check its payments.
+          if (original.correctsId)
+            await lockRow(tx, "expenses", original.correctsId);
+          const root = original.correctsId
+            ? await tx.expense.findUnique({
+                where: { id: original.correctsId },
+                select: { id: true, settlement: true },
+              })
+            : original;
           if (
-            original.settlement === "on_account" &&
-            (await livePayments(tx, actor.companyId, original.id))
+            root?.settlement === "on_account" &&
+            (await livePayments(tx, actor.companyId, root.id))
           )
             throw new Refusal(
               fail(

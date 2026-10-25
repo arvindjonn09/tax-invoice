@@ -560,7 +560,7 @@ describe("paying on-account expenses (#141)", () => {
     );
     expect(submitted.status, await submitted.clone().text()).toBe(201);
     const correction = (await submitted.json()) as { id: string };
-    // A payment while the correction is pending claims nothing...
+    // While the correction is pending, a payment claims nothing...
     // After a void correction (dated today), payments can't be dated earlier.
     const pending = (await (
       await pay([{ expenseId, amountCents: "16500" }], {
@@ -594,6 +594,29 @@ describe("paying on-account expenses (#141)", () => {
     ).toBe(201);
     // Paid in full: exactly the corrected claim.
     expect(await cashClaim(expenseId)).toBe("750");
+    // The correction itself can't be reversed under the payment...
+    expect((await reverse(correction.id, "none")).status).toBe(409);
+    // ...and once it is (payment voided first), payments claim nothing.
+    const live = await db.supplierPaymentExpenseAllocation.findFirstOrThrow({
+      where: { expenseId, payment: { voidedAt: null } },
+    });
+    expect(
+      (
+        await routes.voidPayment(
+          call("accountant", { reason: "Synthetic: reverse correction" }),
+          one(live.paymentId),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await reverse(correction.id, "none")).status).toBe(201);
+    expect(
+      (
+        await pay([{ expenseId, amountCents: "16500" }], {
+          paidOn: sydneyToday(),
+        })
+      ).status,
+    ).toBe(201);
+    expect(await cashClaim(expenseId)).toBe("0");
   });
 
   it("refuses a payment dated before the purchase, and combining unnamed suppliers", async () => {

@@ -409,7 +409,10 @@ export async function expenseBalances(
       reversedBy: { select: { settlement: true } },
       corrections: {
         where: { status: "approved" },
-        select: { creditableGstCents: true },
+        select: {
+          creditableGstCents: true,
+          reversedBy: { select: { id: true } },
+        },
       },
       supplierPaymentAllocations: {
         where: { payment: { voidedAt: null } },
@@ -450,7 +453,9 @@ export async function expenseBalances(
             // refused while payments exist, so attributed never goes stale.)
             creditableGst:
               expense.reversedBy && expense.reversedBy.settlement === null
-                ? (expense.corrections[0]?.creditableGstCents ?? 0n)
+                ? expense.corrections[0] && !expense.corrections[0].reversedBy
+                  ? (expense.corrections[0].creditableGstCents ?? 0n)
+                  : 0n
                 : (expense.creditableGstCents ?? 0n),
             paid,
             attributed,
