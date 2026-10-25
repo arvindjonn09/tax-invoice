@@ -77,7 +77,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Mobile-responsive UX and accessibility audit
 - [ ] Threat-model/permission audit
 - [ ] Record retention and data export
-- [ ] Database and storage backup/restore test
+- [x] Database and storage backup/restore test — #63: AES-256-GCM encrypted backups of the database (streamed `pg_dump`) and every document, manifest checksums, empty-target restore, 30 daily + 12 monthly retention, nightly systemd timer with off-site copy, and a recorded restore drill ([runbook](ops/backups.md), [drills](ops/restore-drills/))
 - [ ] Staging deployment (Docker, HTTPS) and smoke test with synthetic data
 - [ ] Deployment, rollback and user documentation
 - [ ] Accountant review of GST outputs before real use
