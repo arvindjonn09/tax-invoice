@@ -285,6 +285,9 @@ function expectNoCompanyMoney(payload: unknown) {
     "profit",
     "billId",
     "250000",
+    "agreedInclusive",
+    "billedInclusive",
+    '"offer":',
   ])
     expect(text).not.toContain(key);
 }
