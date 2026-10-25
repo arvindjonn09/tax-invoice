@@ -121,6 +121,8 @@ export function paymentProblems(
   amount: Cents,
   allocations: readonly PaymentAllocationRequest[],
   balances: ReadonlyMap<string, BillBalance>,
+  /** What is being paid: a bill, or an on-account expense (#141). */
+  noun: "bill" | "expense" = "bill",
 ): BillProblem[] {
   const problems: BillProblem[] = [];
   if (amount <= 0n)
@@ -131,13 +133,13 @@ export function paymentProblems(
   if (allocations.length === 0)
     problems.push({
       field: "allocations",
-      message: "Allocate it to at least one bill",
+      message: `Allocate it to at least one ${noun}`,
     });
   const seen = new Set<string>();
   allocations.forEach((allocation, index) => {
     const field = `allocations.${index}`;
     if (seen.has(allocation.billId))
-      problems.push({ field, message: "Each bill can appear only once" });
+      problems.push({ field, message: `Each ${noun} can appear only once` });
     seen.add(allocation.billId);
     if (allocation.amount <= 0n) {
       problems.push({ field, message: "Allocate more than $0" });
@@ -147,14 +149,17 @@ export function paymentProblems(
     if (!balance) {
       problems.push({
         field,
-        message: "Choose a recorded bill from this supplier",
+        message:
+          noun === "bill"
+            ? "Choose a recorded bill from this supplier"
+            : "Choose an approved on-account expense from this supplier",
       });
       return;
     }
     if (allocation.amount > billOutstanding(balance))
       problems.push({
         field,
-        message: "That's more than is owing on this bill (overpayment)",
+        message: `That's more than is owing on this ${noun} (overpayment)`,
       });
   });
   if (
