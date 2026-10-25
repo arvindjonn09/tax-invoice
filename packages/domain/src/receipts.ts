@@ -1,4 +1,4 @@
-import { cumulativeCashGst, voidGstAdjustment } from "./attribution";
+import { adjustedCashShare } from "./attribution";
 import { type Cents, sum } from "./money";
 
 // Customer receipts and refunds (#50). Money received is allocated to issued
@@ -14,6 +14,7 @@ export type InvoiceBalance = {
   gst: Cents;
   /** Issued credit notes against it. */
   credited: Cents;
+  creditedGst: Cents;
   /** Net received so far (receipts minus refunds). */
   received: Cents;
   /** Live cash-basis GST: unvoided allocations plus void adjustments. */
@@ -102,10 +103,12 @@ export function allocationGst(
   balance: InvoiceBalance,
 ): Cents {
   return (
-    cumulativeCashGst({
-      documentTotal: balance.inclusive,
-      documentGst: balance.gst,
-      settled:
+    adjustedCashShare({
+      total: balance.inclusive,
+      eligible: balance.gst,
+      credited: balance.credited,
+      creditedEligible: balance.creditedGst,
+      received:
         kind === "receipt"
           ? balance.received + amount
           : balance.received - amount,
@@ -122,15 +125,19 @@ export function voidAdjustmentGst(
   allocation: { amount: Cents; gst: Cents },
   balance: InvoiceBalance,
 ): Cents {
-  return voidGstAdjustment({
-    documentTotal: balance.inclusive,
-    documentGst: balance.gst,
-    settledAfter:
-      kind === "receipt"
-        ? balance.received - allocation.amount
-        : balance.received + allocation.amount,
-    attributedAfter: balance.attributed - allocation.gst,
-  });
+  return (
+    adjustedCashShare({
+      total: balance.inclusive,
+      eligible: balance.gst,
+      credited: balance.credited,
+      creditedEligible: balance.creditedGst,
+      received:
+        kind === "receipt"
+          ? balance.received - allocation.amount
+          : balance.received + allocation.amount,
+    }) -
+    (balance.attributed - allocation.gst)
+  );
 }
 
 /**
