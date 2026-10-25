@@ -552,11 +552,20 @@ describe("subcontractor bills (#139)", () => {
       undefined,
     );
     expect(office.status).toBe(400);
+    expect(await office.json()).toMatchObject({
+      fields: { documentId: expect.stringMatching(/already attached/) },
+    });
     const read = await (
       await routes.read(call("accountant"), one(submitted.id))
     ).json();
     expect(read.offer).toMatchObject({ agreedInclusiveCents: "99000" });
-    expect(BigInt(read.offer.billedInclusiveCents)).toBeGreaterThanOrEqual(0n);
+    const live = await db.supplierBill.aggregate({
+      where: { companyId, offerId, voidedAt: null },
+      _sum: { inclusiveCents: true },
+    });
+    expect(read.offer.billedInclusiveCents).toBe(
+      (live._sum.inclusiveCents ?? 0n).toString(),
+    );
   });
 
   it("approval loses cleanly to an office bill for the same invoice, and to a concurrent approval", async () => {

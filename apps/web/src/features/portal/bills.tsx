@@ -179,7 +179,11 @@ export function BillSubmissionPanel({ offerId }: { offerId: string }) {
           reload();
         }}
       >
-        <fieldset className="grid gap-4 sm:grid-cols-2" disabled={busy}>
+        <fieldset
+          className="grid gap-4 sm:grid-cols-2"
+          // Wait for their GST registration before offering GST fields.
+          disabled={busy || !data}
+        >
           <legend className="mb-3 font-semibold">Submit an invoice</legend>
           <Field id="bill-reference" label="Invoice number">
             {(control) => (
@@ -266,7 +270,7 @@ export function BillSubmissionPanel({ offerId }: { offerId: string }) {
             )}
           </Field>
         </fieldset>
-        <Button type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy || !data}>
           {busy ? "Sending…" : "Send invoice"}
         </Button>
         <FormMessage message={message} />
