@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useRemote } from "@/components/data/use-remote";
 import { FormMessage, sendJson } from "@/components/form/field";
 import { formatAudCents } from "@/components/money-display";
+import { percentToBasisPoints } from "@/lib/aud-input";
 import { Button } from "@/components/ui/button";
 
 /** A subcontractor's invoice waiting for the office (#139). */
@@ -150,7 +151,7 @@ export function SubmissionQueue({
                     </span>
                     <input
                       className="min-h-11 w-full rounded-md border bg-background px-3"
-                      inputMode="numeric"
+                      inputMode="decimal"
                       value={shares[s.id] ?? "100"}
                       onChange={(event) =>
                         setShares((previous) => ({
@@ -160,9 +161,12 @@ export function SubmissionQueue({
                       }
                     />
                   </label>
-                  {(shares[s.id] ?? "100").trim() !== "100" ? (
+                  {percentToBasisPoints(shares[s.id] ?? "100") !== 10_000 ? (
                     <label className="block space-y-1">
-                      <span>Why only part is claimable</span>
+                      <span>
+                        Why only part is claimable for invoice{" "}
+                        {s.supplierReference}
+                      </span>
                       <input
                         className="min-h-11 w-full rounded-md border bg-background px-3"
                         maxLength={500}
@@ -199,18 +203,14 @@ export function SubmissionQueue({
                     disabled={busy !== null || !verified[s.id]}
                     aria-label={`Approve invoice ${s.supplierReference} and record the bill`}
                     onClick={async () => {
-                      const share = (shares[s.id] ?? "100").trim();
-                      if (
-                        !/^(100(\.0{1,2})?|[1-9]?\d(\.\d{1,2})?)$/.test(share)
-                      )
+                      const basisPoints = percentToBasisPoints(
+                        shares[s.id] ?? "100",
+                      );
+                      if (basisPoints === null)
                         return setMessage({
                           kind: "error",
-                          text: "Enter a claimable share between 0 and 100%.",
+                          text: `Invoice ${s.supplierReference}: enter a claimable share between 0 and 100%.`,
                         });
-                      // Percent with up to 2 decimals → basis points, in integers.
-                      const [whole = "0", fraction = ""] = share.split(".");
-                      const basisPoints =
-                        Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
                       setBusy(s.id);
                       const result = await sendJson(
                         `/api/bill-submissions/${s.id}/approve`,

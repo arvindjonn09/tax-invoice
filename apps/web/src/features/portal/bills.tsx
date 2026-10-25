@@ -196,7 +196,15 @@ export function BillSubmissionPanel({ offerId }: { offerId: string }) {
           });
           setBusy(false);
           if (!result.ok) {
-            setMessage({ kind: "error", text: result.message });
+            // Say which line a server-side line error is about.
+            const lineKey = Object.keys(result.fields).find((key) =>
+              /^lines\.\d+/.test(key),
+            );
+            const n = lineKey ? Number(lineKey.split(".")[1]) + 1 : null;
+            setMessage({
+              kind: "error",
+              text: n ? `Line ${n}: ${result.message}` : result.message,
+            });
             return;
           }
           element.reset();
