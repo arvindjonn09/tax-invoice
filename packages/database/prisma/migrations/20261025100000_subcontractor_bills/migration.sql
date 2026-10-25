@@ -51,6 +51,7 @@ CREATE TABLE "subcontractor_bill_submission_items" (
     "gst_cents" BIGINT NOT NULL,
 
     CONSTRAINT "subcontractor_bill_submission_items_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "subcontractor_bill_submission_items_tax_code" CHECK ("tax_code" IN ('TAXABLE_10', 'GST_FREE', 'INPUT_TAXED', 'OUT_OF_SCOPE')),
     CONSTRAINT "subcontractor_bill_submission_items_amounts" CHECK (
       "position" > 0 AND "exclusive_cents" >= 0 AND "gst_cents" >= 0
       AND "exclusive_cents" + "gst_cents" <= 1000000000000
@@ -99,6 +100,20 @@ CREATE TRIGGER subcontractor_bill_submissions_guard BEFORE UPDATE OR DELETE ON s
   FOR EACH ROW EXECUTE FUNCTION jobflow_guard_bill_submission();
 CREATE TRIGGER subcontractor_bill_submissions_no_truncate BEFORE TRUNCATE ON subcontractor_bill_submissions
   FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
+-- Lines are written with their submission; never added after a decision.
+CREATE FUNCTION jobflow_guard_bill_submission_item() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM subcontractor_bill_submissions
+    WHERE id = NEW.submission_id AND company_id = NEW.company_id AND status = 'submitted'
+  ) THEN
+    RAISE EXCEPTION 'lines can only be added to a waiting submission' USING ERRCODE = '55000';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER subcontractor_bill_submission_items_insert_guard BEFORE INSERT ON subcontractor_bill_submission_items
+  FOR EACH ROW EXECUTE FUNCTION jobflow_guard_bill_submission_item();
 CREATE TRIGGER subcontractor_bill_submission_items_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON subcontractor_bill_submission_items
   FOR EACH STATEMENT EXECUTE FUNCTION jobflow_reject_history_mutation();
 

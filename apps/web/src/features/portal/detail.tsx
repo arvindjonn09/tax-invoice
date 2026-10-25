@@ -193,10 +193,7 @@ export function PortalDetail({ id }: { id: string }) {
         />
       ) : null}
       {data.status === "accepted" && data.contractorActive ? (
-        <BillSubmissionPanel
-          offerId={id}
-          gstRegistered={data.taxCode === "TAXABLE_10"}
-        />
+        <BillSubmissionPanel offerId={id} />
       ) : null}
       <Link
         className="inline-flex min-h-11 items-center underline"

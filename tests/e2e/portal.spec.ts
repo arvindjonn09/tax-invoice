@@ -685,12 +685,17 @@ test("subcontractor sends an invoice; the office verifies and records the bill (
   });
   await expect(queue).toBeVisible({ timeout: 30_000 });
   const item = queue.getByRole("listitem").filter({ hasText: reference });
-  await item
-    .getByLabel("I checked the attached document is a valid tax invoice")
-    .check();
-  await item
-    .getByRole("button", { name: "Approve and record bill", exact: true })
-    .click();
+  const approve = item.getByRole("button", {
+    name: `Approve invoice ${reference} and record the bill`,
+    exact: true,
+  });
+  // Approval needs the reviewer to confirm the invoice matches.
+  await expect(approve).toBeDisabled();
+  await expect(
+    item.getByText(/Agreed for this work: \$990\.00 AUD/),
+  ).toBeVisible();
+  await item.getByLabel(new RegExp(`I checked invoice ${reference}`)).check();
+  await approve.click();
   await expect(page.getByText(/Approved: bill recorded/)).toBeVisible({
     timeout: 30_000,
   });

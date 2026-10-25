@@ -30,6 +30,8 @@ import { Line, fail, recordBill, refuse } from "./handlers";
  */
 type IdContext = { params: Promise<{ id: string }> };
 const day = z.iso.date("Use a date like 2026-07-01");
+/** Pending submissions per contractor: keeps the office queue usable. */
+export const MAX_PENDING = 20;
 
 const Submit = z.object({
   offerId: z.uuid({ error: "Choose one of your accepted offers" }),
@@ -117,23 +119,64 @@ function ownView(row: Row) {
   };
 }
 
-/** The office view adds who/what for the decision and the recorded bill. */
-function officeView(row: Row & { contractor?: { name: string } | null }) {
+type OfficeRow = Row & {
+  contractor: { name: string };
+  acceptance: { inclusiveCents: bigint; committedCostCents: bigint };
+};
+
+/**
+ * The office view adds the agreed offer amount and what's already billed
+ * against the offer, so the reviewer can see an inflated or repeated
+ * invoice before approving.
+ */
+function officeView(row: OfficeRow, billedInclusive: bigint) {
   return {
     ...ownView(row),
     contractorId: row.contractorId,
-    contractorName: row.contractor?.name ?? null,
+    contractorName: row.contractor.name,
     jobId: row.jobId,
     documentId: row.documentId,
     submittedBy: row.submittedBy,
     decidedBy: row.decidedBy,
     billId: row.billId,
+    offer: {
+      agreedInclusiveCents: money(row.acceptance.inclusiveCents),
+      billedInclusiveCents: money(billedInclusive),
+    },
   };
+}
+
+/** Live bills' totals (incl GST) per offer. */
+async function billedByOffer(
+  db: Prisma.TransactionClient | PrismaClient,
+  companyId: string,
+  offerIds: readonly string[],
+) {
+  const rows = await db.supplierBill.groupBy({
+    by: ["offerId"],
+    where: { companyId, offerId: { in: [...offerIds] }, voidedAt: null },
+    _sum: { inclusiveCents: true },
+  });
+  return new Map(
+    rows.map((row) => [row.offerId!, row._sum.inclusiveCents ?? 0n]),
+  );
 }
 
 const OFFICE_INCLUDE = {
   ...INCLUDE,
   contractor: { select: { name: true } },
+  acceptance: {
+    select: {
+      inclusiveCents: true,
+      committedCostCents: true,
+      offer: {
+        select: {
+          scope: true,
+          job: { select: { reference: true, title: true } },
+        },
+      },
+    },
+  },
 } as const;
 
 async function ownContractor(
@@ -159,15 +202,37 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
-          const contractor = await ownContractor(tx, actor);
-          if (!contractor || contractor.archivedAt)
+          const found = await ownContractor(tx, actor);
+          if (!found)
             throw refuse(
               400,
               "Your contractor profile isn't active",
               "offerId",
             );
-          // Lock order as bills: contractor, then job, then document.
-          await lockRow(tx, "contractors", contractor.id);
+          // Lock order as bills: contractor, then job, then document. Re-read
+          // under the lock so archiving or a GST change can't race this.
+          await lockRow(tx, "contractors", found.id);
+          const contractor = await tx.contractor.findUniqueOrThrow({
+            where: { id: found.id },
+          });
+          if (contractor.archivedAt)
+            throw refuse(
+              400,
+              "Your contractor profile isn't active",
+              "offerId",
+            );
+          const pending = await tx.subcontractorBillSubmission.count({
+            where: {
+              companyId: actor.companyId,
+              contractorId: contractor.id,
+              status: "submitted",
+            },
+          });
+          if (pending >= MAX_PENDING)
+            throw refuse(
+              409,
+              `You have ${MAX_PENDING} invoices waiting for the office; wait for a decision first`,
+            );
           const acceptance = await tx.contractorAcceptance.findFirst({
             where: {
               companyId: actor.companyId,
@@ -300,12 +365,21 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
   /** The signed-in subcontractor's own submissions, newest first. */
   const mine: PolicyHandler<unknown> = async ({ actor, request }) => {
     const contractor = await ownContractor(db(), actor);
-    const { page, take, skip } = parsePage(new URL(request.url).searchParams);
+    const params = new URL(request.url).searchParams;
+    const { page, take, skip } = parsePage(params);
     if (!contractor)
-      return privateJson({ page, pageSize: take, total: 0, submissions: [] });
+      return privateJson({
+        page,
+        pageSize: take,
+        total: 0,
+        gstRegistered: false,
+        submissions: [],
+      });
+    const offerId = uuidOrNull(params.get("offerId") ?? "");
     const where = {
       companyId: actor.companyId,
       contractorId: contractor.id,
+      ...(offerId ? { offerId } : {}),
     };
     const [rows, total] = await Promise.all([
       db().subcontractorBillSubmission.findMany({
@@ -321,6 +395,8 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
       page,
       pageSize: take,
       total,
+      // Their own current registration decides which lines they can send.
+      gstRegistered: contractor.gstRegistered,
       submissions: rows.map(ownView),
     });
   };
@@ -344,11 +420,18 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
       }),
       db().subcontractorBillSubmission.count({ where }),
     ]);
+    const billed = await billedByOffer(
+      db(),
+      actor.companyId,
+      rows.map((row) => row.offerId),
+    );
     return privateJson({
       page,
       pageSize: take,
       total,
-      submissions: rows.map(officeView),
+      submissions: rows.map((row) =>
+        officeView(row, billed.get(row.offerId) ?? 0n),
+      ),
     });
   };
 
@@ -362,7 +445,8 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
         include: OFFICE_INCLUDE,
       }),
     );
-    return privateJson(officeView(row));
+    const billed = await billedByOffer(db(), actor.companyId, [row.offerId]);
+    return privateJson(officeView(row, billed.get(row.offerId) ?? 0n));
   };
 
   /** Lock a waiting submission in the actor's company. */
@@ -411,6 +495,8 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
                 ? toDay(submission.dueOn)
                 : null
               : decision.dueOn;
+          if (dueOn && dueOn < toDay(submission.issuedOn))
+            throw refuse(400, "Due on or after the bill date", "dueOn");
           const bill = await recordBill(
             tx,
             audit,
@@ -445,7 +531,9 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
               decidedAt: new Date(),
               decidedBy: actor.userId,
               billId: bill.id,
-              decisionNote: decision.note ?? null,
+              // The approval note is the bill's internal note: never shown
+              // to the subcontractor (only a rejection's note is).
+              decisionNote: null,
             },
           });
           await audit({
@@ -463,7 +551,10 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
             include: OFFICE_INCLUDE,
           });
         });
-        return privateJson(officeView(row));
+        const billed = await billedByOffer(db(), actor.companyId, [
+          row.offerId,
+        ]);
+        return privateJson(officeView(row, billed.get(row.offerId) ?? 0n));
       });
     } catch (error) {
       if (isUniqueViolation(error, "_reference_key"))
@@ -510,7 +601,8 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
           include: OFFICE_INCLUDE,
         });
       });
-      return privateJson(officeView(row));
+      const billed = await billedByOffer(db(), actor.companyId, [row.offerId]);
+      return privateJson(officeView(row, billed.get(row.offerId) ?? 0n));
     });
   };
 

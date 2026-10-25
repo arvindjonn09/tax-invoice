@@ -32,16 +32,15 @@ const STATUS: Record<OwnBillSubmission["status"], string> = {
  * Submit your own tax invoice for an accepted offer, and see what the
  * office decided. The office verifies the invoice before it is recorded.
  */
-export function BillSubmissionPanel({
-  offerId,
-  gstRegistered,
-}: {
-  offerId: string;
-  gstRegistered: boolean;
-}) {
+export function BillSubmissionPanel({ offerId }: { offerId: string }) {
   const { data, error, reload } = useRemote<{
+    gstRegistered: boolean;
     submissions: OwnBillSubmission[];
-  }>("/api/my/bills?pageSize=100");
+  }>(`/api/my/bills?offerId=${offerId}&pageSize=100`);
+  // Their current registration (it can change after the offer was made).
+  const gstRegistered = data?.gstRegistered ?? false;
+  const [taxCode, setTaxCode] = useState("TAXABLE_10");
+  const charges = gstRegistered && taxCode === "TAXABLE_10";
   const [busy, setBusy] = useState(false),
     [dirty, setDirty] = useState(false),
     [message, setMessage] = useState<{
@@ -49,7 +48,7 @@ export function BillSubmissionPanel({
       text: string;
     } | null>(null);
   useUnsavedChanges(dirty);
-  const mine = (data?.submissions ?? []).filter((s) => s.offerId === offerId);
+  const mine = data?.submissions ?? [];
   return (
     <section
       aria-labelledby="bill-heading"
@@ -102,9 +101,7 @@ export function BillSubmissionPanel({
           let exclusive: string | null, gst: string | null;
           try {
             exclusive = parseAudInput(String(form.get("exclusive") ?? ""));
-            gst = gstRegistered
-              ? parseAudInput(String(form.get("gst") ?? ""))
-              : "0";
+            gst = charges ? parseAudInput(String(form.get("gst") ?? "")) : "0";
           } catch (problem) {
             setMessage({
               kind: "error",
@@ -160,7 +157,7 @@ export function BillSubmissionPanel({
                 description:
                   String(form.get("description") ?? "").trim() ||
                   "Work as offered",
-                taxCode: gstRegistered ? "TAXABLE_10" : "OUT_OF_SCOPE",
+                taxCode: gstRegistered ? taxCode : "OUT_OF_SCOPE",
                 exclusiveCents: exclusive,
                 gstCents: gst ?? "0",
               },
@@ -218,6 +215,25 @@ export function BillSubmissionPanel({
             )}
           </Field>
           {gstRegistered ? (
+            <Field id="bill-tax-code" label="GST treatment">
+              {(control) => (
+                <select
+                  {...control}
+                  name="taxCode"
+                  value={taxCode}
+                  onChange={(event) => setTaxCode(event.target.value)}
+                >
+                  <option value="TAXABLE_10">Taxable (GST 10%)</option>
+                  <option value="GST_FREE">GST-free</option>
+                </select>
+              )}
+            </Field>
+          ) : (
+            <p className="text-sm text-muted-foreground sm:col-span-2">
+              You&apos;re not registered for GST, so your invoice has no GST.
+            </p>
+          )}
+          {charges ? (
             <Field
               id="bill-gst"
               label="GST (AUD)"

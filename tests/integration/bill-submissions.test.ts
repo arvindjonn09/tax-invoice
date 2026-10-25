@@ -5,7 +5,10 @@ import { createAuth } from "../../apps/web/src/server/auth/config";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
 import { createWithPolicy } from "../../apps/web/src/server/authz/policy";
 import { billHandlers } from "../../apps/web/src/server/bills/handlers";
-import { billSubmissionHandlers } from "../../apps/web/src/server/bills/submissions";
+import {
+  MAX_PENDING,
+  billSubmissionHandlers,
+} from "../../apps/web/src/server/bills/submissions";
 import { syntheticAbn } from "../helpers/abn";
 import {
   type CommittedDatabase,
@@ -54,6 +57,7 @@ function makeRoutes() {
     approve: withPolicy<One>("bill.write", s.approve),
     reject: withPolicy<One>("bill.write", s.reject),
     billRead: withPolicy<One>("bill.read", bills.read),
+    bill: withPolicy("bill.write", bills.create),
   };
 }
 const one = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -515,5 +519,210 @@ describe("subcontractor bills (#139)", () => {
         data: { status: "submitted" },
       }),
     ).rejects.toThrow();
+  });
+
+  it("a submitted document can't back an office bill; the office sees agreed and billed amounts", async () => {
+    const doc = await upload();
+    const submitted = (await (
+      await routes.submit(
+        call("sub", await body({ documentId: doc })),
+        undefined,
+      )
+    ).json()) as { id: string };
+    const office = await routes.bill(
+      call("accountant", {
+        contractorId,
+        offerId,
+        supplierReference: `OFFICE-${randomUUID().slice(0, 8)}`,
+        issuedOn: "2026-07-20",
+        lines: [
+          {
+            description: "Synthetic",
+            taxCode: "TAXABLE_10",
+            exclusiveCents: "1000",
+            gstCents: "100",
+          },
+        ],
+        documentId: doc,
+        evidenceVerified: true,
+      }),
+      undefined,
+    );
+    expect(office.status).toBe(400);
+    const read = await (
+      await routes.read(call("accountant"), one(submitted.id))
+    ).json();
+    expect(read.offer).toMatchObject({ agreedInclusiveCents: "99000" });
+    expect(BigInt(read.offer.billedInclusiveCents)).toBeGreaterThanOrEqual(0n);
+  });
+
+  it("approval loses cleanly to an office bill for the same invoice, and to a concurrent approval", async () => {
+    const reference = `INV-${randomUUID().slice(0, 8)}`;
+    const raced = (await (
+      await routes.submit(
+        call("sub", await body({ supplierReference: reference })),
+        undefined,
+      )
+    ).json()) as { id: string };
+    const recorded = await routes.bill(
+      call("accountant", {
+        contractorId,
+        offerId,
+        supplierReference: reference,
+        issuedOn: "2026-07-20",
+        lines: [
+          {
+            description: "Synthetic",
+            taxCode: "TAXABLE_10",
+            exclusiveCents: "1000",
+            gstCents: "100",
+          },
+        ],
+      }),
+      undefined,
+    );
+    expect(recorded.status, await recorded.clone().text()).toBe(201);
+    const before = await db.supplierBill.count({ where: { companyId } });
+    expect(
+      (
+        await routes.approve(
+          call("accountant", { evidenceVerified: true }),
+          one(raced.id),
+        )
+      ).status,
+    ).toBe(409);
+    expect(await db.supplierBill.count({ where: { companyId } })).toBe(before);
+    expect(
+      (
+        await db.subcontractorBillSubmission.findUniqueOrThrow({
+          where: { id: raced.id },
+        })
+      ).status,
+    ).toBe("submitted");
+
+    const twice = (await (
+      await routes.submit(call("sub", await body()), undefined)
+    ).json()) as { id: string };
+    const results = await Promise.all(
+      [0, 1].map(() =>
+        routes.approve(
+          call("accountant", { evidenceVerified: true }),
+          one(twice.id),
+        ),
+      ),
+    );
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(
+      await db.supplierBill.count({
+        where: { companyId, submission: { id: twice.id } },
+      }),
+    ).toBe(1);
+  });
+
+  it("re-checks GST at approval, keeps the approval note internal, and checks the due date", async () => {
+    const pending = (await (
+      await routes.submit(call("sub", await body()), undefined)
+    ).json()) as { id: string };
+    expect(
+      (
+        await routes.approve(
+          call("accountant", { evidenceVerified: true, dueOn: "2026-07-01" }),
+          one(pending.id),
+        )
+      ).status,
+    ).toBe(400);
+    await db.contractor.update({
+      where: { id: contractorId },
+      data: { gstRegistered: false },
+    });
+    try {
+      const refused = await routes.approve(
+        call("accountant", { evidenceVerified: true }),
+        one(pending.id),
+      );
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({
+        fields: { "lines.0": expect.any(String) },
+      });
+      // The subcontractor is told their registration, so they can resend.
+      const mine = await (await routes.mine(call("sub"), undefined)).json();
+      expect(mine.gstRegistered).toBe(false);
+    } finally {
+      await db.contractor.update({
+        where: { id: contractorId },
+        data: { gstRegistered: true },
+      });
+    }
+    const approved = await routes.approve(
+      call("accountant", {
+        evidenceVerified: true,
+        note: "Internal: over budget, margin now 4%",
+      }),
+      one(pending.id),
+    );
+    expect(approved.status, await approved.clone().text()).toBe(200);
+    const own = await (await routes.mine(call("sub"), undefined)).json();
+    const row = own.submissions.find(
+      (s: { id: string }) => s.id === pending.id,
+    );
+    expect(row.decisionNote).toBeNull();
+    expect(JSON.stringify(own)).not.toContain("margin");
+  });
+
+  it("the database refuses edits after a decision and late lines (SQLSTATE 55000)", async () => {
+    const pending = (await (
+      await routes.submit(call("sub", await body()), undefined)
+    ).json()) as { id: string };
+    await routes.reject(call("owner", { note: "Synthetic" }), one(pending.id));
+    const code = async (run: Promise<unknown>) =>
+      run.then(
+        () => "ok",
+        (error: unknown) =>
+          JSON.stringify(error).match(/55000/)?.[0] ?? String(error),
+      );
+    expect(
+      await code(
+        db.subcontractorBillSubmission.update({
+          where: { id: pending.id },
+          data: { decisionNote: "Changed later" },
+        }),
+      ),
+    ).toBe("55000");
+    expect(
+      await code(
+        db.subcontractorBillSubmissionItem.create({
+          data: {
+            companyId,
+            submissionId: pending.id,
+            position: 99,
+            description: "Late line",
+            taxCode: "TAXABLE_10",
+            exclusiveCents: 1n,
+            gstCents: 0n,
+          },
+        }),
+      ),
+    ).toBe("55000");
+  });
+  it("lists only the offer asked for, and caps pending invoices per contractor", async () => {
+    const other = await routes.mine(
+      (() => {
+        const request = call("sub");
+        return new Request(`${ORIGIN}/api/x?offerId=${randomUUID()}`, {
+          headers: request.headers,
+        });
+      })(),
+      undefined,
+    );
+    expect((await other.json()).submissions).toEqual([]);
+    const waiting = await db.subcontractorBillSubmission.count({
+      where: { companyId, contractorId, status: "submitted" },
+    });
+    for (let i = waiting; i < MAX_PENDING; i += 1)
+      expect(
+        (await routes.submit(call("sub", await body()), undefined)).status,
+      ).toBe(201);
+    const over = await routes.submit(call("sub", await body()), undefined);
+    expect(over.status).toBe(409);
   });
 });

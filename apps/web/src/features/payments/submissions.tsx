@@ -18,6 +18,7 @@ type Submission = {
   lines: { description: string; exclusiveCents: string; gstCents: string }[];
   note: string | null;
   documentId: string;
+  offer: { agreedInclusiveCents: string; billedInclusiveCents: string };
 };
 
 const aud = (cents: string) => `${formatAudCents(BigInt(cents))} AUD`;
@@ -87,12 +88,17 @@ export function SubmissionQueue({
                 ))}
               </ul>
               <p className="tabular-nums">Total {aud(s.totalCents)} incl GST</p>
+              <p className="text-sm tabular-nums">
+                Agreed for this work: {aud(s.offer.agreedInclusiveCents)} incl
+                GST · already billed: {aud(s.offer.billedInclusiveCents)}
+              </p>
               {s.note ? <p className="whitespace-pre-wrap">{s.note}</p> : null}
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 variant="outline"
                 disabled={busy !== null}
+                aria-label={`Open tax invoice ${s.supplierReference}`}
                 onClick={async () => {
                   setBusy(s.id);
                   const result = await sendJson(
@@ -131,10 +137,14 @@ export function SubmissionQueue({
                       }))
                     }
                   />
-                  I checked the attached document is a valid tax invoice
+                  I checked invoice {s.supplierReference}: it&apos;s a valid tax
+                  invoice and its lines, GST and total match
                 </label>
                 <label className="block space-y-1">
-                  <span>Note (required to reject)</span>
+                  <span>
+                    Message to the subcontractor for invoice{" "}
+                    {s.supplierReference} (required to send back)
+                  </span>
                   <textarea
                     className="min-h-20 w-full rounded-md border bg-background p-3"
                     maxLength={500}
@@ -149,16 +159,14 @@ export function SubmissionQueue({
                 </label>
                 <div className="flex flex-wrap gap-3">
                   <Button
-                    disabled={busy !== null}
+                    disabled={busy !== null || !verified[s.id]}
+                    aria-label={`Approve invoice ${s.supplierReference} and record the bill`}
                     onClick={async () => {
                       setBusy(s.id);
                       const result = await sendJson(
                         `/api/bill-submissions/${s.id}/approve`,
                         "POST",
-                        {
-                          evidenceVerified: verified[s.id] ?? false,
-                          note: notes[s.id]?.trim() || null,
-                        },
+                        { evidenceVerified: true },
                       );
                       setBusy(null);
                       if (!result.ok)
@@ -180,6 +188,7 @@ export function SubmissionQueue({
                   <Button
                     variant="outline"
                     disabled={busy !== null}
+                    aria-label={`Send invoice ${s.supplierReference} back`}
                     onClick={async () => {
                       setBusy(s.id);
                       const result = await sendJson(
