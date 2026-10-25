@@ -308,7 +308,11 @@ async function checkDraft(
         "receiptDocumentId",
         "That receipt is already attached to another expense",
       ];
-    if (document.supplierBill || document.supplierCredit)
+    if (
+      document.supplierBill ||
+      document.supplierCredit ||
+      document.billSubmission
+    )
       return [
         "receiptDocumentId",
         "That document is already attached to a supplier bill or credit",
