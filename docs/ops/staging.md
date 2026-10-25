@@ -40,7 +40,7 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
 - **App logs:** the app writes redacted JSON lines to stdout (`apps/web/src/server/log.ts`).
 - **Rotation:** Docker keeps 5 × 10 MB per container.
 - **Reading logs:** `docker compose -f infra/staging/compose.yml logs -f web`.
-- **Alerts:** point an external uptime monitor at `https://<staging>/api/health/ready`, checking every minute and alerting after 3 failures. Alert the owner too when the nightly backup unit fails (`systemctl --failed`; see `docs/ops/backups.md` from #63).
+- **Alerts:** point an external uptime monitor at `https://<staging>/api/health/ready`, checking every minute and alerting after 3 failures. Alert the owner too when the nightly backup unit fails (`systemctl --failed`, see [backups.md](backups.md)).
 
 ## First-time setup (owner)
 
@@ -85,7 +85,7 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
    docker compose -f infra/staging/compose.yml run --rm -e DEMO_SEED=yes -e DEMO_PASSWORD=<12+ chars> migrate pnpm db:seed:demo
    ```
 
-9. **Backups:** install the nightly backup timer with a **staging-only** `BACKUP_ENCRYPTION_KEY` (`docs/ops/backups.md`, added in #63 / PR #161).
+9. **Backups:** install the nightly backup timer with a **staging-only** `BACKUP_ENCRYPTION_KEY` ([backups.md](backups.md)).
 
 ## Deploying from CI (owner turns it on)
 
@@ -118,7 +118,7 @@ The job then polls `/api/health/ready` until it answers 200.
 
 ## Before you call staging done
 
-- Restore drill on staging passes (`docs/ops/backups.md`, #63).
+- Restore drill on staging passes ([backups.md](backups.md#restore-drills)).
 - `https://staging.<domain>` gets an A on an SSL test, and `http://` redirects.
 - Sign-in from another origin is refused, and the session cookie is `Secure; HttpOnly`.
 - `curl -H 'X-Forwarded-For: 1.2.3.4'` still gets throttled by the real IP after the limit.

@@ -24,7 +24,12 @@
     "db:test:reset": "node scripts/database/reset-test.mjs",
     "db:runtime-role": "node scripts/database/apply-runtime-role.mjs",
     "db:seed:demo": "tsx scripts/database/seed-demo.ts",
-    "test:coverage": "vitest run --project unit --coverage"
+    "test:coverage": "vitest run --project unit --coverage",
+    "backup:create": "tsx scripts/backup/cli.ts create",
+    "backup:verify": "tsx scripts/backup/cli.ts verify",
+    "backup:restore": "tsx scripts/backup/cli.ts restore",
+    "backup:drill": "tsx scripts/backup/cli.ts drill",
+    "backup:prune": "tsx scripts/backup/cli.ts prune"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
