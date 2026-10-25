@@ -84,18 +84,24 @@ Readiness only proves the database answers a query. So also sign in as an office
 A rollback is always a new commit on `main`, because the deploy gate only accepts the tip.
 
 **The release was backward-compatible (most releases):**
-1. Revert the **application code only**. Keep the migration files: deleting an applied migration breaks the next deploy. For a merged PR, use `git revert -m 1 <merge>`, then restore the migration directory from the reverted commit. Push to `main`.
+1. Revert the **application code only**. Keep the migration and everything that goes with it: the migration directory, its `prisma/rollbacks/` file, its entries in `tests/integration/tenancy-migration.test.ts` and `database.test.ts`, and the `schema.prisma` models. Deleting an applied migration breaks the next deploy. For a merged PR, use `git revert -m 1 <merge>`, then restore those files from the reverted commit. Push to `main` and wait for CI.
 2. Let the deploy job run, or deploy by hand as above.
 3. Run the checks above.
 
-**The release wasn't backward-compatible:** don't improvise. Stop and restore, in this order:
+**The release wasn't backward-compatible:** don't improvise. Follow this order exactly, because pushing the revert before switching databases would let CI start the old app on the bad schema.
 1. Stop the app: `docker compose -f /opt/jobflow/infra/staging/compose.yml stop web`.
-2. Push a revert commit to `main` that also removes the bad migration. It can't be re-landed under the same name later.
-3. Restore the pre-deploy backup into a **new, empty** database and bucket ([backups.md § Restore runbook](backups.md#restore-runbook)). **Skip that runbook's `pnpm db:migrate` check.** The host checkout is still on the bad commit, so running it would re-apply the bad migration.
-4. Point **both** `infra/staging/env/migrate.env` (`DATABASE_URL`) and `web.env` at the restored database. Point `web.env` at the restored bucket, and give its key access to it.
-5. Deploy the revert tip by hand. The `migrate` job re-applies the runtime-role grants on the restored database. The restore itself carries no grants (`--no-privileges`), so `web` can't read any data until this runs.
-6. Check that `/api/health/ready` passes **and** that a real page loads (readiness alone passes without grants).
-7. Anything recorded after the backup is still in the old database. **Export it from there, don't re-enter it.** Re-entering issued invoices would give them new numbers. Record what happened in an incident note.
+2. Restore the pre-deploy backup into a **new, empty** database and bucket ([backups.md § Restore runbook](backups.md#restore-runbook)).
+   - Run the restore as the **same owner role** that `migrate.env` uses. The dump is `--no-owner`, so the tables belong to whoever restores them.
+   - **Skip that runbook's `pnpm db:migrate` check.** The checkout is still on the bad commit, so running it would re-apply the bad migration.
+   - On staging, the restore can't reach the database from the host yet (#173).
+3. Repoint every environment at the restored database and bucket:
+   - `infra/staging/env/migrate.env`: `DATABASE_URL`.
+   - `web.env`: `DATABASE_URL`, `S3_BUCKET`, and a key that can reach that bucket.
+   - The backup and cleanup environment (`/etc/jobflow/backup.env`), so nightly backups and `documents:cleanup` protect the new copy, not the old one.
+4. Push a revert commit to `main` that also removes the bad migration (it can't be re-landed under the same name later). If the CI deploy is turned on, **reject** the queued `staging` deployment in GitHub. You'll deploy by hand in the next step.
+5. Deploy the revert tip by hand (see Deploy). The `migrate` job re-applies the runtime-role grants on the restored database. The restore itself carries no grants (`--no-privileges`), so `web` can't read any data until this runs.
+6. Check that `/api/health/ready` passes **and** that a real page loads (readiness alone passes without grants). Then take and verify a fresh backup of the restored copy.
+7. Anything recorded after the backup is still in the old database, and any files uploaded since then are in the old bucket. **Export them, don't re-enter them.** Re-entering issued invoices would give them new numbers. Record what happened in an incident note.
 
 If a migration fails part-way, Prisma marks it failed (error P3009). Leave it for the owner and the database engineer to fix: never edit `_prisma_migrations`.
 

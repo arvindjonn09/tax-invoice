@@ -35,7 +35,7 @@ When a supplier sends a credit note (an adjustment note) for a bill, record it a
 
 Subcontractors with portal access can send their own tax invoice from the work you offered them. Those invoices wait under **Subcontractor invoices to review** at the top of **Supplier bills**. For each one:
 1. Use **Open tax invoice** and check it.
-2. Tick **I checked the attached document is a valid tax invoice**.
+2. Tick **I checked invoice … it's a valid tax invoice and its lines, GST and total match**. If only part of the GST is claimable, enter the claimable share and why.
 3. Choose **Approve and record bill**. This records the bill exactly as if you'd entered it.
 
 Or write a note and choose **Send back**. The subcontractor sees your note and can send a corrected invoice.

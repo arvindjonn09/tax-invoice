@@ -20,7 +20,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ## M4 Profit and GST reporting
 
-### Added (2026-10-24)
+### Added (2026-10-25)
 
 - A shared backend for job profitability and the draft GST/BAS summary (G1, 1A, 1B). It covers the cash and non-cash bases, closed periods and explicit adjustments (#54, #55).
 - Cash-basis receipts can't be dated before an invoice's latest credit (#54).
