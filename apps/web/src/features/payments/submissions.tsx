@@ -43,6 +43,8 @@ export function SubmissionQueue({
   const [busy, setBusy] = useState<string | null>(null),
     [verified, setVerified] = useState<Record<string, boolean>>({}),
     [notes, setNotes] = useState<Record<string, string>>({}),
+    [shares, setShares] = useState<Record<string, string>>({}),
+    [reasons, setReasons] = useState<Record<string, string>>({}),
     [links, setLinks] = useState<Record<string, string>>({}),
     [message, setMessage] = useState<{
       kind: "error" | "success";
@@ -140,6 +142,41 @@ export function SubmissionQueue({
                   I checked invoice {s.supplierReference}: it&apos;s a valid tax
                   invoice and its lines, GST and total match
                 </label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block space-y-1">
+                    <span>
+                      Claimable share of the GST for invoice{" "}
+                      {s.supplierReference} (%)
+                    </span>
+                    <input
+                      className="min-h-11 w-full rounded-md border bg-background px-3"
+                      inputMode="numeric"
+                      value={shares[s.id] ?? "100"}
+                      onChange={(event) =>
+                        setShares((previous) => ({
+                          ...previous,
+                          [s.id]: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  {(shares[s.id] ?? "100").trim() !== "100" ? (
+                    <label className="block space-y-1">
+                      <span>Why only part is claimable</span>
+                      <input
+                        className="min-h-11 w-full rounded-md border bg-background px-3"
+                        maxLength={500}
+                        value={reasons[s.id] ?? ""}
+                        onChange={(event) =>
+                          setReasons((previous) => ({
+                            ...previous,
+                            [s.id]: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  ) : null}
+                </div>
                 <label className="block space-y-1">
                   <span>
                     Message to the subcontractor for invoice{" "}
@@ -162,11 +199,29 @@ export function SubmissionQueue({
                     disabled={busy !== null || !verified[s.id]}
                     aria-label={`Approve invoice ${s.supplierReference} and record the bill`}
                     onClick={async () => {
+                      const share = (shares[s.id] ?? "100").trim();
+                      if (
+                        !/^(100(\.0{1,2})?|[1-9]?\d(\.\d{1,2})?)$/.test(share)
+                      )
+                        return setMessage({
+                          kind: "error",
+                          text: "Enter a claimable share between 0 and 100%.",
+                        });
+                      // Percent with up to 2 decimals → basis points, in integers.
+                      const [whole = "0", fraction = ""] = share.split(".");
+                      const basisPoints =
+                        Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
                       setBusy(s.id);
                       const result = await sendJson(
                         `/api/bill-submissions/${s.id}/approve`,
                         "POST",
-                        { evidenceVerified: true },
+                        {
+                          evidenceVerified: true,
+                          creditableBasisPoints: basisPoints,
+                          ...(basisPoints < 10_000
+                            ? { creditableReason: reasons[s.id]?.trim() ?? "" }
+                            : {}),
+                        },
                       );
                       setBusy(null);
                       if (!result.ok)

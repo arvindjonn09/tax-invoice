@@ -653,8 +653,18 @@ test("subcontractor sends an invoice; the office verifies and records the bill (
   const reference = `INV-${seeded.suffix}`;
   await page.getByLabel("Invoice number", { exact: true }).fill(reference);
   await page.getByLabel("Invoice date", { exact: true }).fill("2026-07-20");
-  await page.getByLabel("Amount ex GST (AUD)", { exact: true }).fill("900");
-  await page.getByLabel("GST (AUD)", { exact: true }).fill("90");
+  await page
+    .getByLabel("Line 1 amount ex GST (AUD)", { exact: true })
+    .fill("800");
+  await page.getByLabel("Line 1 GST (AUD)", { exact: true }).fill("80");
+  // A GST-free line on the same invoice.
+  await page.getByRole("button", { name: "Add a line", exact: true }).click();
+  await page
+    .getByLabel("Line 2 GST treatment", { exact: true })
+    .selectOption("GST_FREE");
+  await page
+    .getByLabel("Line 2 amount ex GST (AUD)", { exact: true })
+    .fill("100");
   await page
     .getByLabel("Tax invoice (PDF or image, up to 10 MB)", { exact: true })
     .setInputFiles({

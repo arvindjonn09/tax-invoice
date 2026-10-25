@@ -716,6 +716,38 @@ describe("subcontractor bills (#139)", () => {
       ),
     ).toBe("55000");
   });
+  it("the office sets a partial claimable share on approval (with a reason)", async () => {
+    const pending = (await (
+      await routes.submit(call("sub", await body()), undefined)
+    ).json()) as { id: string };
+    expect(
+      (
+        await routes.approve(
+          call("accountant", {
+            evidenceVerified: true,
+            creditableBasisPoints: 5000,
+          }),
+          one(pending.id),
+        )
+      ).status,
+    ).toBe(400);
+    const approved = await routes.approve(
+      call("accountant", {
+        evidenceVerified: true,
+        creditableBasisPoints: 5000,
+        creditableReason: "Half the work was for the owner's home",
+      }),
+      one(pending.id),
+    );
+    expect(approved.status, await approved.clone().text()).toBe(200);
+    const { billId } = (await approved.json()) as { billId: string };
+    expect(
+      await (await routes.billRead(call("accountant"), one(billId))).json(),
+    ).toMatchObject({
+      creditableGstCents: "4500",
+      jobCostCents: "94500",
+    });
+  });
   it("lists only the offer asked for, and caps pending invoices per contractor", async () => {
     const other = await routes.mine(
       (() => {

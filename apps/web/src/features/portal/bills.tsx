@@ -28,6 +28,22 @@ const STATUS: Record<OwnBillSubmission["status"], string> = {
   rejected: "Needs changes",
 };
 
+type DraftLine = {
+  key: number;
+  description: string;
+  taxCode: string;
+  exclusive: string;
+  gst: string;
+};
+let nextKey = 0;
+const newLine = (): DraftLine => ({
+  key: (nextKey += 1),
+  description: "",
+  taxCode: "TAXABLE_10",
+  exclusive: "",
+  gst: "",
+});
+
 /**
  * Submit your own tax invoice for an accepted offer, and see what the
  * office decided. The office verifies the invoice before it is recorded.
@@ -39,8 +55,12 @@ export function BillSubmissionPanel({ offerId }: { offerId: string }) {
   }>(`/api/my/bills?offerId=${offerId}&pageSize=100`);
   // Their current registration (it can change after the offer was made).
   const gstRegistered = data?.gstRegistered ?? false;
-  const [taxCode, setTaxCode] = useState("TAXABLE_10");
-  const charges = gstRegistered && taxCode === "TAXABLE_10";
+  // One row per line of their tax invoice (taxable and GST-free can mix).
+  const [lines, setLines] = useState<DraftLine[]>([newLine()]);
+  const update = (key: number, change: Partial<DraftLine>) =>
+    setLines((rows) =>
+      rows.map((row) => (row.key === key ? { ...row, ...change } : row)),
+    );
   const [busy, setBusy] = useState(false),
     [dirty, setDirty] = useState(false),
     [message, setMessage] = useState<{
@@ -98,20 +118,38 @@ export function BillSubmissionPanel({ offerId }: { offerId: string }) {
           const element = e.currentTarget,
             form = new FormData(element);
           setMessage(null);
-          let exclusive: string | null, gst: string | null;
-          try {
-            exclusive = parseAudInput(String(form.get("exclusive") ?? ""));
-            gst = charges ? parseAudInput(String(form.get("gst") ?? "")) : "0";
-          } catch (problem) {
-            setMessage({
-              kind: "error",
-              text: (problem as Error).message,
+          const payload: {
+            description: string;
+            taxCode: string;
+            exclusiveCents: string;
+            gstCents: string;
+          }[] = [];
+          for (const [index, line] of lines.entries()) {
+            const taxCode = gstRegistered ? line.taxCode : "OUT_OF_SCOPE";
+            let exclusive: string | null, gst: string | null;
+            try {
+              exclusive = parseAudInput(line.exclusive);
+              gst = taxCode === "TAXABLE_10" ? parseAudInput(line.gst) : "0";
+            } catch (problem) {
+              setMessage({
+                kind: "error",
+                text: `Line ${index + 1}: ${(problem as Error).message}`,
+              });
+              return;
+            }
+            if (!exclusive) {
+              setMessage({
+                kind: "error",
+                text: `Line ${index + 1}: enter the amount ex GST.`,
+              });
+              return;
+            }
+            payload.push({
+              description: line.description.trim() || "Work as offered",
+              taxCode,
+              exclusiveCents: exclusive,
+              gstCents: gst ?? "0",
             });
-            return;
-          }
-          if (!exclusive) {
-            setMessage({ kind: "error", text: "Enter the amount ex GST." });
-            return;
           }
           const file = form.get("file");
           if (!(file instanceof File) || !file.size) {
@@ -152,16 +190,7 @@ export function BillSubmissionPanel({ offerId }: { offerId: string }) {
             supplierReference: String(form.get("reference") ?? "").trim(),
             issuedOn: String(form.get("issuedOn") ?? ""),
             dueOn: due || null,
-            lines: [
-              {
-                description:
-                  String(form.get("description") ?? "").trim() ||
-                  "Work as offered",
-                taxCode: gstRegistered ? taxCode : "OUT_OF_SCOPE",
-                exclusiveCents: exclusive,
-                gstCents: gst ?? "0",
-              },
-            ],
+            lines: payload,
             documentId: uploaded.id,
             note: String(form.get("note") ?? "").trim() || null,
           });
@@ -171,6 +200,7 @@ export function BillSubmissionPanel({ offerId }: { offerId: string }) {
             return;
           }
           element.reset();
+          setLines([newLine()]);
           setDirty(false);
           setMessage({
             kind: "success",
@@ -198,56 +228,116 @@ export function BillSubmissionPanel({ offerId }: { offerId: string }) {
           <Field id="bill-due" label="Due date (optional)">
             {(control) => <input {...control} name="dueOn" type="date" />}
           </Field>
-          <Field id="bill-description" label="Description">
-            {(control) => (
-              <input
-                {...control}
-                name="description"
-                maxLength={500}
-                placeholder="Work as offered"
-              />
-            )}
-          </Field>
-          <Field id="bill-exclusive" label="Amount ex GST (AUD)">
-            {(control) => (
-              <input
-                {...control}
-                name="exclusive"
-                inputMode="decimal"
-                required
-              />
-            )}
-          </Field>
-          {gstRegistered ? (
-            <Field id="bill-tax-code" label="GST treatment">
-              {(control) => (
-                <select
-                  {...control}
-                  name="taxCode"
-                  value={taxCode}
-                  onChange={(event) => setTaxCode(event.target.value)}
-                >
-                  <option value="TAXABLE_10">Taxable (GST 10%)</option>
-                  <option value="GST_FREE">GST-free</option>
-                </select>
-              )}
-            </Field>
-          ) : (
+          {!gstRegistered ? (
             <p className="text-sm text-muted-foreground sm:col-span-2">
               You&apos;re not registered for GST, so your invoice has no GST.
             </p>
-          )}
-          {charges ? (
-            <Field
-              id="bill-gst"
-              label="GST (AUD)"
-              hint="As shown on your tax invoice"
-            >
-              {(control) => (
-                <input {...control} name="gst" inputMode="decimal" required />
-              )}
-            </Field>
           ) : null}
+          {lines.map((line, index) => {
+            const n = index + 1;
+            const charges = gstRegistered && line.taxCode === "TAXABLE_10";
+            return (
+              <fieldset
+                key={line.key}
+                className="grid gap-4 rounded-lg border p-4 sm:col-span-2 sm:grid-cols-2"
+              >
+                <legend className="px-1 font-semibold">Line {n}</legend>
+                <Field
+                  id={`bill-description-${line.key}`}
+                  label={`Line ${n} description`}
+                >
+                  {(control) => (
+                    <input
+                      {...control}
+                      maxLength={500}
+                      placeholder="Work as offered"
+                      value={line.description}
+                      onChange={(event) =>
+                        update(line.key, { description: event.target.value })
+                      }
+                    />
+                  )}
+                </Field>
+                {gstRegistered ? (
+                  <Field
+                    id={`bill-tax-${line.key}`}
+                    label={`Line ${n} GST treatment`}
+                  >
+                    {(control) => (
+                      <select
+                        {...control}
+                        value={line.taxCode}
+                        onChange={(event) =>
+                          update(line.key, { taxCode: event.target.value })
+                        }
+                      >
+                        <option value="TAXABLE_10">Taxable (GST 10%)</option>
+                        <option value="GST_FREE">GST-free</option>
+                      </select>
+                    )}
+                  </Field>
+                ) : null}
+                <Field
+                  id={`bill-exclusive-${line.key}`}
+                  label={`Line ${n} amount ex GST (AUD)`}
+                >
+                  {(control) => (
+                    <input
+                      {...control}
+                      inputMode="decimal"
+                      required
+                      value={line.exclusive}
+                      onChange={(event) =>
+                        update(line.key, { exclusive: event.target.value })
+                      }
+                    />
+                  )}
+                </Field>
+                {charges ? (
+                  <Field
+                    id={`bill-gst-${line.key}`}
+                    label={`Line ${n} GST (AUD)`}
+                    hint="As shown on your tax invoice"
+                  >
+                    {(control) => (
+                      <input
+                        {...control}
+                        inputMode="decimal"
+                        required
+                        value={line.gst}
+                        onChange={(event) =>
+                          update(line.key, { gst: event.target.value })
+                        }
+                      />
+                    )}
+                  </Field>
+                ) : null}
+                {lines.length > 1 ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setLines((rows) =>
+                        rows.filter((row) => row.key !== line.key),
+                      )
+                    }
+                  >
+                    Remove line {n}
+                  </Button>
+                ) : null}
+              </fieldset>
+            );
+          })}
+          <div className="sm:col-span-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={lines.length >= 100}
+              onClick={() => setLines((rows) => [...rows, newLine()])}
+            >
+              Add a line
+            </Button>
+          </div>
           <Field id="bill-file" label="Tax invoice (PDF or image, up to 10 MB)">
             {(control) => (
               <input
