@@ -13,6 +13,7 @@ import { quoteHandlers } from "../../apps/web/src/server/quotes/handlers";
 import { receiptHandlers } from "../../apps/web/src/server/receipts/handlers";
 import {
   billHandlers,
+  supplierCreditHandlers,
   supplierPaymentHandlers,
 } from "../../apps/web/src/server/bills/handlers";
 import { expenseHandlers } from "../../apps/web/src/server/expenses/handlers";
@@ -2049,4 +2050,212 @@ it("backfills GST source postings when deploying over legacy financial rows", as
   expect(
     rows.every((row) => row.originalOn.getTime() === row.effectiveOn.getTime()),
   ).toBe(true);
+});
+
+describe("supplier credits in reports (#140)", () => {
+  const credit = (actor: Actor, billId: string, taxCode = "TAXABLE_10") =>
+    supplierCreditHandlers(() => db).create({
+      actor,
+      request: req({
+        supplierReference: `CN-${randomUUID().slice(0, 8)}`,
+        issuedOn: "2026-07-20",
+        receivedOn: "2026-07-20",
+        lines: [
+          {
+            description: "Synthetic price adjustment",
+            taxCode,
+            exclusiveCents: "10000",
+            gstCents: taxCode === "TAXABLE_10" ? "1000" : "0",
+          },
+        ],
+      }),
+      context: context(billId),
+    });
+  const pay = (actor: Actor, billId: string, paidOn: string, cents: string) =>
+    supplierPaymentHandlers(() => db).create({
+      actor,
+      request: req({
+        paidOn,
+        amountCents: cents,
+        method: "bank_transfer",
+        allocations: [{ billId, amountCents: cents }],
+      }),
+      context: undefined,
+    });
+  const on = async (actor: Actor, day: string) => {
+    const handler = reportHandlers(() => db),
+      request = new Request(`${origin}/api/reports?from=${day}&to=${day}`);
+    return {
+      gst: await (
+        await handler.gst({ actor, request, context: undefined })
+      ).json(),
+      profit: await (
+        await handler.profitability({ actor, request, context: undefined })
+      ).json(),
+    };
+  };
+  const voidCredit = (actor: Actor, id: string) =>
+    supplierCreditHandlers(() => db).void({
+      actor,
+      request: req({ reason: "Synthetic duplicate" }),
+      context: context(id),
+    });
+
+  it("reports a cash-basis correction on a paid bill, and its void today", async () => {
+    const f = await fixture(true, "cash");
+    const paid = await pay(f.actor, f.supplier.id, "2026-07-18", "49500");
+    expect(paid.status, await paid.clone().text()).toBe(201);
+    expect((await reports(f.actor)).gst).toMatchObject({ oneB: "6000" });
+    // A GST-free credit raises the paid share's GST: round(49500 × 9000 /
+    // 89000) = 5006, so +506 on 20 July ($75 or less: no note needed).
+    const created = await credit(f.actor, f.supplier.id, "GST_FREE");
+    expect(created.status, await created.clone().text()).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    expect(
+      await db.supplierCreditGstAdjustment.findMany({
+        where: { creditId: id },
+        select: { event: true, creditableGstCents: true, adjustedOn: true },
+      }),
+    ).toEqual([
+      {
+        event: "recorded",
+        creditableGstCents: 506n,
+        adjustedOn: new Date("2026-07-20T00:00:00Z"),
+      },
+    ]);
+    expect((await reports(f.actor)).gst).toMatchObject({ oneB: "6506" });
+    // Cash basis: no payment may now be dated before the credit (#54 rule).
+    const early = await pay(f.actor, f.supplier.id, "2026-07-19", "1000");
+    expect(early.status).toBe(400);
+    expect(await early.json()).toMatchObject({
+      fields: { paidOn: expect.stringMatching(/supplier credit/) },
+    });
+    const voided = await voidCredit(f.actor, id);
+    expect(voided.status, await voided.clone().text()).toBe(200);
+    expect((await reports(f.actor)).gst).toMatchObject({ oneB: "6506" });
+    const today = await on(f.actor, sydneyToday());
+    expect(today.gst).toMatchObject({ oneB: "-506" });
+    // The job cost comes back on the void day too.
+    expect(today.profit.totals).toMatchObject({ cost: "10000" });
+  });
+
+  it("reverses a credit voided after its period was finalised in the open period", async () => {
+    const f = await fixture(true, "non_cash");
+    const created = await credit(f.actor, f.supplier.id);
+    expect(created.status, await created.clone().text()).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({
+        from: "2026-07-01",
+        to: "2026-09-30",
+        note: "Synthetic supplier credit void boundary",
+      }),
+      context: undefined,
+    });
+    expect(close.status, await close.clone().text()).toBe(201);
+    const finalised = (await reports(f.actor)).gst as Record<string, unknown>;
+    expect(finalised).toMatchObject({ oneB: "9500" });
+    expect((await voidCredit(f.actor, id)).status).toBe(200);
+    expect((await reports(f.actor)).gst).toMatchObject({
+      oneA: finalised.oneA,
+      oneB: "9500",
+    });
+    expect((await on(f.actor, sydneyToday())).gst).toMatchObject({
+      oneB: "1000",
+    });
+  });
+
+  it("never stores a credit that was voided before it was recorded", async () => {
+    const f = await fixture(true, "non_cash");
+    const created = await credit(f.actor, f.supplier.id);
+    const row = await db.supplierCredit.findUniqueOrThrow({
+      where: { id: ((await created.json()) as { id: string }).id },
+    });
+    await expect(
+      db.supplierCredit.create({
+        data: {
+          ...row,
+          id: randomUUID(),
+          supplierReference: null,
+          voidedAt: new Date(),
+          voidedBy: f.user.id,
+          voidReason: "Synthetic",
+        },
+      }),
+    ).rejects.toThrow(/recorded before it is voided/);
+  });
+
+  for (const basis of ["non_cash", "cash"] as const)
+    it(`lowers job cost and (${basis}) the purchases GST on the date received`, async () => {
+      const f = await fixture(true, basis);
+      const created = await credit(f.actor, f.supplier.id);
+      expect(created.status, await created.clone().text()).toBe(201);
+      const { id } = (await created.json()) as { id: string };
+      const after = await reports(f.actor);
+      expect(after.profit.totals).toMatchObject({
+        revenue: "250000",
+        cost: "135000",
+        profit: "115000",
+      });
+      // Unpaid on the cash basis: nothing was claimed, so nothing comes back.
+      expect(after.gst).toMatchObject({
+        oneB: basis === "cash" ? "1500" : "9500",
+      });
+      const voided = await supplierCreditHandlers(() => db).void({
+        actor: f.actor,
+        request: req({ reason: "Synthetic duplicate" }),
+        context: context(id),
+      });
+      expect(voided.status, await voided.clone().text()).toBe(200);
+      // Reversed on the void day (today), outside July–September.
+      const today = await reportHandlers(() => db).gst({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+        ),
+        context: undefined,
+      });
+      expect(await today.json()).toMatchObject({
+        oneB: basis === "cash" ? "0" : "1000",
+      });
+      expect((await reports(f.actor)).profit.totals).toMatchObject({
+        cost: "135000",
+      });
+    });
+
+  it("posts a credit dated in a finalised period to the open period", async () => {
+    const f = await fixture(true, "non_cash");
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({
+        from: "2026-07-01",
+        to: "2026-09-30",
+        note: "Synthetic supplier credit boundary",
+      }),
+      context: undefined,
+    });
+    expect(close.status, await close.clone().text()).toBe(201);
+    const finalised = (await reports(f.actor)).gst;
+    const created = await credit(f.actor, f.supplier.id);
+    expect(created.status, await created.clone().text()).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    const posting = await db.gstSourcePosting.findFirstOrThrow({
+      where: { companyId: f.company.id, sourceId: id },
+    });
+    expect(posting.originalOn.toISOString().slice(0, 10)).toBe("2026-07-20");
+    expect(posting.effectiveOn.toISOString().slice(0, 10)).toBe(sydneyToday());
+    expect((await reports(f.actor)).gst).toMatchObject({
+      oneA: (finalised as { oneA: string }).oneA,
+      oneB: (finalised as { oneB: string }).oneB,
+    });
+    const current = await reportHandlers(() => db).gst({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+      ),
+      context: undefined,
+    });
+    expect(await current.json()).toMatchObject({ oneB: "-1000" });
+  });
 });

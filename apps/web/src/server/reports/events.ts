@@ -43,6 +43,7 @@ export async function financialEvents(
     postings,
     quotes,
     creditAdjustments,
+    supplierCreditAdjustments,
   ] = await Promise.all([
     tx.job.findMany({
       where: { companyId },
@@ -62,7 +63,7 @@ export async function financialEvents(
     }),
     tx.supplierBill.findMany({
       where: { companyId },
-      include: { allocations: { include: { payment: true } } },
+      include: { allocations: { include: { payment: true } }, credits: true },
     }),
     tx.expense.findMany({ where: { companyId, status: "approved" } }),
     tx.timesheet.findMany({ where: { companyId, status: "approved" } }),
@@ -85,6 +86,7 @@ export async function financialEvents(
       },
     }),
     tx.creditCashAdjustment.findMany({ where: { companyId } }),
+    tx.supplierCreditGstAdjustment.findMany({ where: { companyId } }),
   ]);
   const periods: GstRegistrationPeriod[] = registrations.map((p) => ({
     startsOn: toDay(p.startsOn),
@@ -493,6 +495,68 @@ export async function financialEvents(
           );
       }
     }
+    // Supplier credits (#140): lower the job cost on the date the note was
+    // received; the purchaser's creditable GST comes back (an increasing
+    // adjustment) on that date on the non-cash basis, or through the
+    // recorded cash corrections on the cash basis. A void reverses on its day.
+    for (const credit of row.credits) {
+      const creditDay = toDay(credit.receivedOn);
+      const voidDay = credit.voidedAt ? businessDay(credit.voidedAt) : null;
+      emit(
+        `${credit.id}:credit-cost`,
+        credit.id,
+        creditDay,
+        row.jobId,
+        customerId,
+        "incurred",
+        -credit.jobCostCents,
+      );
+      if (voidDay)
+        emit(
+          `${credit.id}:credit-cost-void`,
+          credit.id,
+          voidDay,
+          row.jobId,
+          customerId,
+          "incurred",
+          credit.jobCostCents,
+        );
+      if (status.basis !== "non_cash") continue;
+      if (registered(taxDay(credit.id, creditDay)))
+        emit(
+          `${credit.id}:credit-gst`,
+          credit.id,
+          creditDay,
+          row.jobId,
+          customerId,
+          "gst_purchases",
+          -credit.creditableGstCents,
+        );
+      if (voidDay && registered(taxDay(credit.id, voidDay)))
+        emit(
+          `${credit.id}:credit-gst-void`,
+          credit.id,
+          voidDay,
+          row.jobId,
+          customerId,
+          "gst_purchases",
+          credit.creditableGstCents,
+        );
+    }
+    if (status.basis === "cash" && !historyProblem)
+      for (const a of supplierCreditAdjustments.filter(
+        (a) => a.billId === row.id,
+      ))
+        if (registered(taxDay(a.creditId, toDay(a.adjustedOn))))
+          emit(
+            a.id,
+            a.creditId,
+            toDay(a.adjustedOn),
+            row.jobId,
+            customerId,
+            "gst_purchases",
+            a.creditableGstCents,
+          );
     if (status.basis === "cash" && !historyProblem)
       for (const a of paymentAdjustments.filter((a) => a.billId === row.id))
         if (registered(toDay(a.adjustedOn)))
