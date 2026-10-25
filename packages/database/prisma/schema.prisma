@@ -1092,6 +1092,9 @@ model Expense {
   submitter             Membership         @relation("ExpenseSubmitter", fields: [companyId, submittedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
   decider               Membership?        @relation("ExpenseDecider", fields: [companyId, decidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
 
+  supplierPaymentAllocations    SupplierPaymentExpenseAllocation[]
+  supplierPaymentGstAdjustments SupplierPaymentExpenseGstAdjustment[]
+
   @@unique([companyId, id])
   @@unique([companyId, receiptDocumentId])
   @@unique([companyId, reversesId])
@@ -1329,27 +1332,29 @@ model SupplierBillItem {
 /// Money paid to a supplier, allocated to bills (#46). Idempotent by
 /// (company, idempotencyKey); immutable except a one-way void.
 model SupplierPayment {
-  id             String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId      String                         @map("company_id") @db.Uuid
-  contractorId   String?                        @map("contractor_id") @db.Uuid
-  payeeName      String                         @map("payee_name") @db.VarChar(200)
-  paidOn         DateTime                       @map("paid_on") @db.Date
-  amountCents    BigInt                         @map("amount_cents")
-  method         ReceiptMethod
-  reference      String?                        @db.VarChar(100)
-  idempotencyKey String                         @map("idempotency_key") @db.VarChar(200)
-  requestHash    String                         @map("request_hash") @db.Char(64)
-  voidReason     String?                        @map("void_reason") @db.VarChar(500)
-  voidedAt       DateTime?                      @map("voided_at") @db.Timestamptz(3)
-  voidedBy       String?                        @map("voided_by") @db.Uuid
-  createdAt      DateTime                       @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy      String                         @map("created_by") @db.Uuid
-  company        Company                        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  contractor     Contractor?                    @relation(fields: [companyId, contractorId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
-  creator        Membership                     @relation("SupplierPaymentCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  voider         Membership?                    @relation("SupplierPaymentVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  allocations    SupplierPaymentAllocation[]
-  gstAdjustments SupplierPaymentGstAdjustment[]
+  id                    String                                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId             String                                @map("company_id") @db.Uuid
+  contractorId          String?                               @map("contractor_id") @db.Uuid
+  payeeName             String                                @map("payee_name") @db.VarChar(200)
+  paidOn                DateTime                              @map("paid_on") @db.Date
+  amountCents           BigInt                                @map("amount_cents")
+  method                ReceiptMethod
+  reference             String?                               @db.VarChar(100)
+  idempotencyKey        String                                @map("idempotency_key") @db.VarChar(200)
+  requestHash           String                                @map("request_hash") @db.Char(64)
+  voidReason            String?                               @map("void_reason") @db.VarChar(500)
+  voidedAt              DateTime?                             @map("voided_at") @db.Timestamptz(3)
+  voidedBy              String?                               @map("voided_by") @db.Uuid
+  createdAt             DateTime                              @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy             String                                @map("created_by") @db.Uuid
+  company               Company                               @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contractor            Contractor?                           @relation(fields: [companyId, contractorId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator               Membership                            @relation("SupplierPaymentCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  voider                Membership?                           @relation("SupplierPaymentVoider", fields: [companyId, voidedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  allocations           SupplierPaymentAllocation[]
+  expenseAllocations    SupplierPaymentExpenseAllocation[]
+  expenseGstAdjustments SupplierPaymentExpenseGstAdjustment[]
+  gstAdjustments        SupplierPaymentGstAdjustment[]
 
   @@unique([companyId, idempotencyKey])
   @@unique([companyId, id])
@@ -1480,6 +1485,42 @@ model SupplierCreditGstAdjustment {
   @@unique([creditId, event])
   @@index([companyId, billId])
   @@map("supplier_credit_gst_adjustments")
+}
+
+/// A supplier payment's allocation to an approved on-account expense (#141):
+/// the expense's supplier balance is settled like a bill's. Append-only.
+model SupplierPaymentExpenseAllocation {
+  id                           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId                    String          @map("company_id") @db.Uuid
+  paymentId                    String          @map("payment_id") @db.Uuid
+  expenseId                    String          @map("expense_id") @db.Uuid
+  amountCents                  BigInt          @map("amount_cents")
+  /// Cash-basis input tax credit attributed to this allocation (R7).
+  creditableGstAttributedCents BigInt          @map("creditable_gst_attributed_cents")
+  payment                      SupplierPayment @relation(fields: [companyId, paymentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  expense                      Expense         @relation(fields: [companyId, expenseId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([paymentId, expenseId])
+  @@index([companyId, expenseId])
+  @@map("supplier_payment_expense_allocations")
+}
+
+/// Input tax credit correction written when a payment to an on-account
+/// expense is voided (as supplier_payment_gst_adjustments for bills).
+model SupplierPaymentExpenseGstAdjustment {
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId          String          @map("company_id") @db.Uuid
+  paymentId          String          @map("payment_id") @db.Uuid
+  expenseId          String          @map("expense_id") @db.Uuid
+  creditableGstCents BigInt          @map("creditable_gst_cents")
+  adjustedOn         DateTime        @map("adjusted_on") @db.Date
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  payment            SupplierPayment @relation(fields: [companyId, paymentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction, map: "supplier_payment_expense_gst_adj_payment_fkey")
+  expense            Expense         @relation(fields: [companyId, expenseId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction, map: "supplier_payment_expense_gst_adj_expense_fkey")
+
+  @@unique([paymentId, expenseId], map: "supplier_payment_expense_gst_adj_payment_expense_key")
+  @@index([companyId, expenseId], map: "supplier_payment_expense_gst_adj_company_expense_idx")
+  @@map("supplier_payment_expense_gst_adjustments")
 }
 
 /// Finalized financial period; source changes are guarded by database triggers.

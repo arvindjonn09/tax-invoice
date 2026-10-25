@@ -57,6 +57,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
     - Credits are immutable, with a one-way void.
     - API: `POST /api/bills/:id/credits`, `GET /api/supplier-credits/:id`, `POST /api/supplier-credits/:id/void`.
   - #51 screens: Payments keeps obligations (supplier bills, with paid and owing) separate from settlements (supplier payments and customer receipts/refunds); bill entry with creditable-GST evidence and business-use share; payment and receipt entry allocate across owing bills or invoices (amount = sum of allocations, one idempotency key per attempt); detail pages with void-with-reason; the invoice list now returns received and outstanding balances for issued invoices
+  - #141 supplier payments settle approved on-account expenses with the same rules as bills: idempotent, no overpayment, cash-basis input tax credit and void corrections, one supplier per payment. A supplier-credit reversal and a payment can't both apply, whichever comes first.
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
   - #48 PDF: deterministic pdf-lib rendering of the frozen issue snapshot (standard fonts only — no HTML, scripts, fonts, images or URLs fetched), stored privately once at issue in append-only `invoice_pdfs` (lazily if storage was down), 5-minute signed links via `POST /api/invoices/:id/pdf`; golden files for registered, not-registered and adjustment notes. Builder UI remains #49

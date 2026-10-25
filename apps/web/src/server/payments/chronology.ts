@@ -159,5 +159,22 @@ export async function supplierPaymentDateProblem(
     candidate,
   ]);
 }
+/** The same check for a payment to an on-account expense (#141). */
+export async function expensePaymentDateProblem(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  expenseId: string,
+  total: bigint,
+  candidate: DatedSettlement,
+) {
+  const rows = await tx.supplierPaymentExpenseAllocation.findMany({
+    where: { companyId, expenseId },
+    include: { payment: true },
+  });
+  return settlementHistoryProblem(total, [
+    ...supplierPaymentHistory(rows),
+    candidate,
+  ]);
+}
 export const chronologyMessage =
   "This settlement date would create a negative running balance or an overpayment in the document history. Choose a valid date or correct the earlier records.";

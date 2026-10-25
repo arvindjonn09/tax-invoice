@@ -1,5 +1,6 @@
 import {
   supplierPaymentDateProblem,
+  expensePaymentDateProblem,
   chronologyMessage,
   latestBillAdjustmentDay,
 } from "../payments/chronology";
@@ -40,6 +41,8 @@ import type {
   SupplierCreditItem,
   SupplierPayment,
   SupplierPaymentAllocation,
+  SupplierPaymentExpenseAllocation,
+  Expense,
 } from "../../../../../packages/database/src/generated/prisma/client";
 import { withAudit } from "../../../../../packages/database/src/index";
 import { type PolicyHandler, privateJson } from "../authz/policy";
@@ -72,7 +75,13 @@ type BillRow = SupplierBill & {
 };
 type PaymentRow = SupplierPayment & {
   allocations: SupplierPaymentAllocation[];
+  expenseAllocations: SupplierPaymentExpenseAllocation[];
 };
+
+const PAYMENT_INCLUDE = {
+  allocations: true,
+  expenseAllocations: true,
+} as const satisfies Prisma.SupplierPaymentInclude;
 
 const day = z.iso.date("Use a date like 2026-07-01");
 const cents = z
@@ -122,8 +131,20 @@ const CreatePayment = z.object({
   amountCents: cents,
   method: z.enum(["bank_transfer", "card", "cash", "cheque", "other"]),
   reference: optionalText(100).optional(),
+  /** Each line settles a bill or an approved on-account expense (#141). */
   allocations: z
-    .array(z.object({ billId: z.uuid(), amountCents: cents }))
+    .array(
+      z
+        .object({
+          billId: z.uuid().optional(),
+          expenseId: z.uuid().optional(),
+          amountCents: cents,
+        })
+        .refine(
+          (line) => Boolean(line.billId) !== Boolean(line.expenseId),
+          "Allocate each line to a bill or an expense",
+        ),
+    )
     .max(100),
 });
 const Void = z.object({ reason: requiredText(500, "Say why it's void") });
@@ -277,6 +298,12 @@ function paymentView(row: PaymentRow) {
       creditableGstAttributedCents:
         allocation.creditableGstAttributedCents.toString(),
     })),
+    expenseAllocations: row.expenseAllocations.map((allocation) => ({
+      expenseId: allocation.expenseId,
+      amountCents: allocation.amountCents.toString(),
+      creditableGstAttributedCents:
+        allocation.creditableGstAttributedCents.toString(),
+    })),
   };
 }
 
@@ -358,6 +385,94 @@ export async function billBalances(
       },
     ]),
   );
+}
+
+/**
+ * Supplier balances of payable on-account expenses (#141): approved
+ * originals settled "on account" whose supplier balance wasn't cancelled by
+ * a supplier-credit reversal. Same shape as a bill's balance; callers lock.
+ */
+export async function expenseBalances(
+  db: Prisma.TransactionClient | PrismaClient,
+  companyId: string,
+  expenseIds: readonly string[],
+): Promise<Map<string, BillBalance & { expense: Expense }>> {
+  const expenses = await db.expense.findMany({
+    where: {
+      companyId,
+      id: { in: [...expenseIds] },
+      status: "approved",
+      settlement: "on_account",
+      reversesId: null,
+    },
+    include: {
+      reversedBy: { select: { settlement: true } },
+      corrections: {
+        where: { status: "approved" },
+        select: {
+          creditableGstCents: true,
+          reversedBy: { select: { id: true } },
+        },
+      },
+      supplierPaymentAllocations: {
+        where: { payment: { voidedAt: null } },
+        select: { amountCents: true, creditableGstAttributedCents: true },
+      },
+      supplierPaymentGstAdjustments: {
+        select: { creditableGstCents: true },
+      },
+    },
+  });
+  return new Map(
+    expenses
+      // A supplier-credit reversal cancels what was owed.
+      .filter((expense) => expense.reversedBy?.settlement !== "on_account")
+      .map((expense) => {
+        const paid = expense.supplierPaymentAllocations.reduce(
+          (total, allocation) => total + allocation.amountCents,
+          0n,
+        );
+        const attributed =
+          expense.supplierPaymentAllocations.reduce(
+            (total, allocation) =>
+              total + allocation.creditableGstAttributedCents,
+            0n,
+          ) +
+          expense.supplierPaymentGstAdjustments.reduce(
+            (total, adjustment) => total + adjustment.creditableGstCents,
+            0n,
+          );
+
+        return [
+          expense.id,
+          {
+            billId: expense.id,
+            inclusive: expense.inclusiveCents,
+            // The live tax snapshot: after a cost-only reversal, the approved
+            // correction's credit, or none. (Reversals and corrections are
+            // refused while payments exist, so attributed never goes stale.)
+            creditableGst:
+              expense.reversedBy && expense.reversedBy.settlement === null
+                ? expense.corrections[0] && !expense.corrections[0].reversedBy
+                  ? (expense.corrections[0].creditableGstCents ?? 0n)
+                  : 0n
+                : (expense.creditableGstCents ?? 0n),
+            paid,
+            attributed,
+            // The extra included relations are harmless on the payee read.
+            expense: expense as Expense,
+          },
+        ];
+      }),
+  );
+}
+
+/** Lock expense rows in a fixed order, after any bills (no deadlocks). */
+async function lockExpenses(
+  tx: Prisma.TransactionClient,
+  ids: readonly string[],
+) {
+  for (const id of [...new Set(ids)].sort()) await lockRow(tx, "expenses", id);
 }
 
 /** Lock bill rows in a fixed order (no deadlocks between payments). */
@@ -826,7 +941,10 @@ function fingerprint(data: z.infer<typeof CreatePayment>): string {
     method: data.method,
     reference: data.reference ?? null,
     allocations: [...data.allocations]
-      .map((a) => [a.billId, a.amountCents.toString()])
+      .map((a) => [
+        a.billId ?? `expense:${a.expenseId}`,
+        a.amountCents.toString(),
+      ])
       .sort(),
   };
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
@@ -845,7 +963,7 @@ async function replay(
         idempotencyKey: key,
       },
     },
-    include: { allocations: true },
+    include: PAYMENT_INCLUDE,
   });
   if (!existing) return null;
   if (existing.requestHash !== hash)
@@ -870,7 +988,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
     const [rows, total] = await Promise.all([
       db().supplierPayment.findMany({
         where,
-        include: { allocations: true },
+        include: PAYMENT_INCLUDE,
         orderBy: [{ paidOn: "desc" }, { createdAt: "desc" }, { id: "asc" }],
         take,
         skip,
@@ -892,7 +1010,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
       id
         ? await db().supplierPayment.findUnique({
             where: { id },
-            include: { allocations: true },
+            include: PAYMENT_INCLUDE,
           })
         : null,
     );
@@ -922,21 +1040,36 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
-          const ids = data.allocations.map((a) => a.billId);
-          await lockBills(tx, ids);
+          const billLines = data.allocations.filter((a) => a.billId);
+          const expenseLines = data.allocations.filter((a) => a.expenseId);
+          if (billLines.length > 0 && expenseLines.length > 0)
+            throw refuse(
+              400,
+              "Pay bills and on-account expenses in separate payments",
+              "allocations",
+            );
+          const forExpenses = expenseLines.length > 0;
+          const ids = data.allocations.map((a) => (a.billId ?? a.expenseId)!);
+          // Bills, then expenses — each in id order (the order every payment,
+          // payment void and expense reversal takes).
+          if (forExpenses) await lockExpenses(tx, ids);
+          else await lockBills(tx, ids);
           // A concurrent duplicate may have committed while we waited for the
-          // bill locks: replay it rather than judging it as an overpayment.
+          // locks: replay it rather than judging it as an overpayment.
           const duplicate = await replay(tx, actor, key, hash);
           if (duplicate) throw new Refusal(duplicate);
-          const balances = await billBalances(tx, actor.companyId, ids);
+          const balances: Map<string, BillBalance> = forExpenses
+            ? await expenseBalances(tx, actor.companyId, ids)
+            : await billBalances(tx, actor.companyId, ids);
           const allocations = data.allocations.map((a) => ({
-            billId: a.billId,
+            billId: (a.billId ?? a.expenseId)!,
             amount: a.amountCents,
           }));
           const problems = paymentProblems(
             data.amountCents,
             allocations,
             balances,
+            forExpenses ? "expense" : "bill",
           );
           if (problems.length > 0)
             throw new Refusal(
@@ -950,44 +1083,110 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
                 { status: 400 },
               ),
             );
-          const bills = allocations.map((a) => balances.get(a.billId)!.bill);
-          if (new Set(bills.map(payeeKey)).size > 1)
-            throw refuse(
-              400,
-              "Pay one supplier at a time: these bills are from different suppliers",
-              "allocations",
+          let payee: { contractorId: string | null; name: string };
+          if (forExpenses) {
+            const expenses = allocations.map(
+              (a) =>
+                (balances.get(a.billId) as BillBalance & { expense: Expense })
+                  .expense,
             );
-          const payee = bills[0]!;
-          // Cash basis: attribution uses the bill's current credits, so a
-          // payment can't be dated before them (as receipts, #54).
-          for (const bill of bills) {
-            if (
-              (
-                await companyGstStatusOn(
-                  tx,
-                  actor.companyId,
-                  toDay(bill.issuedOn),
-                )
-              ).basis !== "cash"
-            )
-              continue;
-            const latest = await latestBillAdjustmentDay(
-              tx,
-              actor.companyId,
-              bill.id,
+            const names = new Set(
+              expenses.map((expense) =>
+                (expense.supplierName ?? "").trim().toLowerCase(),
+              ),
             );
-            if (latest && data.paidOn < latest)
+            if (names.size > 1)
               throw refuse(
                 400,
-                "Choose a date on or after the bill's latest supplier credit or adjustment date",
-                "paidOn",
+                "Pay one supplier at a time: these expenses are from different suppliers",
+                "allocations",
               );
+            // Unnamed suppliers can't be shown to be the same supplier.
+            if (expenses.length > 1 && names.has(""))
+              throw refuse(
+                400,
+                "Pay expenses without a supplier name one at a time",
+                "allocations",
+              );
+            for (const expense of expenses) {
+              // Never before the purchase: the non-cash credit is attributed
+              // on the purchase date, so a prepayment would change it.
+              if (data.paidOn < toDay(expense.purchasedOn))
+                throw refuse(
+                  400,
+                  "Choose a payment date on or after the purchase date",
+                  "paidOn",
+                );
+              // Cash basis: not before a correction already recorded (as bills).
+              const latest =
+                await tx.supplierPaymentExpenseGstAdjustment.aggregate({
+                  where: { companyId: actor.companyId, expenseId: expense.id },
+                  _max: { adjustedOn: true },
+                });
+              if (
+                latest._max.adjustedOn &&
+                data.paidOn < toDay(latest._max.adjustedOn)
+              )
+                throw refuse(
+                  400,
+                  "Choose a date on or after the expense's latest GST adjustment date",
+                  "paidOn",
+                );
+            }
+            payee = {
+              contractorId: null,
+              name: expenses[0]!.supplierName?.trim() || "Unnamed supplier",
+            };
+          } else {
+            const bills = allocations.map(
+              (a) =>
+                (balances.get(a.billId) as BillBalance & { bill: SupplierBill })
+                  .bill,
+            );
+            if (new Set(bills.map(payeeKey)).size > 1)
+              throw refuse(
+                400,
+                "Pay one supplier at a time: these bills are from different suppliers",
+                "allocations",
+              );
+            payee = {
+              contractorId: bills[0]!.contractorId,
+              name: bills[0]!.supplierName,
+            };
+            // Cash basis: attribution uses the bill's current credits, so a
+            // payment can't be dated before them (as receipts, #54).
+            for (const bill of bills) {
+              if (
+                (
+                  await companyGstStatusOn(
+                    tx,
+                    actor.companyId,
+                    toDay(bill.issuedOn),
+                  )
+                ).basis !== "cash"
+              )
+                continue;
+              const latest = await latestBillAdjustmentDay(
+                tx,
+                actor.companyId,
+                bill.id,
+              );
+              if (latest && data.paidOn < latest)
+                throw refuse(
+                  400,
+                  "Choose a date on or after the bill's latest supplier credit or adjustment date",
+                  "paidOn",
+                );
+            }
           }
           const paymentId = randomUUID(),
             createdAt = new Date();
+          const dateProblem = forExpenses
+            ? expensePaymentDateProblem
+            : supplierPaymentDateProblem;
           for (const allocation of allocations) {
             if (
-              await supplierPaymentDateProblem(
+              await dateProblem(
                 tx,
                 actor.companyId,
                 allocation.billId,
@@ -1008,7 +1207,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
               createdAt,
               companyId: actor.companyId,
               contractorId: payee.contractorId,
-              payeeName: payee.supplierName,
+              payeeName: payee.name,
               paidOn: new Date(`${data.paidOn}T00:00:00Z`),
               amountCents: data.amountCents,
               method: data.method,
@@ -1018,35 +1217,44 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
               createdBy: actor.userId,
             },
           });
-          await tx.supplierPaymentAllocation.createMany({
-            data: allocations.map((allocation) => ({
-              companyId: actor.companyId,
-              paymentId: created.id,
-              billId: allocation.billId,
-              amountCents: allocation.amount,
-              creditableGstAttributedCents: paymentCreditableGst(
-                allocation.amount,
-                balances.get(allocation.billId)!,
-              ),
-            })),
-          });
+          const lines = allocations.map((allocation) => ({
+            companyId: actor.companyId,
+            paymentId: created.id,
+            amountCents: allocation.amount,
+            creditableGstAttributedCents: paymentCreditableGst(
+              allocation.amount,
+              balances.get(allocation.billId)!,
+            ),
+            id: allocation.billId,
+          }));
+          if (forExpenses)
+            await tx.supplierPaymentExpenseAllocation.createMany({
+              data: lines.map(({ id, ...line }) => ({
+                ...line,
+                expenseId: id,
+              })),
+            });
+          else
+            await tx.supplierPaymentAllocation.createMany({
+              data: lines.map(({ id, ...line }) => ({ ...line, billId: id })),
+            });
           await audit({
             companyId: actor.companyId,
             actorUserId: actor.userId,
             action: "supplier_payment.recorded",
             target: { type: "supplier_payment", id: created.id },
             after: {
-              payeeName: payee.supplierName,
+              payeeName: payee.name,
               amountCents: data.amountCents,
               allocations: allocations.map((a) => ({
-                billId: a.billId,
+                [forExpenses ? "expenseId" : "billId"]: a.billId,
                 amountCents: a.amount,
               })),
             },
           });
           return tx.supplierPayment.findUniqueOrThrow({
             where: { id: created.id },
-            include: { allocations: true },
+            include: PAYMENT_INCLUDE,
           });
         });
         return privateJson(paymentView(row), { status: 201 });
@@ -1061,7 +1269,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
     }
   };
 
-  /** Void a payment (audited, final): its bills become owing again. */
+  /** Void a payment (audited, final): its bills and expenses become owing again. */
   const voidIt: PolicyHandler<IdContext> = async ({
     actor,
     request,
@@ -1078,7 +1286,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
           actor,
           await tx.supplierPayment.findUnique({
             where: { id },
-            include: { allocations: true },
+            include: PAYMENT_INCLUDE,
           }),
         );
         if (before.voidedAt) throw refuse(409, "It's already void");
@@ -1106,6 +1314,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
           )
             throw refuse(400, chronologyMessage);
         }
+        const today = new Date(`${voidDay}T00:00:00Z`);
         const gstAdjustments = before.allocations
           .map((allocation) => ({
             billId: allocation.billId,
@@ -1125,7 +1334,63 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
               paymentId: id,
               billId: adjustment.billId,
               creditableGstCents: adjustment.creditableGstCents,
-              adjustedOn: new Date(`${voidDay}T00:00:00Z`),
+              adjustedOn: today,
+            })),
+          });
+        // The same for on-account expenses (#141). A paid expense can't be
+        // reversed with a supplier credit, so it is still payable here.
+        const expenseIds = before.expenseAllocations.map(
+          (allocation) => allocation.expenseId,
+        );
+        await lockExpenses(tx, expenseIds);
+        const owed = await expenseBalances(tx, actor.companyId, expenseIds);
+        for (const allocation of before.expenseAllocations) {
+          const balance = owed.get(allocation.expenseId);
+          if (
+            balance &&
+            (await expensePaymentDateProblem(
+              tx,
+              actor.companyId,
+              allocation.expenseId,
+              balance.inclusive,
+              {
+                id: `${before.id}:void`,
+                date: voidDay,
+                recordedAt: voidedAt.toISOString(),
+                amount: -allocation.amountCents,
+              },
+            ))
+          )
+            throw refuse(400, chronologyMessage);
+        }
+        const expenseAdjustments = before.expenseAllocations
+          .map((allocation) => {
+            const balance = owed.get(allocation.expenseId);
+            if (!balance)
+              throw refuse(
+                409,
+                "An expense this payment settled is no longer payable",
+              );
+            return {
+              expenseId: allocation.expenseId,
+              creditableGstCents: paymentVoidAdjustment(
+                {
+                  amount: allocation.amountCents,
+                  gst: allocation.creditableGstAttributedCents,
+                },
+                balance,
+              ),
+            };
+          })
+          .filter((adjustment) => adjustment.creditableGstCents !== 0n);
+        if (expenseAdjustments.length > 0)
+          await tx.supplierPaymentExpenseGstAdjustment.createMany({
+            data: expenseAdjustments.map((adjustment) => ({
+              companyId: actor.companyId,
+              paymentId: id,
+              expenseId: adjustment.expenseId,
+              creditableGstCents: adjustment.creditableGstCents,
+              adjustedOn: today,
             })),
           });
         const updated = await tx.supplierPayment.update({
@@ -1135,7 +1400,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
             voidedAt,
             voidedBy: actor.userId,
           },
-          include: { allocations: true },
+          include: PAYMENT_INCLUDE,
         });
         await audit({
           companyId: actor.companyId,
@@ -1146,6 +1411,10 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
             reason: parsed.data.reason,
             gstAdjustments: gstAdjustments.map((adjustment) => ({
               billId: adjustment.billId,
+              creditableGstCents: adjustment.creditableGstCents.toString(),
+            })),
+            expenseGstAdjustments: expenseAdjustments.map((adjustment) => ({
+              expenseId: adjustment.expenseId,
               creditableGstCents: adjustment.creditableGstCents.toString(),
             })),
           },

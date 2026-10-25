@@ -188,6 +188,21 @@ describe("supplier bills (#46)", () => {
     );
   });
 
+  it("words problems for on-account expenses too (#141)", () => {
+    const b = balances(balance({ billId: "expense-1", inclusive: 10_000n }));
+    const messages = (allocations: { billId: string; amount: bigint }[]) =>
+      paymentProblems(10_000n, allocations, b, "expense").map((p) => p.message);
+    expect(messages([{ billId: "nope", amount: 10_000n }])).toEqual([
+      "Choose an approved on-account expense from this supplier",
+    ]);
+    expect(messages([{ billId: "expense-1", amount: 10_001n }])[0]).toMatch(
+      /owing on this expense/,
+    );
+    expect(
+      paymentProblems(0n, [], b, "expense").map((p) => p.message),
+    ).toContain("Allocate it to at least one expense");
+  });
+
   it("attributes creditable GST across partial payments exactly once (cash basis)", () => {
     let paid = 0n;
     let attributed = 0n;

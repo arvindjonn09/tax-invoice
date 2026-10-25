@@ -65,7 +65,13 @@ export async function financialEvents(
       where: { companyId },
       include: { allocations: { include: { payment: true } }, credits: true },
     }),
-    tx.expense.findMany({ where: { companyId, status: "approved" } }),
+    tx.expense.findMany({
+      where: { companyId, status: "approved" },
+      include: {
+        supplierPaymentAllocations: { include: { payment: true } },
+        supplierPaymentGstAdjustments: true,
+      },
+    }),
     tx.timesheet.findMany({ where: { companyId, status: "approved" } }),
     tx.receiptGstAdjustment.findMany({ where: { companyId } }),
     tx.supplierPaymentGstAdjustment.findMany({ where: { companyId } }),
@@ -612,6 +618,64 @@ export async function financialEvents(
         "gst_purchases",
         row.creditableGstCents ?? 0n,
       );
+    // On-account expenses paid later with a supplier payment (#141): the
+    // cash and, on the cash basis, the attributed input tax credit move on
+    // the payment date; a payment void and its correction on their own days.
+    for (const a of row.supplierPaymentAllocations) {
+      const payDay = toDay(a.payment.paidOn);
+      emit(
+        `${a.id}:pay`,
+        a.paymentId,
+        payDay,
+        row.jobId,
+        customerId,
+        "paid",
+        a.amountCents,
+      );
+      if (status.basis === "cash" && registered(payDay))
+        emit(
+          `${a.id}:cash-credit`,
+          a.paymentId,
+          payDay,
+          row.jobId,
+          customerId,
+          "gst_purchases",
+          a.creditableGstAttributedCents,
+        );
+      if (!a.payment.voidedAt) continue;
+      const voidDay = businessDay(a.payment.voidedAt);
+      emit(
+        `${a.id}:pay-void`,
+        a.paymentId,
+        voidDay,
+        row.jobId,
+        customerId,
+        "paid",
+        -a.amountCents,
+      );
+      if (status.basis === "cash" && registered(voidDay))
+        emit(
+          `${a.id}:cash-credit-void`,
+          a.paymentId,
+          voidDay,
+          row.jobId,
+          customerId,
+          "gst_purchases",
+          -a.creditableGstAttributedCents,
+        );
+    }
+    if (status.basis === "cash")
+      for (const a of row.supplierPaymentGstAdjustments)
+        if (registered(toDay(a.adjustedOn)))
+          emit(
+            a.id,
+            a.paymentId,
+            toDay(a.adjustedOn),
+            row.jobId,
+            customerId,
+            "gst_purchases",
+            a.creditableGstCents,
+          );
     if (row.settlement === "paid_at_purchase" && row.paidOn)
       emit(
         `${row.id}:paid`,
