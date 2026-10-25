@@ -21,6 +21,7 @@ export async function lockDocumentClaim(
       supplierBill: { select: { id: true } },
       supplierCredit: { select: { id: true } },
       workEvidence: { select: { id: true } },
+      billSubmission: { select: { id: true, status: true } },
     },
   });
 }

@@ -88,7 +88,7 @@ const cents = z
   .union([z.string().regex(/^\d{1,13}$/, "Whole cents only"), z.number().int()])
   .transform((value) => BigInt(value));
 
-const Line = z.object({
+export const Line = z.object({
   description: requiredText(500, "Describe the line"),
   taxCode: z.enum(TAX_CODES as [string, ...string[]], {
     error: "Choose a tax code",
@@ -126,6 +126,223 @@ const CreateBill = z.object({
   note: optionalText(500).optional(),
 });
 
+type BillData = z.infer<typeof CreateBill>;
+type AuditFn = Parameters<Parameters<typeof withAudit>[1]>[1];
+
+/**
+ * Record a supplier bill inside the caller's audited transaction (#46): the
+ * office's own entry, or the approval of a subcontractor's submission
+ * (#139), whose already-claimed document it may reuse.
+ */
+export async function recordBill(
+  tx: Prisma.TransactionClient,
+  audit: AuditFn,
+  actor: Actor,
+  data: BillData,
+  options: { submissionId?: string } = {},
+) {
+  let supplier: {
+    name: string;
+    abn: string | null;
+    registered: boolean;
+  };
+  let jobId = data.jobId ?? null;
+  // Lock order: contractor, then job, then document — the order
+  // contractor writes (contractor → offer → job) and expenses (job →
+  // document) take. Inserting the bill only key-shares rows already
+  // locked here, so a racing expense or offer write can't deadlock it.
+  if (data.contractorId) {
+    await lockRow(tx, "contractors", data.contractorId);
+    const contractor = await tx.contractor.findFirst({
+      where: { id: data.contractorId, companyId: actor.companyId },
+    });
+    if (!contractor) throw refuse(400, "Choose a contractor", "contractorId");
+    supplier = {
+      name: contractor.name,
+      abn: contractor.abn,
+      registered: contractor.gstRegistered,
+    };
+    if (data.offerId) {
+      const acceptance = await tx.contractorAcceptance.findFirst({
+        where: {
+          companyId: actor.companyId,
+          offerId: data.offerId,
+          contractorId: contractor.id,
+        },
+      });
+      if (!acceptance)
+        throw refuse(
+          400,
+          "Choose an accepted offer of this contractor",
+          "offerId",
+        );
+      if (jobId && jobId !== acceptance.jobId)
+        throw refuse(400, "That offer is for another job", "jobId");
+      jobId = acceptance.jobId;
+    }
+  } else {
+    if (!data.supplierName)
+      throw refuse(400, "Enter the supplier's name", "supplierName");
+    if (data.supplierGstRegistered === undefined)
+      throw refuse(
+        400,
+        "Say whether the supplier is registered for GST",
+        "supplierGstRegistered",
+      );
+    supplier = {
+      name: data.supplierName,
+      abn: data.supplierAbn ?? null,
+      registered: data.supplierGstRegistered,
+    };
+  }
+  if (supplier.registered && !supplier.abn)
+    throw refuse(
+      400,
+      "Enter the ABN of a GST-registered supplier",
+      "supplierAbn",
+    );
+  if (jobId) {
+    await lockRow(tx, "jobs", jobId);
+    const job = await tx.job.findFirst({
+      where: { id: jobId, companyId: actor.companyId },
+      select: { id: true },
+    });
+    if (!job) throw refuse(400, "Choose a job", "jobId");
+  }
+  const lines = data.lines.map((line, index) => {
+    const input = {
+      taxCode: line.taxCode as (typeof TAX_CODES)[number],
+      exclusive: line.exclusiveCents,
+      gst: line.gstCents,
+    };
+    const problem = billLineProblem(input, supplier.registered);
+    if (problem) throw refuse(400, problem, `lines.${index}`);
+    return { ...billLine(input), description: line.description };
+  });
+  let document: EvidenceDocument = null;
+  if (data.documentId) {
+    const found = await lockDocumentClaim(tx, actor.companyId, data.documentId);
+    if (!found || !["tax_invoice", "receipt"].includes(found.kind))
+      throw refuse(
+        400,
+        "Attach an uploaded tax invoice or receipt",
+        "documentId",
+      );
+    if (
+      found.expense ||
+      found.workEvidence ||
+      found.supplierBill ||
+      found.supplierCredit ||
+      // A subcontractor's submitted invoice: only its own approval.
+      (found.billSubmission && found.billSubmission.id !== options.submissionId)
+    )
+      throw refuse(
+        400,
+        "That document is already attached to another record",
+        "documentId",
+      );
+    document = found.kind as "tax_invoice" | "receipt";
+  }
+  if (data.supplierReference) {
+    const duplicate = await tx.supplierBill.findFirst({
+      where: {
+        companyId: actor.companyId,
+        voidedAt: null,
+        supplierReference: {
+          equals: data.supplierReference,
+          mode: "insensitive",
+        },
+        ...(data.contractorId
+          ? { contractorId: data.contractorId }
+          : {
+              contractorId: null,
+              supplierName: {
+                equals: supplier.name,
+                mode: "insensitive",
+              },
+            }),
+      },
+      select: { id: true },
+    });
+    if (duplicate)
+      throw refuse(
+        409,
+        "This supplier invoice is already recorded",
+        "supplierReference",
+      );
+  }
+  const company = await companyGstStatusOn(tx, actor.companyId, data.issuedOn);
+  const cost = billCost(lines, {
+    companyRegistered: company.registered,
+    document,
+    evidenceVerified: data.evidenceVerified,
+    creditableBasisPoints: BigInt(data.creditableBasisPoints),
+  });
+  if (cost.inclusive <= 0n)
+    throw refuse(400, "A bill must be for more than $0", "lines");
+  if (cost.inclusive > MAX_TOTAL)
+    throw refuse(400, "That bill is too large", "lines");
+  const created = await tx.supplierBill.create({
+    data: {
+      companyId: actor.companyId,
+      jobId,
+      contractorId: data.contractorId ?? null,
+      offerId: data.offerId ?? null,
+      supplierName: supplier.name,
+      supplierAbn: supplier.abn,
+      supplierGstRegistered: supplier.registered,
+      supplierReference: data.supplierReference ?? null,
+      issuedOn: new Date(`${data.issuedOn}T00:00:00Z`),
+      dueOn: data.dueOn ? new Date(`${data.dueOn}T00:00:00Z`) : null,
+      documentId: data.documentId ?? null,
+      evidenceVerified: data.evidenceVerified,
+      hasEvidence: cost.hasEvidence,
+      creditableBasisPoints: data.creditableBasisPoints,
+      creditableReason: data.creditableReason ?? null,
+      companyGstRegistered: company.registered,
+      exclusiveCents: cost.exclusive,
+      gstCents: cost.gst,
+      inclusiveCents: cost.inclusive,
+      creditableGstCents: cost.creditableGst,
+      nonCreditableGstCents: cost.nonCreditableGst,
+      jobCostCents: cost.jobCost,
+      note: data.note ?? null,
+      createdBy: actor.userId,
+    },
+  });
+  await tx.supplierBillItem.createMany({
+    data: lines.map((line, index) => ({
+      companyId: actor.companyId,
+      billId: created.id,
+      position: index + 1,
+      description: line.description,
+      taxCode: line.taxCode,
+      gstRateBasisPoints: Number(line.rateBasisPoints),
+      exclusiveCents: line.exclusive,
+      gstCents: line.gst,
+      inclusiveCents: line.inclusive,
+    })),
+  });
+  await audit({
+    companyId: actor.companyId,
+    actorUserId: actor.userId,
+    action: "bill.recorded",
+    target: { type: "supplier_bill", id: created.id },
+    after: {
+      supplierName: supplier.name,
+      jobId,
+      offerId: data.offerId ?? null,
+      inclusiveCents: cost.inclusive,
+      creditableGstCents: cost.creditableGst,
+      jobCostCents: cost.jobCost,
+    },
+  });
+  return tx.supplierBill.findUniqueOrThrow({
+    where: { id: created.id },
+    include: BILL_INCLUDE,
+  });
+}
+
 const CreatePayment = z.object({
   paidOn: day,
   amountCents: cents,
@@ -153,12 +370,12 @@ const Void = z.object({ reason: requiredText(500, "Say why it's void") });
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{8,200}$/;
 const MAX_TOTAL = 1_000_000_000_000n;
 
-const fail = (status: 400 | 409, error: string, field?: string) =>
+export const fail = (status: 400 | 409, error: string, field?: string) =>
   privateJson(
     { error, ...(field ? { fields: { [field]: error } } : {}) },
     { status },
   );
-const refuse = (status: 400 | 409, error: string, field?: string) =>
+export const refuse = (status: 400 | 409, error: string, field?: string) =>
   new Refusal(fail(status, error, field));
 
 const BILL_INCLUDE = {
@@ -651,215 +868,9 @@ export function billHandlers(db: () => PrismaClient) {
       );
     try {
       return await inTransaction(async () => {
-        const row = await withAudit(db(), async (tx, audit) => {
-          let supplier: {
-            name: string;
-            abn: string | null;
-            registered: boolean;
-          };
-          let jobId = data.jobId ?? null;
-          // Lock order: contractor, then job, then document — the order
-          // contractor writes (contractor → offer → job) and expenses (job →
-          // document) take. Inserting the bill only key-shares rows already
-          // locked here, so a racing expense or offer write can't deadlock it.
-          if (data.contractorId) {
-            await lockRow(tx, "contractors", data.contractorId);
-            const contractor = await tx.contractor.findFirst({
-              where: { id: data.contractorId, companyId: actor.companyId },
-            });
-            if (!contractor)
-              throw refuse(400, "Choose a contractor", "contractorId");
-            supplier = {
-              name: contractor.name,
-              abn: contractor.abn,
-              registered: contractor.gstRegistered,
-            };
-            if (data.offerId) {
-              const acceptance = await tx.contractorAcceptance.findFirst({
-                where: {
-                  companyId: actor.companyId,
-                  offerId: data.offerId,
-                  contractorId: contractor.id,
-                },
-              });
-              if (!acceptance)
-                throw refuse(
-                  400,
-                  "Choose an accepted offer of this contractor",
-                  "offerId",
-                );
-              if (jobId && jobId !== acceptance.jobId)
-                throw refuse(400, "That offer is for another job", "jobId");
-              jobId = acceptance.jobId;
-            }
-          } else {
-            if (!data.supplierName)
-              throw refuse(400, "Enter the supplier's name", "supplierName");
-            if (data.supplierGstRegistered === undefined)
-              throw refuse(
-                400,
-                "Say whether the supplier is registered for GST",
-                "supplierGstRegistered",
-              );
-            supplier = {
-              name: data.supplierName,
-              abn: data.supplierAbn ?? null,
-              registered: data.supplierGstRegistered,
-            };
-          }
-          if (supplier.registered && !supplier.abn)
-            throw refuse(
-              400,
-              "Enter the ABN of a GST-registered supplier",
-              "supplierAbn",
-            );
-          if (jobId) {
-            await lockRow(tx, "jobs", jobId);
-            const job = await tx.job.findFirst({
-              where: { id: jobId, companyId: actor.companyId },
-              select: { id: true },
-            });
-            if (!job) throw refuse(400, "Choose a job", "jobId");
-          }
-          const lines = data.lines.map((line, index) => {
-            const input = {
-              taxCode: line.taxCode as (typeof TAX_CODES)[number],
-              exclusive: line.exclusiveCents,
-              gst: line.gstCents,
-            };
-            const problem = billLineProblem(input, supplier.registered);
-            if (problem) throw refuse(400, problem, `lines.${index}`);
-            return { ...billLine(input), description: line.description };
-          });
-          let document: EvidenceDocument = null;
-          if (data.documentId) {
-            const found = await lockDocumentClaim(
-              tx,
-              actor.companyId,
-              data.documentId,
-            );
-            if (!found || !["tax_invoice", "receipt"].includes(found.kind))
-              throw refuse(
-                400,
-                "Attach an uploaded tax invoice or receipt",
-                "documentId",
-              );
-            if (
-              found.expense ||
-              found.workEvidence ||
-              found.supplierBill ||
-              found.supplierCredit
-            )
-              throw refuse(
-                400,
-                "That document is already attached to another record",
-                "documentId",
-              );
-            document = found.kind as "tax_invoice" | "receipt";
-          }
-          if (data.supplierReference) {
-            const duplicate = await tx.supplierBill.findFirst({
-              where: {
-                companyId: actor.companyId,
-                voidedAt: null,
-                supplierReference: {
-                  equals: data.supplierReference,
-                  mode: "insensitive",
-                },
-                ...(data.contractorId
-                  ? { contractorId: data.contractorId }
-                  : {
-                      contractorId: null,
-                      supplierName: {
-                        equals: supplier.name,
-                        mode: "insensitive",
-                      },
-                    }),
-              },
-              select: { id: true },
-            });
-            if (duplicate)
-              throw refuse(
-                409,
-                "This supplier invoice is already recorded",
-                "supplierReference",
-              );
-          }
-          const company = await companyGstStatusOn(
-            tx,
-            actor.companyId,
-            data.issuedOn,
-          );
-          const cost = billCost(lines, {
-            companyRegistered: company.registered,
-            document,
-            evidenceVerified: data.evidenceVerified,
-            creditableBasisPoints: BigInt(data.creditableBasisPoints),
-          });
-          if (cost.inclusive <= 0n)
-            throw refuse(400, "A bill must be for more than $0", "lines");
-          if (cost.inclusive > MAX_TOTAL)
-            throw refuse(400, "That bill is too large", "lines");
-          const created = await tx.supplierBill.create({
-            data: {
-              companyId: actor.companyId,
-              jobId,
-              contractorId: data.contractorId ?? null,
-              offerId: data.offerId ?? null,
-              supplierName: supplier.name,
-              supplierAbn: supplier.abn,
-              supplierGstRegistered: supplier.registered,
-              supplierReference: data.supplierReference ?? null,
-              issuedOn: new Date(`${data.issuedOn}T00:00:00Z`),
-              dueOn: data.dueOn ? new Date(`${data.dueOn}T00:00:00Z`) : null,
-              documentId: data.documentId ?? null,
-              evidenceVerified: data.evidenceVerified,
-              hasEvidence: cost.hasEvidence,
-              creditableBasisPoints: data.creditableBasisPoints,
-              creditableReason: data.creditableReason ?? null,
-              companyGstRegistered: company.registered,
-              exclusiveCents: cost.exclusive,
-              gstCents: cost.gst,
-              inclusiveCents: cost.inclusive,
-              creditableGstCents: cost.creditableGst,
-              nonCreditableGstCents: cost.nonCreditableGst,
-              jobCostCents: cost.jobCost,
-              note: data.note ?? null,
-              createdBy: actor.userId,
-            },
-          });
-          await tx.supplierBillItem.createMany({
-            data: lines.map((line, index) => ({
-              companyId: actor.companyId,
-              billId: created.id,
-              position: index + 1,
-              description: line.description,
-              taxCode: line.taxCode,
-              gstRateBasisPoints: Number(line.rateBasisPoints),
-              exclusiveCents: line.exclusive,
-              gstCents: line.gst,
-              inclusiveCents: line.inclusive,
-            })),
-          });
-          await audit({
-            companyId: actor.companyId,
-            actorUserId: actor.userId,
-            action: "bill.recorded",
-            target: { type: "supplier_bill", id: created.id },
-            after: {
-              supplierName: supplier.name,
-              jobId,
-              offerId: data.offerId ?? null,
-              inclusiveCents: cost.inclusive,
-              creditableGstCents: cost.creditableGst,
-              jobCostCents: cost.jobCost,
-            },
-          });
-          return tx.supplierBill.findUniqueOrThrow({
-            where: { id: created.id },
-            include: BILL_INCLUDE,
-          });
-        });
+        const row = await withAudit(db(), (tx, audit) =>
+          recordBill(tx, audit, actor, data),
+        );
         return privateJson(billView(row), { status: 201 });
       });
     } catch (error) {
@@ -1571,7 +1582,8 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
               found.expense ||
               found.workEvidence ||
               found.supplierBill ||
-              found.supplierCredit
+              found.supplierCredit ||
+              found.billSubmission
             )
               throw refuse(
                 400,

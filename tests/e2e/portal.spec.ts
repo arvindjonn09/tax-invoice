@@ -97,9 +97,10 @@ test("subcontractor inspects own terms, confirms acceptance and sees accepted wo
   await expect(
     page.getByText("$990.00 AUD incl GST", { exact: true }),
   ).toBeVisible();
+  // Invoices can only be sent for accepted work.
   await expect(
-    page.getByRole("heading", { name: "Bill submission", exact: true }),
-  ).toBeVisible();
+    page.getByRole("heading", { name: "Your invoices", exact: true }),
+  ).toHaveCount(0);
   page.once("dialog", (dialog) => dialog.dismiss());
   await page
     .getByRole("button", { name: "Send response", exact: true })
@@ -120,6 +121,9 @@ test("subcontractor inspects own terms, confirms acceptance and sees accepted wo
   await expect(
     page.getByRole("button", { name: "Send response", exact: true }),
   ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Your invoices", exact: true }),
+  ).toBeVisible();
   await page.goto("/jobs");
   await expect(
     page.getByRole("heading", { level: 1, name: "My jobs", exact: true }),
@@ -630,4 +634,75 @@ test("subcontractor reads office rework instructions and resubmits (#147)", asyn
     await page.request.get(`/api/my/offers/${seeded.offer.id}`)
   ).json()) as { job: { status: string } };
   expect(own.job.status).toBe("awaiting_review");
+});
+
+test("subcontractor sends an invoice; the office verifies and records the bill (#139)", async ({
+  page,
+}) => {
+  await signIn(page, "owner");
+  const seeded = await fixture(page);
+  await signIn(page, "subcontractor");
+  await write(page, `/api/my/offers/${seeded.offer.id}`, {
+    decision: "accept",
+    note: null,
+  });
+  await page.goto(`/offers/${seeded.offer.id}`);
+  await expect(
+    page.getByRole("heading", { name: "Your invoices", exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
+  const reference = `INV-${seeded.suffix}`;
+  await page.getByLabel("Invoice number", { exact: true }).fill(reference);
+  await page.getByLabel("Invoice date", { exact: true }).fill("2026-07-20");
+  await page.getByLabel("Amount ex GST (AUD)", { exact: true }).fill("900");
+  await page.getByLabel("GST (AUD)", { exact: true }).fill("90");
+  await page
+    .getByLabel("Tax invoice (PDF or image, up to 10 MB)", { exact: true })
+    .setInputFiles({
+      name: "synthetic-tax-invoice.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4\n% synthetic tax invoice\n%%EOF\n"),
+    });
+  await page.getByRole("button", { name: "Send invoice", exact: true }).click();
+  await expect(
+    page.getByText("Invoice sent. The office will check it and let you know.", {
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.getByText("Waiting for the office", { exact: true }),
+  ).toBeVisible();
+  // The subcontractor's API view carries none of the company's figures.
+  const mine = await (await page.request.get("/api/my/bills")).json();
+  expect(JSON.stringify(mine)).not.toMatch(
+    /agreedPrice|committedCost|jobCost|creditableGst|profit|987654321/,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await signIn(page, "owner");
+  await page.goto("/payments?view=bills");
+  const queue = page.getByRole("region", {
+    name: /Subcontractor invoices to review/,
+  });
+  await expect(queue).toBeVisible({ timeout: 30_000 });
+  const item = queue.getByRole("listitem").filter({ hasText: reference });
+  await item
+    .getByLabel("I checked the attached document is a valid tax invoice")
+    .check();
+  await item
+    .getByRole("button", { name: "Approve and record bill", exact: true })
+    .click();
+  await expect(page.getByText(/Approved: bill recorded/)).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(
+    page.getByRole("link", { name: new RegExp(reference) }),
+  ).toBeVisible({ timeout: 30_000 });
+
+  await signIn(page, "subcontractor");
+  await page.goto(`/offers/${seeded.offer.id}`);
+  await expect(
+    page.getByText("Approved", { exact: false }).first(),
+  ).toBeVisible({
+    timeout: 30_000,
+  });
 });
