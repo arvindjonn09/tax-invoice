@@ -121,7 +121,8 @@ export async function cleanUnattachedDocuments(
         : typeof e?.name === "string"
           ? e.name
           : "Error";
-    if (!result.errors.includes(kind)) result.errors.push(kind.slice(0, 40));
+    const short = kind.slice(0, 40);
+    if (!result.errors.includes(short)) result.errors.push(short);
   };
   for (const { id } of candidates) {
     let done: Awaited<ReturnType<typeof deleteOne>>;

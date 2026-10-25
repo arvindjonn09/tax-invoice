@@ -26,7 +26,7 @@ pnpm documents:cleanup --grace-days 14
   - commits first, and the document is then seen as attached and kept; or
   - waits until the delete commits, and then fails on its foreign key.
 - **The foreign keys are a last line.** They refuse deleting a referenced row.
-- **Order of deletion:** the row and its audit event commit first, and only then is the storage object deleted (with retries). A failure can therefore never leave a row pointing at a missing file, which could be attached later as empty evidence. If the object delete still fails, the file stays private but unreachable. The run reports it as `objectsLeft` and exits 1; sweep them by comparing a storage listing against the `documents` table (a follow-up will record these keys for automatic retry).
+- **Order of deletion:** the row and its audit event commit first, and only then is the storage object deleted (with retries). A failure can therefore never leave a row pointing at a missing file, which could be attached later as empty evidence. If the object delete still fails, the file stays private but unreachable. The run reports it as `objectsLeft` and exits 1; sweep them by comparing a storage listing against the `documents` table (#170 will record these keys for automatic retry, including after a crash between the commit and the file delete).
 
 ## Retention (#62)
 

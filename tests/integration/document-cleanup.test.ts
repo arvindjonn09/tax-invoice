@@ -230,7 +230,10 @@ describe("unattached document cleanup (#137)", () => {
         action: "expense.updated",
         targetType: "expense",
         targetId: jobId,
-        metadata: { after: { description: `see ${typed.id}` } },
+        // The bare id under a free-text key: only reference keys count.
+        metadata: {
+          changes: auditChanges({ description: "" }, { description: typed.id }),
+        } as never,
       },
     });
     const result = await cleanUnattachedDocuments(db, store, { now: NOW });
