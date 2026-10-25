@@ -132,9 +132,13 @@ describe("deploy gate (#64)", () => {
   it("deploys only the current tip of main, with globbing off", () => {
     expect(deploy).toMatch(/^set -euf$/m);
     expect(deploy).toMatch(
-      /\[ "\$SHA" = "\$\(git rev-parse origin\/main\)" \]/,
+      /if \[ "\$SHA" != "\$\(git rev-parse origin\/main\)" \]; then/,
     );
-    expect(deploy).not.toMatch(/--is-ancestor/);
+    // An older main commit is superseded (exit 0) and never checked out.
+    const gate = deploy.slice(0, deploy.indexOf("git -c advice"));
+    expect(gate).toMatch(
+      /--is-ancestor[^\n]*\n\s+echo "superseded[^\n]*\n\s+exit 0/,
+    );
     expect(deploy).toMatch(/\/usr\/local\/sbin\/jobflow-deploy/);
     // Migrations run before the new app replaces the old one.
     expect(deploy.indexOf("run --rm migrate")).toBeLessThan(

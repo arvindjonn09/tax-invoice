@@ -28,7 +28,7 @@ jobs:
             -e POSTGRES_USER=jobflow_owner -e POSTGRES_PASSWORD=ci-owner-password -e POSTGRES_DB=jobflow \
             postgres:16.15-bookworm
           for i in $(seq 1 30); do
-            docker exec db pg_isready -U jobflow_owner -d jobflow && break
+            docker exec db pg_isready -h 127.0.0.1 -U jobflow_owner -d jobflow && break
             sleep 2
           done
           docker run --rm --network jobflow-ci-data -e APP_ENV=staging \
@@ -75,6 +75,7 @@ jobs:
           docker run --rm --add-host web:127.0.0.1 \
             -e JOBFLOW_DOMAIN=staging.jobflow.invalid \
             -v "$PWD/infra/nginx/templates:/etc/nginx/templates:ro" \
+            -v "$PWD/infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro" \
             -v "$RUNNER_TEMP/le:/etc/letsencrypt:ro" \
             nginx:1.28.0-bookworm sh -c '/docker-entrypoint.sh nginx -t'
   # Off until the owner turns it on: set the repository variable

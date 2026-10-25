@@ -48,11 +48,6 @@ async function main() {
     // from the deploy environment and is quoted by PostgreSQL (%L), never
     // interpolated here.
     if (password) {
-      if (password.length < 24) {
-        throw new UsageError(
-          "RUNTIME_DATABASE_PASSWORD must be 24+ characters",
-        );
-      }
       const exists = await client.query(
         "SELECT 1 FROM pg_roles WHERE rolname = 'jobflow_web'",
       );

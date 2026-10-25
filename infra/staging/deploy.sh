@@ -22,7 +22,15 @@ esac
 
 cd "$REPO"
 git fetch --quiet origin main
-[ "$SHA" = "$(git rev-parse origin/main)" ] || { echo "commit is not the tip of main" >&2; exit 65; }
+if [ "$SHA" != "$(git rev-parse origin/main)" ]; then
+  # A newer main commit has its own deploy; this one is superseded.
+  if git merge-base --is-ancestor "$SHA" origin/main 2>/dev/null; then
+    echo "superseded by a newer main commit; nothing to do"
+    exit 0
+  fi
+  echo "commit is not the tip of main" >&2
+  exit 65
+fi
 git -c advice.detachedHead=false checkout --quiet --detach "$SHA"
 
 compose() {
