@@ -2341,4 +2341,69 @@ describe("on-account expenses paid later in reports (#141)", () => {
       });
       expect(posting.length).toBeGreaterThan(0);
     });
+
+  it("posts a payment dated in a finalised period to the open period (cash)", async () => {
+    const f = await fixture(true, "cash");
+    const expenses = expenseHandlers(() => db);
+    const submitted = await expenses.create({
+      actor: f.actor,
+      request: req({
+        jobId: f.job.id,
+        category: "materials",
+        description: "Synthetic on-account purchase",
+        supplierName: "Synthetic Supplies",
+        purchasedOn: "2026-07-15",
+        priceEntry: "exclusive",
+        amountCents: "15000",
+        taxCode: "TAXABLE_10",
+        receiptDocumentId: await f.doc(),
+        settlement: "on_account",
+      }),
+      context: undefined,
+    });
+    const { id } = (await submitted.json()) as { id: string };
+    expect(
+      (
+        await expenses.decide({
+          actor: f.actor,
+          request: req({ decision: "approve", evidenceVerified: true }),
+          context: context(id),
+        })
+      ).status,
+    ).toBe(200);
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({ from: "2026-07-01", to: "2026-09-30", note: "Synthetic" }),
+      context: undefined,
+    });
+    expect(close.status, await close.clone().text()).toBe(201);
+    const finalised = (await reports(f.actor)).gst as { oneB: string };
+    const paid = await supplierPaymentHandlers(() => db).create({
+      actor: f.actor,
+      request: req({
+        paidOn: "2026-07-20",
+        amountCents: "16500",
+        method: "bank_transfer",
+        allocations: [{ expenseId: id, amountCents: "16500" }],
+      }),
+      context: undefined,
+    });
+    expect(paid.status, await paid.clone().text()).toBe(201);
+    const payment = (await paid.json()) as { id: string };
+    const posting = await db.gstSourcePosting.findFirstOrThrow({
+      where: { companyId: f.company.id, sourceId: payment.id },
+    });
+    expect(posting.effectiveOn.toISOString().slice(0, 10)).toBe(sydneyToday());
+    expect((await reports(f.actor)).gst).toMatchObject({
+      oneB: finalised.oneB,
+    });
+    const today = await reportHandlers(() => db).gst({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+      ),
+      context: undefined,
+    });
+    expect(await today.json()).toMatchObject({ oneB: "1500" });
+  });
 });

@@ -196,6 +196,19 @@ function supplierBalance(row: OfficeRow) {
   };
 }
 
+/** Whether live supplier payments are allocated to an on-account expense. */
+async function livePayments(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  expenseId: string,
+): Promise<boolean> {
+  return (
+    (await tx.supplierPaymentExpenseAllocation.count({
+      where: { companyId, expenseId, payment: { voidedAt: null } },
+    })) > 0
+  );
+}
+
 /** Office view: adds who submitted/decided and the approval snapshot. */
 function officeView(row: OfficeRow) {
   return {
@@ -392,6 +405,17 @@ async function correctionOf(
       fail(
         409,
         "Reverse the expense's cost first (without a refund or credit), then correct it",
+        field,
+      ),
+    );
+  if (
+    original.settlement === "on_account" &&
+    (await livePayments(tx, actor.companyId, original.id))
+  )
+    throw new Refusal(
+      fail(
+        409,
+        "Supplier payments are allocated to this expense; void them first",
         field,
       ),
     );
@@ -777,6 +801,20 @@ export function expenseHandlers(db: () => PrismaClient) {
           });
           return updated;
         }
+        // A correction changes the GST that payments to its on-account
+        // original attribute (#141). Hold the original's row (the lock
+        // supplier payments take) and refuse while payments are allocated,
+        // so a cash-basis claim already made never goes stale.
+        if (before.correctsId) {
+          await lockRow(tx, "expenses", before.correctsId);
+          if (await livePayments(tx, actor.companyId, before.correctsId))
+            throw new Refusal(
+              fail(
+                409,
+                "Supplier payments are allocated to the original expense; void them first",
+              ),
+            );
+        }
         const company = await companyGstStatusOn(
           tx,
           actor.companyId,
@@ -883,15 +921,11 @@ export function expenseHandlers(db: () => PrismaClient) {
           // A supplier credit cancels what's owed; money already paid on
           // account can't be credited away (#141). The expense row lock is
           // the one supplier payments take, so the two can't race.
+          // A cost-only reversal changes the GST payments attribute: refused
+          // too while payments are allocated (void them, reverse, re-pay).
           if (
-            effect === "supplier_credit" &&
-            (await tx.supplierPaymentExpenseAllocation.count({
-              where: {
-                companyId: actor.companyId,
-                expenseId: original.id,
-                payment: { voidedAt: null },
-              },
-            })) > 0
+            original.settlement === "on_account" &&
+            (await livePayments(tx, actor.companyId, original.id))
           )
             throw new Refusal(
               fail(

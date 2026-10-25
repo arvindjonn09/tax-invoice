@@ -1,3 +1,4 @@
+import { sydneyToday } from "../../apps/web/src/server/company/gst";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
@@ -507,6 +508,114 @@ describe("paying on-account expenses (#141)", () => {
     });
     expect((await pay([{ expenseId, amountCents: "16500" }])).status).toBe(201);
     expect(await balanceOf(expenseId)).toMatchObject({ outstandingCents: "0" });
+    // The reversed expense's GST is gone, so paying it claims none.
+    expect(await cashClaim(expenseId)).toBe("0");
+  });
+
+  it("reversals and corrections wait until payments are voided; payments then claim the corrected GST", async () => {
+    const job = await newJob();
+    const expenseId = await onAccount(job);
+    const first = (await (
+      await pay([{ expenseId, amountCents: "1000" }])
+    ).json()) as { id: string };
+    expect((await reverse(expenseId, "none")).status).toBe(409);
+    expect(
+      (
+        await routes.voidPayment(
+          call("accountant", { reason: "Synthetic: re-pay after correction" }),
+          one(first.id),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await reverse(expenseId, "none")).status).toBe(201);
+    // Correct it at 50% business use: creditable $7.50 of the $15 GST.
+    const document = await db.document.create({
+      data: {
+        companyId,
+        kind: "tax_invoice",
+        objectKey: `documents/${companyId}/${randomBytes(32).toString("hex")}`,
+        fileName: "synthetic-tax-invoice.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 100,
+        sha256: "0".repeat(64),
+        createdBy: userIds.manager,
+      },
+    });
+    const submitted = await routes.submit(
+      call("manager", {
+        jobId: job,
+        category: "materials",
+        description: "Synthetic cable and conduit (corrected)",
+        supplierName: "Sample Wholesale",
+        purchasedOn: "2026-07-01",
+        priceEntry: "exclusive",
+        amountCents: "15000",
+        taxCode: "TAXABLE_10",
+        creditablePercent: "50",
+        settlement: "on_account",
+        receiptDocumentId: document.id,
+        correctsExpenseId: expenseId,
+      }),
+      undefined,
+    );
+    expect(submitted.status, await submitted.clone().text()).toBe(201);
+    const correction = (await submitted.json()) as { id: string };
+    // A payment while the correction is pending claims nothing...
+    // After a void correction (dated today), payments can't be dated earlier.
+    const pending = (await (
+      await pay([{ expenseId, amountCents: "16500" }], {
+        paidOn: sydneyToday(),
+      })
+    ).json()) as { id: string };
+    expect(await cashClaim(expenseId)).toBe("0");
+    // ...and the correction can't be approved under it.
+    const approve = () =>
+      routes.decide(
+        call("manager", { decision: "approve", evidenceVerified: true }),
+        one(correction.id),
+      );
+    expect((await approve()).status).toBe(409);
+    expect(
+      (
+        await routes.voidPayment(
+          call("accountant", { reason: "Synthetic: approve correction" }),
+          one(pending.id),
+        )
+      ).status,
+    ).toBe(200);
+    const approved = await approve();
+    expect(approved.status, await approved.clone().text()).toBe(200);
+    expect(
+      (
+        await pay([{ expenseId, amountCents: "16500" }], {
+          paidOn: sydneyToday(),
+        })
+      ).status,
+    ).toBe(201);
+    // Paid in full: exactly the corrected claim.
+    expect(await cashClaim(expenseId)).toBe("750");
+  });
+
+  it("refuses a payment dated before the purchase, and combining unnamed suppliers", async () => {
+    const job = await newJob();
+    const expenseId = await onAccount(job);
+    const early = await pay([{ expenseId, amountCents: "1000" }], {
+      paidOn: "2026-06-30",
+    });
+    expect(early.status).toBe(400);
+    expect(await early.json()).toMatchObject({
+      fields: { paidOn: expect.stringMatching(/purchase date/) },
+    });
+    const a = await onAccount(job, "");
+    const b = await onAccount(job, "");
+    const both = await pay([
+      { expenseId: a, amountCents: "100" },
+      { expenseId: b, amountCents: "100" },
+    ]);
+    expect(both.status).toBe(400);
+    expect((await pay([{ expenseId: a, amountCents: "100" }])).status).toBe(
+      201,
+    );
   });
 
   it("allocations are append-only and tenant-scoped; only payment.write records", async () => {
@@ -562,8 +671,16 @@ describe("paying on-account expenses (#141)", () => {
         gstCents: 0n,
         inclusiveCents: 1000n,
         settlement: "on_account",
-        status: "submitted",
+        status: "approved",
         submittedBy: userIds.outsider,
+        decidedBy: userIds.outsider,
+        decidedAt: new Date("2026-07-02T00:00:00Z"),
+        companyGstRegistered: true,
+        evidenceVerified: false,
+        hasEvidence: false,
+        creditableGstCents: 0n,
+        nonCreditableGstCents: 0n,
+        jobCostCents: 1000n,
       },
     });
     expect(

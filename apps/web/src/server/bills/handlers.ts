@@ -407,6 +407,10 @@ export async function expenseBalances(
     },
     include: {
       reversedBy: { select: { settlement: true } },
+      corrections: {
+        where: { status: "approved" },
+        select: { creditableGstCents: true },
+      },
       supplierPaymentAllocations: {
         where: { payment: { voidedAt: null } },
         select: { amountCents: true, creditableGstAttributedCents: true },
@@ -441,7 +445,13 @@ export async function expenseBalances(
           {
             billId: expense.id,
             inclusive: expense.inclusiveCents,
-            creditableGst: expense.creditableGstCents ?? 0n,
+            // The live tax snapshot: after a cost-only reversal, the approved
+            // correction's credit, or none. (Reversals and corrections are
+            // refused while payments exist, so attributed never goes stale.)
+            creditableGst:
+              expense.reversedBy && expense.reversedBy.settlement === null
+                ? (expense.corrections[0]?.creditableGstCents ?? 0n)
+                : (expense.creditableGstCents ?? 0n),
             paid,
             attributed,
             // The extra included relations are harmless on the payee read.
@@ -1086,6 +1096,38 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
                 "Pay one supplier at a time: these expenses are from different suppliers",
                 "allocations",
               );
+            // Unnamed suppliers can't be shown to be the same supplier.
+            if (expenses.length > 1 && names.has(""))
+              throw refuse(
+                400,
+                "Pay expenses without a supplier name one at a time",
+                "allocations",
+              );
+            for (const expense of expenses) {
+              // Never before the purchase: the non-cash credit is attributed
+              // on the purchase date, so a prepayment would change it.
+              if (data.paidOn < toDay(expense.purchasedOn))
+                throw refuse(
+                  400,
+                  "Choose a payment date on or after the purchase date",
+                  "paidOn",
+                );
+              // Cash basis: not before a correction already recorded (as bills).
+              const latest =
+                await tx.supplierPaymentExpenseGstAdjustment.aggregate({
+                  where: { companyId: actor.companyId, expenseId: expense.id },
+                  _max: { adjustedOn: true },
+                });
+              if (
+                latest._max.adjustedOn &&
+                data.paidOn < toDay(latest._max.adjustedOn)
+              )
+                throw refuse(
+                  400,
+                  "Choose a date on or after the expense's latest GST adjustment date",
+                  "paidOn",
+                );
+            }
             payee = {
               contractorId: null,
               name: expenses[0]!.supplierName?.trim() || "Unnamed supplier",
