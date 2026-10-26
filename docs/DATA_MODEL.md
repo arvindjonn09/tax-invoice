@@ -51,6 +51,17 @@ Every invoice, quote, bill and expense line stores: tax code, GST rate snapshot,
     - On the cash basis, only its recorded adjustment rows count.
     - A void reverses on the void day.
     - Credits and their adjustment rows are GST sources with a `gst_source_postings` row. One dated inside a finalised period posts to the current open period, so a finalised period never changes.
+- **Report source reads (#157):** a report for `from`–`to` loads only the documents with some activity on or after `from`, but loads each one's whole history. Activity means:
+  - a date: issue, purchase or work date
+  - a settlement, credit, void, decision or correction
+  - a GST posting whose effective date is on or after `from`
+
+  The set is then widened so the replay is exact:
+  - an invoice brings its credit notes, and a credit note brings the invoice it credits;
+  - an expense brings its whole reversal and correction chain;
+  - a settlement brings its postings.
+
+  A document with nothing on or after `from` can't produce an event in the range, so totals are unchanged. Integration tests compare every report against a full read, across all test companies and many windows. Drill-down events are paged (`eventsPage`, `eventsPageSize` ≤ 1000), and totals always cover every event. Finalising a period still reads everything, because its integrity check covers the whole company. Bulk exports (#56) must stream within one snapshot.
 - Draft net GST = GST on sales (1A) - creditable GST on purchases (1B) ± adjustments, attributed per the company's accounting basis. This is a liability/asset, not profit.
 - Cash movement = receipts minus payments, **not** profit.
 - Do not count both timesheet and derived cost; link underlying record to cost once.

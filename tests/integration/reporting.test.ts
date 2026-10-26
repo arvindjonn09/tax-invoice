@@ -2407,3 +2407,220 @@ describe("on-account expenses paid later in reports (#141)", () => {
     expect(await today.json()).toMatchObject({ oneB: "1500" });
   });
 });
+
+// #157: bounded source reads must not change any report. Runs last, over
+// every company the tests above built (both GST bases, unregistered,
+// credits, voids, finalised periods, late postings, expense chains).
+describe("bounded report sources (#157)", () => {
+  const windows = (): { from: string; to: string }[] => {
+    const out: { from: string; to: string }[] = [];
+    for (const [from, to] of [
+      ["2025-07-01", "2025-09-30"],
+      ["2026-01-01", "2026-03-31"],
+      ["2026-04-01", "2026-06-30"],
+      ["2026-07-01", "2026-09-30"],
+      ["2026-10-01", "2026-12-31"],
+      ["2026-07-15", "2026-07-15"],
+      ["2026-07-16", "2026-07-31"],
+      ["2026-07-20", "2026-08-31"],
+      ["2026-08-01", "2099-12-31"],
+      ["2000-01-01", "2099-12-31"],
+    ] as const)
+      out.push({ from, to });
+    const today = sydneyToday();
+    out.push({ from: today, to: today }, { from: today, to: "2099-12-31" });
+    return out;
+  };
+  const stable = (value: unknown) =>
+    JSON.stringify(value, (_key, item: unknown) =>
+      typeof item === "bigint" ? item.toString() : item,
+    );
+
+  it("builds documents whose only recent activity is a void, a late posting or a correction", async () => {
+    for (const basis of ["non_cash", "cash"] as const) {
+      // Old invoice and bill voided today; an expense reversed today.
+      const a = await fixture(true, basis);
+      expect(
+        (
+          await invoiceHandlers(() => db).void({
+            actor: a.actor,
+            request: req({ reason: "Synthetic void today" }),
+            context: context(a.invoice.id),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await billHandlers(() => db).void({
+            actor: a.actor,
+            request: req({ reason: "Synthetic void today" }),
+            context: context(a.supplier.id),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await expenseHandlers(() => db).reverse({
+            actor: a.actor,
+            request: req({ note: "Synthetic reversal today" }),
+            context: context(a.expenseIds[0]!),
+          })
+        ).status,
+      ).toBe(201);
+      // Settlements dated in July and voided today.
+      const b = await fixture(true, basis);
+      const receipt = await receiptHandlers(() => db).create({
+        actor: b.actor,
+        request: req({
+          customerId: b.customer.id,
+          receivedOn: "2026-07-20",
+          amountCents: "100000",
+          method: "bank_transfer",
+          allocations: [{ invoiceId: b.invoice.id, amountCents: "100000" }],
+        }),
+        context: undefined,
+      });
+      expect(receipt.status, await receipt.clone().text()).toBe(201);
+      const payment = await supplierPaymentHandlers(() => db).create({
+        actor: b.actor,
+        request: req({
+          paidOn: "2026-07-20",
+          amountCents: "40000",
+          method: "bank_transfer",
+          allocations: [{ billId: b.supplier.id, amountCents: "40000" }],
+        }),
+        context: undefined,
+      });
+      expect(payment.status, await payment.clone().text()).toBe(201);
+      for (const [handler, response] of [
+        [receiptHandlers(() => db), receipt],
+        [supplierPaymentHandlers(() => db), payment],
+      ] as const)
+        expect(
+          (
+            await handler.void({
+              actor: b.actor,
+              request: req({ reason: "Synthetic void today" }),
+              context: context(((await response.json()) as { id: string }).id),
+            })
+          ).status,
+        ).toBe(200);
+      // A receipt entered after its quarter was finalised posts today.
+      const c = await fixture(true, basis);
+      expect(
+        (
+          await periodHandlers(() => db).close({
+            actor: c.actor,
+            request: req({
+              from: "2026-07-01",
+              to: "2026-09-30",
+              note: "Synthetic bounded-read boundary",
+            }),
+            context: undefined,
+          })
+        ).status,
+      ).toBe(201);
+      const late = await receiptHandlers(() => db).create({
+        actor: c.actor,
+        request: req({
+          customerId: c.customer.id,
+          receivedOn: "2026-07-25",
+          amountCents: "50000",
+          method: "bank_transfer",
+          allocations: [{ invoiceId: c.invoice.id, amountCents: "50000" }],
+        }),
+        context: undefined,
+      });
+      expect(late.status, await late.clone().text()).toBe(201);
+    }
+  });
+
+  it("every report from a bounded read equals the full read", async () => {
+    const { financialEvents } =
+      await import("../../apps/web/src/server/reports/events");
+    const { draftGstReport, profitabilityReport } =
+      await import("../../packages/domain/src/index");
+    const companies = await db.company.findMany({ select: { id: true } });
+    let compared = 0;
+    for (const { id } of companies) {
+      const full = await db.$transaction((tx) => financialEvents(tx, id), {
+        isolationLevel: "RepeatableRead",
+      });
+      for (const range of windows()) {
+        const bounded = await db.$transaction(
+          (tx) => financialEvents(tx, id, { since: range.from }),
+          { isolationLevel: "RepeatableRead" },
+        );
+        expect(
+          stable(draftGstReport(bounded.events, range)),
+          `${id} gst ${range.from}..${range.to}`,
+        ).toBe(stable(draftGstReport(full.events, range)));
+        expect(
+          stable(profitabilityReport(bounded.events, range)),
+          `${id} profit ${range.from}..${range.to}`,
+        ).toBe(stable(profitabilityReport(full.events, range)));
+        compared += 1;
+      }
+    }
+    expect(compared).toBeGreaterThan(100);
+  }, 300_000);
+
+  it("pages drill-down events without changing any total", async () => {
+    const f = await fixture(true, "non_cash");
+    const handler = reportHandlers(() => db);
+    const get = async (query: string) =>
+      (
+        await handler.profitability({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/reports?from=2026-07-01&to=2026-09-30${query}`,
+          ),
+          context: undefined,
+        })
+      ).json();
+    const all = await get("");
+    const first = await get("&eventsPageSize=1");
+    const second = await get("&eventsPageSize=1&eventsPage=2");
+    expect(all.eventsPage.total).toBeGreaterThan(1);
+    expect(first.events).toHaveLength(1);
+    expect(first.events[0]).toEqual(all.events[0]);
+    expect(second.events[0]).toEqual(all.events[1]);
+    expect(first.totals).toEqual(all.totals);
+    expect(first.eventsPage).toEqual({
+      page: 1,
+      pageSize: 1,
+      total: all.eventsPage.total,
+    });
+    const tooBig = await handler.profitability({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports?from=2026-07-01&to=2026-09-30&eventsPageSize=5000`,
+      ),
+      context: undefined,
+    });
+    expect(tooBig.status).toBe(400);
+  });
+
+  it("reads only documents active in the window", async () => {
+    const { financialEvents } =
+      await import("../../apps/web/src/server/reports/events");
+    const f = await fixture(true, "non_cash");
+    const full = await db.$transaction(
+      (tx) => financialEvents(tx, f.company.id),
+      { isolationLevel: "RepeatableRead" },
+    );
+    expect(full.loaded.invoices + full.loaded.bills).toBeGreaterThan(0);
+    // Nothing happens after 2099: nothing is read.
+    const future = await db.$transaction(
+      (tx) => financialEvents(tx, f.company.id, { since: "2099-01-01" }),
+      { isolationLevel: "RepeatableRead" },
+    );
+    expect(future.loaded).toEqual({
+      invoices: 0,
+      bills: 0,
+      expenses: 0,
+      timesheets: 0,
+    });
+    expect(future.events).toEqual([]);
+  });
+});
