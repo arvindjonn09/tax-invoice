@@ -62,6 +62,7 @@ Every invoice, quote, bill and expense line stores: tax code, GST rate snapshot,
   - a settlement brings its postings.
 
   A document with nothing on or after `from` can't produce an event in the range, so totals are unchanged. Integration tests compare every report against a full read, across all test companies and many windows. Drill-down events are paged (`eventsPage`, `eventsPageSize` ≤ 1000), and totals always cover every event. Finalising a period still reads everything, because its integrity check covers the whole company. Bulk exports (#56) must stream within one snapshot.
+- **Ageing and cash movement (#56):** ageing is what was owed at the end of an as-at day, as the records stood then: a settlement, credit or void counts only from its own business day. Cash movement is receipts less payments from the same event source, and it is never profit. The schemas are in [exports.md](exports.md).
 - Draft net GST = GST on sales (1A) - creditable GST on purchases (1B) ± adjustments, attributed per the company's accounting basis. This is a liability/asset, not profit.
 - Cash movement = receipts minus payments, **not** profit.
 - Do not count both timesheet and derived cost; link underlying record to cost once.

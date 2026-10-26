@@ -111,6 +111,8 @@ function auditMetadata(event: AuditEventInput): Prisma.InputJsonObject {
 export async function withAudit<T>(
   client: PrismaClient,
   work: (tx: Prisma.TransactionClient, audit: AuditRecorder) => Promise<T>,
+  /** e.g. RepeatableRead, so an export reads one snapshot (#56). */
+  options?: { isolationLevel?: Prisma.TransactionIsolationLevel },
 ): Promise<T> {
   return client.$transaction(async (tx) => {
     let recorded = 0;
@@ -133,7 +135,7 @@ export async function withAudit<T>(
       throw new Error("Audited transaction recorded no audit event");
     }
     return result;
-  });
+  }, options);
 }
 
 /** Company-scoped audit history, newest first (read-only). */
