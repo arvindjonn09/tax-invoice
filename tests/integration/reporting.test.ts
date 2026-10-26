@@ -3108,6 +3108,45 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
     expect(lockedLines.every((l) => l.period_status === "finalised")).toBe(
       true,
     );
+    // Screens (#58): drill-down events carry their sources' labels, for
+    // live and finalised reports alike, and finalised events are paged too.
+    for (const url of [
+      `${origin}/api/reports/gst?${range}&eventsPageSize=2`,
+      `${origin}/api/reports/profitability?${range}&eventsPageSize=2`,
+    ]) {
+      const handler = url.includes("/gst")
+        ? reportHandlers(() => db).gst
+        : reportHandlers(() => db).profitability;
+      const body = await (
+        await handler({
+          actor: f.actor,
+          request: new Request(url),
+          context: undefined,
+        })
+      ).json();
+      expect(body.events).toHaveLength(2);
+      expect(body.eventsPage).toMatchObject({ page: 1, pageSize: 2 });
+      expect(body.eventsPage.total).toBeGreaterThan(2);
+      for (const event of body.events)
+        expect(body.eventSources[event.sourceId]).toMatchObject({
+          type: expect.stringMatching(
+            /^(invoice|credit_note|supplier_bill|expense|timesheet)$/,
+          ),
+        });
+      expect(Object.keys(body.eventSources).length).toBeLessThanOrEqual(2);
+    }
+    const lockedJson = await (
+      await reportHandlers(() => db).gst({
+        actor: f.actor,
+        request: new Request(`${origin}/api/reports/gst?${range}`),
+        context: undefined,
+      })
+    ).json();
+    expect(lockedJson.finalization.revision).toBe(1);
+    expect(lockedJson.eventSources[f.invoice.id]).toMatchObject({
+      type: "invoice",
+      party: '=HYPERLINK("http://example.test","Synthetic")',
+    });
   });
 
   it("only owners and accountants reach ageing, cash and exports", async () => {

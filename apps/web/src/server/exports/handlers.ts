@@ -12,6 +12,7 @@ import { z } from "zod";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid } from "../company/handlers";
 import { financialEvents } from "../reports/events";
+import { sourceLabels } from "../reports/sources";
 import {
   AgeingQuery,
   CashQuery,
@@ -38,80 +39,6 @@ export type ExportName = (typeof EXPORTS)[number];
 
 /** Stored snapshot money is cent strings; back to bigint for the export. */
 const big = (value: unknown) => BigInt(String(value ?? "0"));
-
-type SourceLabel = { type: string; reference: string; party: string };
-/** What each GST event came from, in this company only. */
-async function sourceLabels(
-  tx: Prisma.TransactionClient,
-  companyId: string,
-  ids: readonly string[],
-) {
-  const unique = [...new Set(ids)];
-  const [invoices, bills, credits, expenses, adjustments] = await Promise.all([
-    tx.invoice.findMany({
-      where: { companyId, id: { in: unique } },
-      select: {
-        id: true,
-        kind: true,
-        reference: true,
-        number: true,
-        customer: { select: { name: true } },
-      },
-    }),
-    tx.supplierBill.findMany({
-      where: { companyId, id: { in: unique } },
-      select: { id: true, supplierName: true, supplierReference: true },
-    }),
-    tx.supplierCredit.findMany({
-      where: { companyId, id: { in: unique } },
-      select: {
-        id: true,
-        supplierReference: true,
-        bill: { select: { supplierName: true } },
-      },
-    }),
-    tx.expense.findMany({
-      where: { companyId, id: { in: unique } },
-      select: { id: true, supplierName: true, description: true },
-    }),
-    tx.gstManualAdjustment.findMany({
-      where: { companyId, id: { in: unique } },
-      select: { id: true, reason: true },
-    }),
-  ]);
-  const labels = new Map<string, SourceLabel>();
-  for (const i of invoices)
-    labels.set(i.id, {
-      type: i.kind === "credit_note" ? "credit_note" : "invoice",
-      reference: i.reference ?? String(i.number ?? ""),
-      party: i.customer.name,
-    });
-  for (const b of bills)
-    labels.set(b.id, {
-      type: "supplier_bill",
-      reference: b.supplierReference ?? "",
-      party: b.supplierName,
-    });
-  for (const c of credits)
-    labels.set(c.id, {
-      type: "supplier_credit",
-      reference: c.supplierReference ?? "",
-      party: c.bill.supplierName,
-    });
-  for (const e of expenses)
-    labels.set(e.id, {
-      type: "expense",
-      reference: e.description,
-      party: e.supplierName ?? "",
-    });
-  for (const a of adjustments)
-    labels.set(a.id, {
-      type: "gst_adjustment",
-      reference: a.reason,
-      party: "",
-    });
-  return labels;
-}
 
 /** The finalised revision for exactly this range, if any. */
 async function finalised(

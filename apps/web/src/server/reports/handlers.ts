@@ -11,6 +11,7 @@ import { z } from "zod";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid } from "../company/handlers";
 import { businessDay, financialEvents } from "./events";
+import { sourceLabels } from "./sources";
 const Query = z
   .object({
     from: z.iso.date(),
@@ -100,16 +101,30 @@ export function reportHandlers(db: () => PrismaClient) {
                 revisions: { orderBy: { revision: "desc" }, take: 1 },
               },
             });
-            if (finalized?.revisions[0])
+            if (finalized?.revisions[0]) {
+              const stored = page(
+                finalized.revisions[0].report as {
+                  events: { sourceId: string }[];
+                },
+                parsed.data,
+              );
               return privateJson({
                 range: query,
-                ...(finalized.revisions[0].report as Record<string, unknown>),
+                ...stored,
+                eventSources: Object.fromEntries(
+                  await sourceLabels(
+                    tx,
+                    actor.companyId,
+                    stored.events.map((e) => e.sourceId),
+                  ),
+                ),
                 finalization: {
                   periodId: finalized.id,
                   revision: finalized.revisions[0].revision,
                   lockedAt: finalized.lockedAt,
                 },
               });
+            }
           }
           // Bounded (#157): only documents active on or after `from`.
           const source = await financialEvents(tx, actor.companyId, {
@@ -194,24 +209,34 @@ export function reportHandlers(db: () => PrismaClient) {
                   ),
               };
             });
+          const paged = page(
+            gst
+              ? draftGstReport(source.events, query)
+              : {
+                  ...profitabilityReport(source.events, query),
+                  positions,
+                  committedCost: positions.reduce(
+                    (total, p) => total + p.committedCost,
+                    0n,
+                  ),
+                },
+            parsed.data,
+          );
+          // Labels for this page's events only: the drill-down's sources.
+          const eventSources = Object.fromEntries(
+            await sourceLabels(
+              tx,
+              actor.companyId,
+              paged.events.map((e) => e.sourceId),
+            ),
+          );
           return privateJson(
             json({
               range: query,
               warnings,
               incomplete: gst && warnings.some((warning) => warning.omittedGst),
-              ...page(
-                gst
-                  ? draftGstReport(source.events, query)
-                  : {
-                      ...profitabilityReport(source.events, query),
-                      positions,
-                      committedCost: positions.reduce(
-                        (total, p) => total + p.committedCost,
-                        0n,
-                      ),
-                    },
-                parsed.data,
-              ),
+              ...paged,
+              eventSources,
             }),
           );
         },
