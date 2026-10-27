@@ -1993,6 +1993,21 @@ describe("chronological settlement safety and legacy report isolation", () => {
       });
       expect(close.status).toBe(409);
       expect((await close.json()).warnings[0].sourceId).toBe(f.invoice.id);
+      // The accountant's GST exports refuse the same incomplete draft.
+      for (const name of ["gst-summary", "gst-lines"]) {
+        const exported = await exportHandlers(() => db).run({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/exports/${name}?from=2026-07-01&to=2026-09-30`,
+          ),
+          context: { params: Promise.resolve({ name }) },
+        });
+        expect(exported.status, name).toBe(basis === "cash" ? 409 : 200);
+        if (basis === "cash")
+          expect((await exported.json()).warnings[0].sourceId).toBe(
+            f.invoice.id,
+          );
+      }
       expect(
         await db.gstPeriod.count({ where: { companyId: f.company.id } }),
       ).toBe(0);
@@ -3370,6 +3385,60 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
         where: { companyId: f.company.id, action: "report.exported" },
       }),
     ).toBe(5);
+  });
+
+  it("labels cash-basis GST lines with their receipt or payment", async () => {
+    const f = await fixture(true, "cash");
+    expect(
+      (
+        await receiptHandlers(() => db).create({
+          actor: f.actor,
+          request: req({
+            customerId: f.customer.id,
+            receivedOn: "2026-07-15",
+            amountCents: "100000",
+            method: "bank_transfer",
+            reference: "Synthetic remittance",
+            allocations: [{ invoiceId: f.invoice.id, amountCents: "100000" }],
+          }),
+          context: undefined,
+        })
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await supplierPaymentHandlers(() => db).create({
+          actor: f.actor,
+          request: req({
+            paidOn: "2026-07-15",
+            amountCents: "40000",
+            method: "card",
+            allocations: [{ billId: f.supplier.id, amountCents: "40000" }],
+          }),
+          context: undefined,
+        })
+      ).status,
+    ).toBe(201);
+    const lines = parseCsv(
+      await (
+        await runExport(f.actor, "gst-lines", "from=2026-07-01&to=2026-09-30")
+      ).text(),
+    );
+    const settled = lines.filter((l) =>
+      ["customer_receipt", "supplier_payment"].includes(l.source_type!),
+    );
+    expect(settled.find((l) => l.bas_label === "1A")).toMatchObject({
+      source_type: "customer_receipt",
+      source_reference: "Synthetic remittance",
+      party_name: expect.stringMatching(/\S/),
+    });
+    // Without a reference, the payment method identifies it.
+    expect(settled.find((l) => l.bas_label === "1B")).toMatchObject({
+      source_type: "supplier_payment",
+      source_reference: "card",
+      party_name: expect.stringMatching(/\S/),
+    });
+    expect(lines.filter((l) => l.source_type === "")).toEqual([]);
   });
 
   it("only owners and accountants reach ageing, cash and exports", async () => {

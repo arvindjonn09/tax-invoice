@@ -64,13 +64,14 @@ export async function sourceLabels(
       select: {
         id: true,
         kind: true,
+        method: true,
         reference: true,
         customer: { select: { name: true } },
       },
     }),
     tx.supplierPayment.findMany({
       where: { companyId, id: { in: unique } },
-      select: { id: true, reference: true, payeeName: true },
+      select: { id: true, method: true, reference: true, payeeName: true },
     }),
   ]);
   const labels = new Map<string, SourceLabel>();
@@ -113,13 +114,14 @@ export async function sourceLabels(
   for (const r of receipts)
     labels.set(r.id, {
       type: r.kind === "refund" ? "customer_refund" : "customer_receipt",
-      reference: r.reference ?? "",
+      // Without a reference, the payment method identifies it.
+      reference: r.reference ?? r.method,
       party: r.customer.name,
     });
   for (const p of payments)
     labels.set(p.id, {
       type: "supplier_payment",
-      reference: p.reference ?? "",
+      reference: p.reference ?? p.method,
       party: p.payeeName,
     });
   return labels;

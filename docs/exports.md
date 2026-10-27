@@ -27,7 +27,7 @@ Owners and accountants only. JSON reports need `ledger_report.read`; CSV exports
 - **One snapshot:** each export reads one repeatable-read snapshot, records a `report.exported` audit event, then streams.
 - **Refused requests:** an invalid request returns 400 and reads and records nothing.
 - **Throttle:** 5 exports a minute per user **and** per IP (`throttle(db, "export", …)`). Over the limit returns 429 before anything is read.
-- **Incomplete GST is never exported.** If cash-basis GST is left out of the draft because records need review (the screen's "incomplete" warning), both GST exports return 409 with the warnings, and the refusal is audited as `report.export_refused`. Resolve the records first. A finalised period was complete when it was locked.
+- **Incomplete GST is refused:** if a draft GST export would leave out cash-basis GST (records that can't be replayed safely; the screen's "incomplete" warning), `gst-summary` and `gst-lines` return 409 with the `warnings` to review, like period finalisation. Nothing is exported; the refusal is audited as `report.export_refused`.
 
 | Export | Query | Columns |
 |---|---|---|
@@ -42,6 +42,7 @@ Owners and accountants only. JSON reports need `ledger_report.read`; CSV exports
 **GST lines:**
 - `gst_cents` of `1A` lines sums to label 1A, and `1B` lines to 1B.
 - Credit notes, voids and corrections appear as their own signed lines on their own dates.
-- `source_type` is one of `invoice`, `credit_note`, `supplier_bill`, `supplier_credit`, `expense`, `gst_adjustment`, `customer_receipt`, `customer_refund` or `supplier_payment`. On the cash basis, GST lines come from the receipts and payments that settled each document.
+- `source_type` is one of `invoice`, `credit_note`, `supplier_bill`, `supplier_credit`, `expense`, `gst_adjustment`, or, on the cash basis, `customer_receipt`, `customer_refund` or `supplier_payment`.
+- For a receipt or payment, `source_reference` is its reference, or its payment method when it has none.
 
 **Draft only:** this is a draft for the accountant; JobFlow does not lodge anything.
