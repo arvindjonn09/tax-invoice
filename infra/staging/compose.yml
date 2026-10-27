@@ -119,6 +119,20 @@ services:
     security_opt: ["no-new-privileges:true"]
     restart: "no"
 
+  # On-demand/daily document maintenance with separate DB/S3 credentials (#170).
+  maintenance:
+    <<: *logging
+    image: jobflow-backup:staging
+    profiles: [maintenance]
+    env_file: env/maintenance.env
+    command: ["pnpm", "--silent", "documents:cleanup"]
+    networks: [data, edge]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+
   # Certificates (HTTP-01 via the webroot nginx serves). Run on demand:
   #   docker compose -f infra/staging/compose.yml --profile certbot run --rm certbot \
   #     certonly --webroot -w /var/www/acme -d "$JOBFLOW_DOMAIN" --email "$ACME_EMAIL" --agree-tos --no-eff-email

@@ -57,6 +57,7 @@ export class S3Store implements ObjectStore {
     private readonly settings: S3Settings,
     /** Injected in tests; a real S3Client otherwise. */
     client?: Pick<S3Client, "send">,
+    private readonly deleteOnly = false,
   ) {
     this.client =
       client ??
@@ -123,7 +124,9 @@ export class S3Store implements ObjectStore {
   }
 
   async delete(key: string) {
-    await this.bucket();
+    // Maintenance uses a credential with DeleteObject only. HeadBucket would
+    // require a broader permission and is unnecessary for an idempotent delete.
+    if (!this.deleteOnly) await this.bucket();
     await this.client.send(
       new DeleteObjectCommand({ Bucket: this.settings.bucket, Key: key }),
     );
@@ -154,23 +157,32 @@ export class S3Store implements ObjectStore {
  */
 export function storeFromEnvironment(
   env: NodeJS.ProcessEnv = process.env,
+  deleteOnly = false,
 ): ObjectStore | null {
   const bucket = env.S3_BUCKET ?? "jobflow-documents";
   if (env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY)
-    return new S3Store({
-      bucket,
-      region: env.S3_REGION ?? "ap-southeast-2",
-      accessKeyId: env.S3_ACCESS_KEY_ID,
-      secretAccessKey: env.S3_SECRET_ACCESS_KEY,
-      ...(env.S3_ENDPOINT ? { endpoint: env.S3_ENDPOINT } : {}),
-    });
+    return new S3Store(
+      {
+        bucket,
+        region: env.S3_REGION ?? "ap-southeast-2",
+        accessKeyId: env.S3_ACCESS_KEY_ID,
+        secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+        ...(env.S3_ENDPOINT ? { endpoint: env.S3_ENDPOINT } : {}),
+      },
+      undefined,
+      deleteOnly,
+    );
   if (env.MINIO_ROOT_USER && env.MINIO_ROOT_PASSWORD)
-    return new S3Store({
-      bucket,
-      region: "us-east-1",
-      endpoint: `http://127.0.0.1:${env.MINIO_API_PORT ?? "9000"}`,
-      accessKeyId: env.MINIO_ROOT_USER,
-      secretAccessKey: env.MINIO_ROOT_PASSWORD,
-    });
+    return new S3Store(
+      {
+        bucket,
+        region: "us-east-1",
+        endpoint: `http://127.0.0.1:${env.MINIO_API_PORT ?? "9000"}`,
+        accessKeyId: env.MINIO_ROOT_USER,
+        secretAccessKey: env.MINIO_ROOT_PASSWORD,
+      },
+      undefined,
+      deleteOnly,
+    );
   return null;
 }
