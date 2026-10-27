@@ -2,6 +2,7 @@
 # JobFlow web image (#64). Build from the repository root:
 #   docker build -f apps/web/Dockerfile --target runtime -t jobflow-web .
 #   docker build -f apps/web/Dockerfile --target migrate -t jobflow-migrate .
+#   docker build -f apps/web/Dockerfile --target backup -t jobflow-backup .
 # Pin NODE_IMAGE to a digest in the deploy environment (see docs/ops/staging.md).
 ARG NODE_IMAGE=node:24-bookworm-slim
 
@@ -30,6 +31,27 @@ COPY --from=build /repo /repo
 USER node
 # Plain node: no package-manager lookups at run time.
 CMD ["sh", "-c", "node scripts/database/cli.mjs migrate deploy && node scripts/database/apply-runtime-role.mjs"]
+
+# Nightly encrypted backup (#63, #173): the repo's backup CLI plus pg_dump 16
+# (matching the server) and the AWS CLI for the off-site copy. Runs on the
+# Compose data network, so it reaches PostgreSQL without a published port.
+FROM base AS backup
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+       -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-16 awscli \
+    && apt-get purge -y curl gnupg && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /repo /repo
+ENV BACKUP_ROOT=/backups \
+    HOME=/tmp
+USER node
+CMD ["sh", "infra/backup/run-backup.sh"]
 
 # The web server: standalone output only, read-only files, non-root.
 FROM ${NODE_IMAGE} AS runtime
