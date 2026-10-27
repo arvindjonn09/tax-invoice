@@ -9,9 +9,10 @@ CREATE FUNCTION jobflow_guard_retention() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
  r jsonb := to_jsonb(OLD);
  years integer := TG_ARGV[0]::integer;
- changed timestamptz := GREATEST((r->>'created_at')::timestamptz, COALESCE((r->>'updated_at')::timestamptz, (r->>'created_at')::timestamptz));
+ changed timestamptz := GREATEST((r->>'created_at')::timestamptz, (r->>'updated_at')::timestamptz,
+   (r->>'assigned_at')::timestamptz, (r->>'ended_at')::timestamptz);
 BEGIN
- IF changed > now() - make_interval(years => years) THEN
+ IF changed IS NULL OR changed > now() - make_interval(years => years) THEN
   RAISE EXCEPTION 'jobflow_retention_period'
    USING ERRCODE = '55000', DETAIL = format('%s rows are kept for %s years after their last change', TG_TABLE_NAME, years);
  END IF;
