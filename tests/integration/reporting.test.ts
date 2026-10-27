@@ -3162,6 +3162,45 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
     expect(lockedLines.every((l) => l.period_status === "finalised")).toBe(
       true,
     );
+    // Screens (#58): drill-down events carry their sources' labels, for
+    // live and finalised reports alike, and finalised events are paged too.
+    for (const url of [
+      `${origin}/api/reports/gst?${range}&eventsPageSize=2`,
+      `${origin}/api/reports/profitability?${range}&eventsPageSize=2`,
+    ]) {
+      const handler = url.includes("/gst")
+        ? reportHandlers(() => db).gst
+        : reportHandlers(() => db).profitability;
+      const body = await (
+        await handler({
+          actor: f.actor,
+          request: new Request(url),
+          context: undefined,
+        })
+      ).json();
+      expect(body.events).toHaveLength(2);
+      expect(body.eventsPage).toMatchObject({ page: 1, pageSize: 2 });
+      expect(body.eventsPage.total).toBeGreaterThan(2);
+      for (const event of body.events)
+        expect(body.eventSources[event.sourceId]).toMatchObject({
+          type: expect.stringMatching(
+            /^(invoice|credit_note|supplier_bill|expense|timesheet)$/,
+          ),
+        });
+      expect(Object.keys(body.eventSources).length).toBeLessThanOrEqual(2);
+    }
+    const lockedJson = await (
+      await reportHandlers(() => db).gst({
+        actor: f.actor,
+        request: new Request(`${origin}/api/reports/gst?${range}`),
+        context: undefined,
+      })
+    ).json();
+    expect(lockedJson.finalization.revision).toBe(1);
+    expect(lockedJson.eventSources[f.invoice.id]).toMatchObject({
+      type: "invoice",
+      party: '=HYPERLINK("http://example.test","Synthetic")',
+    });
   });
 
   it("labels every event's source, settlements included, for every company", async () => {
@@ -3439,6 +3478,47 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
       party_name: expect.stringMatching(/\S/),
     });
     expect(lines.filter((l) => l.source_type === "")).toEqual([]);
+  });
+
+  it("exports profitability for one job, as the filtered report shows it", async () => {
+    const f = await fixture(true, "non_cash");
+    const range = "from=2026-07-01&to=2026-09-30";
+    const report = await (
+      await reportHandlers(() => db).profitability({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports?${range}&jobId=${f.job.id}`,
+        ),
+        context: undefined,
+      })
+    ).json();
+    const rows = parseCsv(
+      await (
+        await runExport(f.actor, "profitability", `${range}&jobId=${f.job.id}`)
+      ).text(),
+    );
+    expect(
+      rows.filter((r) => r.row_type === "job").map((r) => r.job_id),
+    ).toEqual([f.job.id]);
+    expect(rows.find((r) => r.row_type === "total")).toMatchObject({
+      revenue_exclusive_cents: report.totals.revenue,
+      job_cost_exclusive_cents: report.totals.cost,
+      gross_profit_cents: report.totals.profit,
+    });
+    // Another company's job, or a malformed id, reads nothing.
+    const other = await fixture(true, "non_cash");
+    expect(
+      (
+        await runExport(
+          f.actor,
+          "profitability",
+          `${range}&jobId=${other.job.id}`,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await runExport(f.actor, "profitability", `${range}&jobId=nope`)).status,
+    ).toBe(400);
   });
 
   it("only owners and accountants reach ageing, cash and exports", async () => {
