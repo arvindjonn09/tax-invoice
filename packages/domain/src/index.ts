@@ -20,3 +20,4 @@ export * from "./bills";
 export * from "./reporting";
 export * from "./settlement-history";
 export * from "./supplier-credits";
+export * from "./ageing";
