@@ -58,7 +58,7 @@ export async function sourceLabels(
         employee: { select: { name: true } },
       },
     }),
-    // Cash-basis GST lines come from the settlement itself.
+    // Cash-basis GST and cash movement come from settlements.
     tx.customerReceipt.findMany({
       where: { companyId, id: { in: unique } },
       select: {
@@ -114,6 +114,7 @@ export async function sourceLabels(
   for (const r of receipts)
     labels.set(r.id, {
       type: r.kind === "refund" ? "customer_refund" : "customer_receipt",
+      // Without a reference, the payment method identifies it.
       reference: r.reference ?? r.method,
       party: r.customer.name,
     });

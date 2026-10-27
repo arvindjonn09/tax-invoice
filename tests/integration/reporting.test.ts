@@ -2691,12 +2691,15 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
     expect(response.status, await response.clone().text()).toBe(200);
     return response.json();
   };
-  const runExport = (actor: Actor, name: string, query: string) =>
-    exportHandlers(() => db).run({
+  /** One export; clears this user's export throttle first (tested below). */
+  const runExport = async (actor: Actor, name: string, query: string) => {
+    await db.$executeRaw`DELETE FROM auth_rate_limits WHERE key LIKE ${`jobflow:export:%:${actor.userId}`}`;
+    return exportHandlers(() => db).run({
       actor,
       request: new Request(`${origin}/api/exports/${name}?${query}`),
       context: { params: Promise.resolve({ name }) },
     });
+  };
   /** Parse our own RFC 4180 output (quoted text, bare numbers). */
   const parseCsv = (text: string) => {
     const rows: string[][] = [];
@@ -3200,6 +3203,229 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
     });
   });
 
+  it("labels every event's source, settlements included, for every company", async () => {
+    const { financialEvents } =
+      await import("../../apps/web/src/server/reports/events");
+    const { sourceLabels } =
+      await import("../../apps/web/src/server/reports/sources");
+    const companies = await db.company.findMany({ select: { id: true } });
+    const types = new Set<string>();
+    for (const { id } of companies) {
+      const [events, labels] = await db.$transaction(async (tx) => {
+        const source = await financialEvents(tx, id);
+        return [
+          source.events,
+          await sourceLabels(
+            tx,
+            id,
+            source.events.map((e) => e.sourceId),
+          ),
+        ] as const;
+      });
+      for (const event of events) {
+        const label = labels.get(event.sourceId);
+        expect(label, `${id} ${event.id}`).toBeDefined();
+        types.add(label!.type);
+      }
+    }
+    // Cash-basis GST and cash movement are settled by these.
+    for (const type of [
+      "customer_receipt",
+      "customer_refund",
+      "supplier_payment",
+      "invoice",
+      "credit_note",
+      "supplier_bill",
+      "supplier_credit",
+      "expense",
+      "timesheet",
+    ])
+      expect(types, type).toContain(type);
+    // Another company's settlement is never labelled.
+    const [a, b] = companies;
+    const receipt = await db.customerReceipt.findFirst({
+      where: { companyId: a!.id },
+      select: { id: true },
+    });
+    if (receipt)
+      expect(
+        (await db.$transaction((tx) => sourceLabels(tx, b!.id, [receipt.id])))
+          .size,
+      ).toBe(0);
+  }, 300_000);
+
+  it("refuses to export a draft GST summary with cash-basis GST left out", async () => {
+    const f = await fixture(true, "cash");
+    // A legacy over-settled history: its cash GST is omitted (warning).
+    for (const [kind, date] of [
+      ["receipt", "2026-08-01"],
+      ["refund", "2026-09-01"],
+      ["receipt", "2026-07-20"],
+    ] as const)
+      await db.$transaction(async (tx) => {
+        const receipt = await tx.customerReceipt.create({
+          data: {
+            companyId: f.company.id,
+            customerId: f.customer.id,
+            kind,
+            receivedOn: new Date(date),
+            amountCents: 275000n,
+            method: "card",
+            createdBy: f.user.id,
+            idempotencyKey: randomUUID(),
+            requestHash: "c".repeat(64),
+          },
+        });
+        await tx.receiptAllocation.create({
+          data: {
+            companyId: f.company.id,
+            receiptId: receipt.id,
+            invoiceId: f.invoice.id,
+            amountCents: 275000n,
+            gstAttributedCents: kind === "refund" ? -25000n : 25000n,
+          },
+        });
+      });
+    const range = "from=2026-07-01&to=2026-09-30";
+    for (const name of ["gst-summary", "gst-lines"]) {
+      const response = await runExport(f.actor, name, range);
+      expect(response.status, name).toBe(409);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.json()).toMatchObject({
+        error: expect.stringMatching(/left out/),
+        warnings: [{ sourceType: "invoice", sourceId: f.invoice.id }],
+      });
+    }
+    expect(
+      await db.auditEvent.findMany({
+        where: {
+          companyId: f.company.id,
+          action: { startsWith: "report.export" },
+        },
+        select: { action: true },
+      }),
+    ).toEqual([
+      { action: "report.export_refused" },
+      { action: "report.export_refused" },
+    ]);
+    // Profit is unaffected by omitted GST and still exports.
+    expect((await runExport(f.actor, "profitability", range)).status).toBe(200);
+  });
+
+  it("exports profitability for one job, exactly as the filtered report", async () => {
+    const f = await fixture(true, "non_cash");
+    const other = await db.job.create({
+      data: {
+        companyId: f.company.id,
+        customerId: f.customer.id,
+        number: 2,
+        reference: "JOB-0002",
+        title: "Synthetic Other",
+        status: "completed",
+        createdBy: f.user.id,
+      },
+    });
+    const range = "from=2026-07-01&to=2026-09-30";
+    const json = await (
+      await reportHandlers(() => db).profitability({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports/profitability?${range}&jobId=${f.job.id}`,
+        ),
+        context: undefined,
+      })
+    ).json();
+    const rows = parseCsv(
+      await (
+        await runExport(f.actor, "profitability", `${range}&jobId=${f.job.id}`)
+      ).text(),
+    );
+    const total = rows.find((r) => r.row_type === "total")!;
+    expect(total).toMatchObject({
+      revenue_exclusive_cents: json.totals.revenue,
+      job_cost_exclusive_cents: json.totals.cost,
+      gross_profit_cents: json.totals.profit,
+    });
+    expect(
+      rows.filter((r) => r.row_type === "job").map((r) => r.job_id),
+    ).toEqual([f.job.id]);
+    const empty = parseCsv(
+      await (
+        await runExport(f.actor, "profitability", `${range}&jobId=${other.id}`)
+      ).text(),
+    );
+    expect(empty.find((r) => r.row_type === "total")).toMatchObject({
+      revenue_exclusive_cents: "0",
+      job_cost_exclusive_cents: "0",
+    });
+    const foreign = await fixture(true, "non_cash");
+    expect(
+      (
+        await runExport(
+          f.actor,
+          "profitability",
+          `${range}&jobId=${foreign.job.id}`,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await runExport(f.actor, "profitability", `${range}&jobId=nope`)).status,
+    ).toBe(400);
+  });
+
+  it("throttles exports to 5 a minute per user and per IP", async () => {
+    const f = await fixture(false, "non_cash");
+    await db.$executeRaw`DELETE FROM auth_rate_limits WHERE key LIKE 'jobflow:export:%'`;
+    const auth = createAuth({
+      db,
+      secret: randomBytes(32).toString("hex"),
+      baseURL: origin,
+      production: false,
+    });
+    const run = createWithPolicy({
+      auth: () => auth,
+      db: () => db,
+      trustedOrigins: () => [origin],
+    })("export.run", exportHandlers(() => db).run);
+    const login = await auth.handler(
+      new Request(`${origin}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: {
+          origin,
+          "content-type": "application/json",
+          "x-forwarded-for": "198.51.100.77",
+        },
+        body: JSON.stringify({ email: f.user.email, password }),
+      }),
+    );
+    expect(login.status).toBe(200);
+    const cookie = login.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    const call = (ip: string) =>
+      run(
+        new Request(
+          `${origin}/api/exports/cash?from=2026-07-01&to=2026-09-30`,
+          { headers: { cookie, "x-forwarded-for": ip } },
+        ),
+        { params: Promise.resolve({ name: "cash" }) },
+      );
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i += 1)
+      statuses.push((await call(`203.0.113.${i + 1}`)).status);
+    expect(statuses).toEqual([200, 200, 200, 200, 200, 429]);
+    const refused = await call("203.0.113.99");
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("cache-control")).toBe("private, no-store");
+    // Throttled requests read nothing and record nothing.
+    expect(
+      await db.auditEvent.count({
+        where: { companyId: f.company.id, action: "report.exported" },
+      }),
+    ).toBe(5);
+  });
+
   it("labels cash-basis GST lines with their receipt or payment", async () => {
     const f = await fixture(true, "cash");
     expect(
@@ -3281,9 +3507,15 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
     });
     // Another company's job, or a malformed id, reads nothing.
     const other = await fixture(true, "non_cash");
-    await expect(
-      runExport(f.actor, "profitability", `${range}&jobId=${other.job.id}`),
-    ).rejects.toMatchObject({ status: 404 });
+    expect(
+      (
+        await runExport(
+          f.actor,
+          "profitability",
+          `${range}&jobId=${other.job.id}`,
+        )
+      ).status,
+    ).toBe(404);
     expect(
       (await runExport(f.actor, "profitability", `${range}&jobId=nope`)).status,
     ).toBe(400);

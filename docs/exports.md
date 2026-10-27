@@ -26,7 +26,8 @@ Owners and accountants only. JSON reports need `ledger_report.read`; CSV exports
 - **Formula-safe text:** a text cell that starts with `=`, `+`, `-` or `@` (after leading whitespace or control characters), or with a control character, is prefixed with `'` so spreadsheets don't run it as a formula (#70).
 - **One snapshot:** each export reads one repeatable-read snapshot, records a `report.exported` audit event, then streams.
 - **Refused requests:** an invalid request returns 400 and reads and records nothing.
-- **Incomplete GST is refused:** if a draft GST export would leave out cash-basis GST (records that can't be replayed safely), `gst-summary` and `gst-lines` return 409 with the `warnings` to review, like period finalisation. Nothing is exported or audited.
+- **Throttle:** 5 exports a minute per user **and** per IP (`throttle(db, "export", …)`). Over the limit returns 429 before anything is read.
+- **Incomplete GST is refused:** if a draft GST export would leave out cash-basis GST (records that can't be replayed safely; the screen's "incomplete" warning), `gst-summary` and `gst-lines` return 409 with the `warnings` to review, like period finalisation. Nothing is exported; the refusal is audited as `report.export_refused`.
 
 | Export | Query | Columns |
 |---|---|---|

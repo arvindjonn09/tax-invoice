@@ -1,4 +1,3 @@
-import { notFound } from "@jobflow/authz";
 import {
   draftGstReport,
   profitabilityReport,
@@ -9,10 +8,11 @@ import type {
   PrismaClient,
 } from "../../../../../packages/database/src/generated/prisma/client";
 import { withAudit } from "../../../../../packages/database/src/index";
+import { notFound } from "@jobflow/authz";
 import { z } from "zod";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid } from "../company/handlers";
-import { Refusal, inTransaction } from "../jobs/handlers";
+import { clientIp, throttle } from "../http/throttle";
 import { financialEvents } from "../reports/events";
 import { sourceLabels } from "../reports/sources";
 import {
@@ -30,8 +30,6 @@ import { type CsvColumn, csvStream } from "./csv";
 
 /** Inclusive date range (shared with the cash report). */
 const Range = CashQuery;
-/** Profitability's optional job, as on the report screen. */
-const JobFilter = z.object({ jobId: z.uuid().optional() });
 export const EXPORTS = [
   "gst-summary",
   "gst-lines",
@@ -76,6 +74,20 @@ async function finalised(
     : null;
 }
 
+/**
+ * The draft GST can't be exported: cash-basis GST was left out of it until
+ * records are reviewed, so 1A/1B would be silently understated (#56).
+ */
+export class IncompleteGst {
+  constructor(
+    readonly warnings: readonly {
+      sourceType: string;
+      sourceId: string;
+      message: string;
+    }[],
+  ) {}
+}
+
 type Built = { filename: string; columns: CsvColumn<never>[]; rows: unknown[] };
 const built = <Row>(
   filename: string,
@@ -93,7 +105,7 @@ export async function buildExport(
   companyId: string,
   name: ExportName,
   params: Record<string, string>,
-): Promise<Built | z.ZodError> {
+): Promise<Built | z.ZodError | IncompleteGst> {
   if (name === "ageing") {
     const parsed = AgeingQuery.safeParse(params);
     if (!parsed.success) return parsed.error;
@@ -150,23 +162,23 @@ export async function buildExport(
     );
   }
   if (name === "profitability") {
-    // The same job filter as the report screen (#58), in this company only.
-    const job = JobFilter.safeParse(params);
-    if (!job.success) return job.error;
-    const { jobId } = job.data;
-    if (
-      jobId &&
-      !(await tx.job.findFirst({
-        where: { id: jobId, companyId },
-        select: { id: true },
-      }))
-    )
-      throw notFound();
     const source = await financialEvents(tx, companyId, { since: range.from });
-    const report = profitabilityReport(source.events, {
-      ...range,
-      ...(jobId ? { jobId } : {}),
-    });
+    // Optional job filter, as on the screen; checked in this company.
+    const jobId = params.jobId;
+    if (jobId !== undefined) {
+      if (
+        !z.uuid().safeParse(jobId).success ||
+        !(await tx.job.findFirst({
+          where: { id: jobId, companyId },
+          select: { id: true },
+        }))
+      )
+        throw notFound();
+    }
+    const report = profitabilityReport(
+      source.events,
+      jobId ? { ...range, jobId } : range,
+    );
     const jobs = new Map(source.jobs.map((job) => [job.id, job]));
     const rows = [
       ...report.jobs.map(({ jobId, ...j }) => ({
@@ -227,23 +239,6 @@ export async function buildExport(
   }
   // GST: a finalised period exports its locked revision, exactly as shown.
   const locked = await finalised(tx, companyId, range);
-  // Like period finalisation, a draft whose cash-basis GST couldn't be
-  // replayed safely is refused rather than exported with reduced totals.
-  const draft = locked
-    ? null
-    : await financialEvents(tx, companyId, { since: range.from });
-  const omitted = draft?.warnings.filter((warning) => warning.omittedGst);
-  if (omitted?.length)
-    throw new Refusal(
-      privateJson(
-        {
-          error:
-            "Some cash-basis GST is left out until these records are reviewed. Nothing was exported.",
-          warnings: omitted,
-        },
-        { status: 409 },
-      ),
-    );
   const gst = locked
     ? {
         status: "finalised",
@@ -259,11 +254,20 @@ export async function buildExport(
             e.salesInclusive === undefined ? undefined : big(e.salesInclusive),
         })),
       }
-    : {
-        status: "draft",
-        revision: null,
-        ...draftGstReport(draft!.events, range),
-      };
+    : await (async () => {
+        const source = await financialEvents(tx, companyId, {
+          since: range.from,
+        });
+        // Same rule as the screen's "incomplete" flag; never export it.
+        const omitted = source.warnings.filter((w) => w.omittedGst);
+        if (omitted.length) return new IncompleteGst(omitted);
+        return {
+          status: "draft",
+          revision: null,
+          ...draftGstReport(source.events, range),
+        };
+      })();
+  if (gst instanceof IncompleteGst) return gst;
   if (name === "gst-summary") {
     const label = "Draft BAS/GST summary — not lodged";
     return built(
@@ -354,41 +358,87 @@ export function exportHandlers(db: () => PrismaClient) {
       params,
     );
     if (!checked.success) return invalid(checked.error);
-    if (name.data === "profitability") {
-      const job = JobFilter.safeParse(params);
-      if (!job.success) return invalid(job.error);
-    }
-    // An incomplete draft GST export ends in a Refusal (nothing audited).
-    return inTransaction(async () => {
-      const result = await withAudit(
-        db(),
-        async (tx, audit) => {
-          const out = await buildExport(tx, actor.companyId, name.data, params);
-          if (out instanceof z.ZodError) return out;
+    if (
+      name.data === "profitability" &&
+      params.jobId !== undefined &&
+      !z.uuid().safeParse(params.jobId).success
+    )
+      return privateJson(
+        {
+          error: "Check the highlighted fields",
+          fields: { jobId: "Invalid job" },
+        },
+        { status: 400 },
+      );
+    // A job filter must be this company's job: anything else is not found.
+    if (
+      name.data === "profitability" &&
+      params.jobId !== undefined &&
+      !(await db().job.findFirst({
+        where: { id: params.jobId, companyId: actor.companyId },
+        select: { id: true },
+      }))
+    )
+      return privateJson({ error: "Not found" }, { status: 404 });
+    // 5 a minute per user and per IP, before the expensive snapshot.
+    await throttle(db(), "export", {
+      userId: actor.userId,
+      ip: clientIp(request.headers),
+    });
+    const result = await withAudit(
+      db(),
+      async (tx, audit) => {
+        const out = await buildExport(tx, actor.companyId, name.data, params);
+        if (out instanceof z.ZodError) return out;
+        if (out instanceof IncompleteGst) {
+          // The refusal is recorded too; nothing is exported.
           await audit({
             companyId: actor.companyId,
             actorUserId: actor.userId,
-            action: "report.exported",
+            action: "report.export_refused",
             target: { type: "report_export", id: name.data },
-            after: { export: name.data, params, rows: out.rows.length },
+            after: { export: name.data, params, reason: "incomplete_gst" },
           });
           return out;
-        },
-        { isolationLevel: "RepeatableRead" },
-      );
-      if (result instanceof z.ZodError) return invalid(result);
-      return new Response(
-        csvStream(result.columns, result.rows as Iterable<never>),
+        }
+        await audit({
+          companyId: actor.companyId,
+          actorUserId: actor.userId,
+          action: "report.exported",
+          target: { type: "report_export", id: name.data },
+          after: { export: name.data, params, rows: out.rows.length },
+        });
+        return out;
+      },
+      { isolationLevel: "RepeatableRead" },
+    );
+    if (result instanceof z.ZodError) return invalid(result);
+    if (result instanceof IncompleteGst)
+      return privateJson(
         {
-          headers: {
-            "content-type": "text/csv; charset=utf-8",
-            "content-disposition": `attachment; filename="${result.filename}"`,
-            "cache-control": "private, no-store",
-            "x-content-type-options": "nosniff",
-          },
+          error:
+            "Some cash-basis GST is left out until the records below are reviewed. Resolve them before exporting GST.",
+          warnings: result.warnings.map(
+            ({ sourceType, sourceId, message }) => ({
+              sourceType,
+              sourceId,
+              message,
+            }),
+          ),
         },
+        { status: 409 },
       );
-    });
+    return new Response(
+      csvStream(result.columns, result.rows as Iterable<never>),
+      {
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="${result.filename}"`,
+          "cache-control": "private, no-store",
+          "x-content-type-options": "nosniff",
+        },
+      },
+    );
   };
   return { run };
 }
