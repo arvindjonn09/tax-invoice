@@ -32,5 +32,6 @@ The report screens with filters and CSV export are still being built (#58). Unti
 - `GET /api/reports/profitability?from=…&to=…` gives job profit ex GST, for anyone allowed to see job profit.
 - `GET /api/reports/gst/periods` lists closed periods. Owners and accountants only.
 - `POST /api/reports/gst/periods` closes a period. Owners and accountants only.
+- `GET /api/reports/ageing` and `GET /api/reports/cash` show who owes what and money in less money out. CSV exports for your accountant are at `GET /api/exports/…`. Owners and accountants only; see [the export schemas](../exports.md).
 
 Always have your accountant review the draft before you lodge your BAS.
