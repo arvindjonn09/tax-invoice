@@ -88,3 +88,5 @@ Invoice $2,500 ex GST; costs $1,450; profit $1,050; margin 42%; customer receipt
 or $590 (registered) outstanding. Payments and recoverable GST do not change profit. See [GST.md](GST.md#combined-gst-and-profit-acceptance-fixture).
 
 At every milestone: implement schema, routes, UI, tests and documentation; do not mark done without passing tests. Avoid bulk unreviewed implementation.
+
+- #57 real dashboard implemented: shared report/ageing calculations, date/customer/job filters, role-scoped GST/ledger, direct overdue-invoice links, fixture reconciliation and mobile/axe tests. Pending independent review and CI; #59 remains separate.

@@ -9,6 +9,7 @@ import { NAV_ITEMS, navItemFor } from "@/server/navigation";
 export const dynamicParams = false;
 /** Modules with their own pages; this placeholder no longer serves them. */
 const BUILT_MODULES = new Set([
+  "dashboard",
   "settings",
   "customers",
   "jobs",

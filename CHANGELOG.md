@@ -87,3 +87,5 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 | Date | Environment | Commit | Backup before | Checks                                                       |
 | ---- | ----------- | ------ | ------------- | ------------------------------------------------------------ |
 | —    | staging     | —      | —             | First deploy waits for the owner to provision staging (#64). |
+
+- Added the real financial dashboard with filtered profit/cash, outstanding balances, draft GST and direct overdue-invoice links (#57).
