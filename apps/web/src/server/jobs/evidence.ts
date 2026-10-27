@@ -1,3 +1,4 @@
+import { lockDocumentClaim } from "../documents/claim";
 import { type Actor, notFound } from "@jobflow/authz";
 import { type JobStatus, transitionProblem } from "@jobflow/domain";
 import { z } from "zod";
@@ -125,9 +126,9 @@ async function lockedWorkerJob(
       select: { id: true },
     });
     if (!contractor) throw notFound();
-    await lockRow(tx, "contractors", contractor.id);
+    await lockRow(tx, "contractors", contractor.id, actor.companyId);
   }
-  const job = await lockedJob(tx, jobId).catch(() => null);
+  const job = await lockedJob(tx, jobId, actor.companyId).catch(() => null);
   if (!job || job.companyId !== actor.companyId) throw notFound();
   if (actor.role === "employee") {
     const employee = await tx.employee.findFirst({
@@ -135,7 +136,7 @@ async function lockedWorkerJob(
       select: { id: true },
     });
     if (!employee) throw notFound();
-    await lockRow(tx, "employees", employee.id);
+    await lockRow(tx, "employees", employee.id, actor.companyId);
   }
   const scope = await workerScope(tx, actor, jobId);
   if (!scope) throw notFound();
@@ -228,10 +229,13 @@ export function evidenceHandlers(db: () => PrismaClient) {
               );
           }
           if (data.kind !== "note") {
-            const document = await tx.document.findFirst({
-              where: { id: data.documentId, companyId: actor.companyId },
-              include: { workEvidence: { select: { id: true } } },
-            });
+            // The claim lock bills and expenses take (and the unattached
+            // cleanup, #137), so a concurrent cleanup is a clean 400 here.
+            const document = await lockDocumentClaim(
+              tx,
+              actor.companyId,
+              data.documentId!,
+            );
             // Only the worker's own upload, an image, used once.
             if (
               !document ||
@@ -386,7 +390,9 @@ export function evidenceHandlers(db: () => PrismaClient) {
       const to: JobStatus =
         decision === "approve" ? "completed" : "in_progress";
       await withAudit(db(), async (tx, audit) => {
-        const job = await lockedJob(tx, jobId).catch(() => null);
+        const job = await lockedJob(tx, jobId, actor.companyId).catch(
+          () => null,
+        );
         if (!job || job.companyId !== actor.companyId) throw notFound();
         if (job.status !== "awaiting_review")
           throw new Refusal(fail(409, "The job isn't awaiting review"));

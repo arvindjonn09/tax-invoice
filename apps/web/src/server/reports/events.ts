@@ -28,7 +28,20 @@ const signed = (value: bigint, sign: bigint) => value * sign;
 export async function financialEvents(
   tx: Prisma.TransactionClient,
   companyId: string,
+  /**
+   * Bounded reads (#157): only documents with any activity on or after
+   * `since` (a date, settlement, credit, void, correction or GST posting)
+   * are loaded, with their whole history. A document with nothing on or
+   * after `since` can't produce an event dated then, so every report
+   * starting at `since` is unchanged; tests prove it against a full load.
+   */
+  window?: { since: string },
 ) {
+  const scope = window
+    ? await relevantSources(tx, companyId, window.since)
+    : null;
+  const only = (ids: string[] | undefined) =>
+    ids === undefined ? {} : { id: { in: ids } };
   const [
     jobs,
     registrations,
@@ -43,6 +56,7 @@ export async function financialEvents(
     postings,
     quotes,
     creditAdjustments,
+    supplierCreditAdjustments,
   ] = await Promise.all([
     tx.job.findMany({
       where: { companyId },
@@ -57,22 +71,63 @@ export async function financialEvents(
     }),
     tx.companyGstRegistration.findMany({ where: { companyId } }),
     tx.invoice.findMany({
-      where: { companyId, status: { in: ["issued", "void"] } },
+      where: {
+        companyId,
+        status: { in: ["issued", "void"] },
+        ...only(scope?.invoices),
+      },
       include: { items: true, allocations: { include: { receipt: true } } },
     }),
     tx.supplierBill.findMany({
-      where: { companyId },
-      include: { allocations: { include: { payment: true } } },
+      where: { companyId, ...only(scope?.bills) },
+      include: { allocations: { include: { payment: true } }, credits: true },
     }),
-    tx.expense.findMany({ where: { companyId, status: "approved" } }),
-    tx.timesheet.findMany({ where: { companyId, status: "approved" } }),
-    tx.receiptGstAdjustment.findMany({ where: { companyId } }),
-    tx.supplierPaymentGstAdjustment.findMany({ where: { companyId } }),
-    tx.gstManualAdjustment.findMany({ where: { companyId } }),
+    tx.expense.findMany({
+      where: { companyId, status: "approved", ...only(scope?.expenses) },
+      include: {
+        supplierPaymentAllocations: { include: { payment: true } },
+        supplierPaymentGstAdjustments: true,
+      },
+    }),
+    tx.timesheet.findMany({
+      where: {
+        companyId,
+        status: "approved",
+        ...(scope
+          ? {
+              OR: [
+                { workDate: { gte: scope.sinceDay } },
+                { decidedAt: { gte: scope.sinceInstant } },
+              ],
+            }
+          : {}),
+      },
+    }),
+    tx.receiptGstAdjustment.findMany({
+      where: {
+        companyId,
+        ...(scope ? { invoiceId: { in: scope.invoices } } : {}),
+      },
+    }),
+    tx.supplierPaymentGstAdjustment.findMany({
+      where: { companyId, ...(scope ? { billId: { in: scope.bills } } : {}) },
+    }),
+    tx.gstManualAdjustment.findMany({
+      where: {
+        companyId,
+        ...(scope ? { effectiveOn: { gte: scope.sinceDay } } : {}),
+      },
+    }),
     tx.contractorAcceptance.findMany({ where: { companyId } }),
-    tx.$queryRaw<
-      { source_id: string; original_on: Date; effective_on: Date }[]
-    >`
+    scope
+      ? tx.$queryRaw<
+          { source_id: string; original_on: Date; effective_on: Date }[]
+        >`
+      SELECT source_id,original_on,effective_on FROM gst_source_postings
+      WHERE company_id=${companyId}::uuid AND source_id = ANY(${scope.postingSources}::uuid[])`
+      : tx.$queryRaw<
+          { source_id: string; original_on: Date; effective_on: Date }[]
+        >`
       SELECT source_id,original_on,effective_on FROM gst_source_postings WHERE company_id=${companyId}::uuid`,
     tx.quote.findMany({
       where: { companyId, status: "accepted" },
@@ -84,7 +139,15 @@ export async function financialEvents(
         estimatedCostCents: true,
       },
     }),
-    tx.creditCashAdjustment.findMany({ where: { companyId } }),
+    tx.creditCashAdjustment.findMany({
+      where: {
+        companyId,
+        ...(scope ? { invoiceId: { in: scope.invoices } } : {}),
+      },
+    }),
+    tx.supplierCreditGstAdjustment.findMany({
+      where: { companyId, ...(scope ? { billId: { in: scope.bills } } : {}) },
+    }),
   ]);
   const periods: GstRegistrationPeriod[] = registrations.map((p) => ({
     startsOn: toDay(p.startsOn),
@@ -493,6 +556,68 @@ export async function financialEvents(
           );
       }
     }
+    // Supplier credits (#140): lower the job cost on the date the note was
+    // received; the purchaser's creditable GST comes back (an increasing
+    // adjustment) on that date on the non-cash basis, or through the
+    // recorded cash corrections on the cash basis. A void reverses on its day.
+    for (const credit of row.credits) {
+      const creditDay = toDay(credit.receivedOn);
+      const voidDay = credit.voidedAt ? businessDay(credit.voidedAt) : null;
+      emit(
+        `${credit.id}:credit-cost`,
+        credit.id,
+        creditDay,
+        row.jobId,
+        customerId,
+        "incurred",
+        -credit.jobCostCents,
+      );
+      if (voidDay)
+        emit(
+          `${credit.id}:credit-cost-void`,
+          credit.id,
+          voidDay,
+          row.jobId,
+          customerId,
+          "incurred",
+          credit.jobCostCents,
+        );
+      if (status.basis !== "non_cash") continue;
+      if (registered(taxDay(credit.id, creditDay)))
+        emit(
+          `${credit.id}:credit-gst`,
+          credit.id,
+          creditDay,
+          row.jobId,
+          customerId,
+          "gst_purchases",
+          -credit.creditableGstCents,
+        );
+      if (voidDay && registered(taxDay(credit.id, voidDay)))
+        emit(
+          `${credit.id}:credit-gst-void`,
+          credit.id,
+          voidDay,
+          row.jobId,
+          customerId,
+          "gst_purchases",
+          credit.creditableGstCents,
+        );
+    }
+    if (status.basis === "cash" && !historyProblem)
+      for (const a of supplierCreditAdjustments.filter(
+        (a) => a.billId === row.id,
+      ))
+        if (registered(taxDay(a.creditId, toDay(a.adjustedOn))))
+          emit(
+            a.id,
+            a.creditId,
+            toDay(a.adjustedOn),
+            row.jobId,
+            customerId,
+            "gst_purchases",
+            a.creditableGstCents,
+          );
     if (status.basis === "cash" && !historyProblem)
       for (const a of paymentAdjustments.filter((a) => a.billId === row.id))
         if (registered(toDay(a.adjustedOn)))
@@ -507,6 +632,17 @@ export async function financialEvents(
           );
   }
   const expenseById = new Map(expenses.map((row) => [row.id, row]));
+  /** Follow reverses/corrects links to the original purchase (cycle-safe). */
+  const rootExpense = (row: (typeof expenses)[number]) => {
+    let current = row;
+    for (let hops = 0; hops < 10; hops += 1) {
+      const parentId = current.reversesId ?? current.correctsId;
+      const parent = parentId ? expenseById.get(parentId) : undefined;
+      if (!parent) break;
+      current = parent;
+    }
+    return current;
+  };
   for (const row of expenses) {
     const day =
       (row.reversesId || row.correctsId) && row.decidedAt
@@ -525,16 +661,15 @@ export async function financialEvents(
       row.jobCostCents ?? 0n,
     );
     const status = gstStatusOn(periods, toDay(row.purchasedOn));
-    const original = row.reversesId
-      ? expenseById.get(row.reversesId)
-      : row.correctsId
-        ? expenseById.get(row.correctsId)
-        : undefined;
+    // The chain's root purchase (#169): a reversal of a correction must
+    // follow the correction back to the paid original, or on the cash
+    // basis the correction's claim is never reversed.
+    const root = rootExpense(row);
     const taxDate =
       status.basis === "cash"
         ? row.paidOn
           ? toDay(row.paidOn)
-          : original?.paidOn
+          : root !== row && root.paidOn
             ? day
             : null
         : day;
@@ -548,6 +683,64 @@ export async function financialEvents(
         "gst_purchases",
         row.creditableGstCents ?? 0n,
       );
+    // On-account expenses paid later with a supplier payment (#141): the
+    // cash and, on the cash basis, the attributed input tax credit move on
+    // the payment date; a payment void and its correction on their own days.
+    for (const a of row.supplierPaymentAllocations) {
+      const payDay = toDay(a.payment.paidOn);
+      emit(
+        `${a.id}:pay`,
+        a.paymentId,
+        payDay,
+        row.jobId,
+        customerId,
+        "paid",
+        a.amountCents,
+      );
+      if (status.basis === "cash" && registered(payDay))
+        emit(
+          `${a.id}:cash-credit`,
+          a.paymentId,
+          payDay,
+          row.jobId,
+          customerId,
+          "gst_purchases",
+          a.creditableGstAttributedCents,
+        );
+      if (!a.payment.voidedAt) continue;
+      const voidDay = businessDay(a.payment.voidedAt);
+      emit(
+        `${a.id}:pay-void`,
+        a.paymentId,
+        voidDay,
+        row.jobId,
+        customerId,
+        "paid",
+        -a.amountCents,
+      );
+      if (status.basis === "cash" && registered(voidDay))
+        emit(
+          `${a.id}:cash-credit-void`,
+          a.paymentId,
+          voidDay,
+          row.jobId,
+          customerId,
+          "gst_purchases",
+          -a.creditableGstAttributedCents,
+        );
+    }
+    if (status.basis === "cash")
+      for (const a of row.supplierPaymentGstAdjustments)
+        if (registered(toDay(a.adjustedOn)))
+          emit(
+            a.id,
+            a.paymentId,
+            toDay(a.adjustedOn),
+            row.jobId,
+            customerId,
+            "gst_purchases",
+            a.creditableGstCents,
+          );
     if (row.settlement === "paid_at_purchase" && row.paidOn)
       emit(
         `${row.id}:paid`,
@@ -582,5 +775,221 @@ export async function financialEvents(
   events.sort(
     (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
   );
-  return { events, jobs, periods, bills, acceptances, quotes, warnings };
+  return {
+    events,
+    jobs,
+    periods,
+    bills,
+    acceptances,
+    quotes,
+    warnings,
+    /** What was read: proves bounded loading in tests and logs. */
+    loaded: {
+      invoices: invoices.length,
+      bills: bills.length,
+      expenses: expenses.length,
+      timesheets: timesheets.length,
+    },
+  };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The ids of every document with any activity on or after `since`
+ * (#157), closed under the links the replay needs: an invoice's credit
+ * notes and the invoice a credit note credits; an expense's whole
+ * reversal/correction chain. Timestamps (voids, decisions) are compared a
+ * day early, so a Sydney business date is never missed across UTC.
+ */
+async function relevantSources(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  since: string,
+) {
+  const sinceDay = new Date(`${since}T00:00:00Z`);
+  const sinceInstant = new Date(sinceDay.getTime() - DAY_MS);
+  const posted = (
+    await tx.$queryRaw<{ source_id: string }[]>`
+      SELECT DISTINCT source_id FROM gst_source_postings
+      WHERE company_id=${companyId}::uuid AND effective_on >= ${sinceDay}::date`
+  ).map((row) => row.source_id);
+  const late = { gte: sinceInstant };
+  const recent = { gte: sinceDay };
+  const [invoiceRows, billRows, expenseRows] = await Promise.all([
+    tx.invoice.findMany({
+      where: {
+        companyId,
+        status: { in: ["issued", "void"] },
+        OR: [
+          { issueDate: recent },
+          { voidedAt: late },
+          { id: { in: posted } },
+          {
+            allocations: {
+              some: {
+                OR: [
+                  { receipt: { receivedOn: recent } },
+                  { receipt: { voidedAt: late } },
+                  { receiptId: { in: posted } },
+                ],
+              },
+            },
+          },
+          { gstAdjustments: { some: { adjustedOn: recent } } },
+          { cashAdjustments: { some: { adjustedOn: recent } } },
+          {
+            creditNotes: {
+              some: {
+                OR: [
+                  { issueDate: recent },
+                  { voidedAt: late },
+                  { id: { in: posted } },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      select: { id: true, creditsId: true },
+    }),
+    tx.supplierBill.findMany({
+      where: {
+        companyId,
+        OR: [
+          { issuedOn: recent },
+          { voidedAt: late },
+          { id: { in: posted } },
+          {
+            allocations: {
+              some: {
+                OR: [
+                  { payment: { paidOn: recent } },
+                  { payment: { voidedAt: late } },
+                  { paymentId: { in: posted } },
+                ],
+              },
+            },
+          },
+          {
+            credits: {
+              some: {
+                OR: [
+                  { receivedOn: recent },
+                  { issuedOn: recent },
+                  { voidedAt: late },
+                  { id: { in: posted } },
+                ],
+              },
+            },
+          },
+          { gstAdjustments: { some: { adjustedOn: recent } } },
+          { creditGstAdjustments: { some: { adjustedOn: recent } } },
+        ],
+      },
+      select: {
+        id: true,
+        allocations: { select: { paymentId: true } },
+        credits: { select: { id: true } },
+      },
+    }),
+    tx.expense.findMany({
+      where: {
+        companyId,
+        status: "approved",
+        OR: [
+          { purchasedOn: recent },
+          { paidOn: recent },
+          { decidedAt: late },
+          { id: { in: posted } },
+          {
+            supplierPaymentAllocations: {
+              some: {
+                OR: [
+                  { payment: { paidOn: recent } },
+                  { payment: { voidedAt: late } },
+                  { paymentId: { in: posted } },
+                ],
+              },
+            },
+          },
+          { supplierPaymentGstAdjustments: { some: { adjustedOn: recent } } },
+        ],
+      },
+      select: { id: true, reversesId: true, correctsId: true },
+    }),
+  ]);
+  // Invoices: add the credited invoice of each credit note and every credit
+  // note of each invoice (the cash replay reads both).
+  const invoices = new Set(invoiceRows.map((row) => row.id));
+  for (const row of invoiceRows) if (row.creditsId) invoices.add(row.creditsId);
+  for (const credit of await tx.invoice.findMany({
+    where: {
+      companyId,
+      status: { in: ["issued", "void"] },
+      creditsId: { in: [...invoices] },
+    },
+    select: { id: true },
+  }))
+    invoices.add(credit.id);
+  // Expenses: the whole chain, both directions (reversals and corrections
+  // read their original; an original's reversal changes its cash date).
+  const expenses = new Set(expenseRows.map((row) => row.id));
+  let frontier = expenseRows.flatMap((row) =>
+    [row.reversesId, row.correctsId].filter((id): id is string => !!id),
+  );
+  for (let hops = 0; hops < 10 && frontier.length; hops += 1) {
+    const next = await tx.expense.findMany({
+      where: {
+        companyId,
+        status: "approved",
+        OR: [
+          { id: { in: frontier } },
+          { reversesId: { in: [...expenses, ...frontier] } },
+          { correctsId: { in: [...expenses, ...frontier] } },
+        ],
+      },
+      select: { id: true, reversesId: true, correctsId: true },
+    });
+    frontier = [];
+    for (const row of next)
+      if (!expenses.has(row.id)) {
+        expenses.add(row.id);
+        for (const id of [row.reversesId, row.correctsId])
+          if (id && !expenses.has(id)) frontier.push(id);
+      }
+  }
+  const invoiceIds = [...invoices];
+  // Every settlement and credit of a loaded document, for exact replay order.
+  const settlements = await tx.receiptAllocation.findMany({
+    where: { companyId, invoiceId: { in: invoiceIds } },
+    select: { receiptId: true },
+  });
+  const expenseIds = [...expenses];
+  const expensePayments = await tx.supplierPaymentExpenseAllocation.findMany({
+    where: { companyId, expenseId: { in: expenseIds } },
+    select: { paymentId: true },
+  });
+  const postingSources = [
+    ...new Set([
+      ...invoiceIds,
+      ...settlements.map((row) => row.receiptId),
+      ...billRows.flatMap((row) => [
+        row.id,
+        ...row.allocations.map((a) => a.paymentId),
+        ...row.credits.map((c) => c.id),
+      ]),
+      ...expenseIds,
+      ...expensePayments.map((row) => row.paymentId),
+      ...posted,
+    ]),
+  ];
+  return {
+    sinceDay,
+    sinceInstant,
+    invoices: invoiceIds,
+    bills: billRows.map((row) => row.id),
+    expenses: expenseIds,
+    postingSources,
+  };
 }

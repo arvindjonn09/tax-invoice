@@ -37,3 +37,9 @@ recorded for later milestones.
 - Reporting endpoints (#54/#55, PR #150): reviewed separately on that PR.
 - Malware scanning of uploads: owner decision #136.
 - Deployment controls (TLS, proxy, bucket policy): #64, section 8 of [requirements.md](requirements.md).
+
+## Main integration follow-up
+
+Rebased the financial locks onto the supplier-credit, on-account expense and subcontractor-submission modules now on main. Request-supplied bill, payment, expense, contractor, job and submission IDs are company-scoped before locking. Existing valid lock ordering is preserved.
+
+The shared row-lock API now requires a company ID at every call site. Expense creation/corrections, document claims, jobs, assignments, contractor/employee helpers and timesheets all use it; the maintenance scan carries each candidate's company ID into its lock. A real expense request holding a foreign job lock proves refusal without cross-company contention.

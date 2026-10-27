@@ -1,0 +1,16 @@
+# Nightly encrypted backup of the staging Compose stack (#173). Runs the
+# `backup` service on the stack's own network: no database port is published.
+# Install: see docs/ops/backups.md § Staging (Compose).
+[Unit]
+Description=JobFlow staging encrypted backup (database + documents)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/opt/jobflow
+ExecStart=/usr/bin/docker compose -f /opt/jobflow/infra/staging/compose.yml --env-file /opt/jobflow/infra/staging/env/compose.env --profile backup run --rm backup
+NoNewPrivileges=yes
+PrivateTmp=yes
