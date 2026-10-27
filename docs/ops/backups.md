@@ -71,7 +71,7 @@ systemctl list-timers jobflow-backup.timer
 ## Staging (Compose)
 
 Staging's database sits on an internal network with no published port. So the backup runs as the `backup` Compose service, on the same network (#173).
-- **Image:** the `backup` target of `apps/web/Dockerfile`, which has `pg_dump` 16 and the AWS CLI.
+- **Image:** the `backup` target of `apps/web/Dockerfile`, which has `pg_dump` 16 and the AWS CLI. `deploy.sh` rebuilds it with every release, so backups always run the released code.
 - **Runs as:** non-root, with a read-only filesystem and all capabilities dropped.
 - **Writes to:** `/var/backups/jobflow` on the host.
 

@@ -154,6 +154,17 @@ describe("staging backup (#173)", () => {
     expect(unit).toMatch(/--profile backup run --rm backup/);
     expect(unit).toMatch(/WorkingDirectory=\/opt\/jobflow/);
   });
+
+  it("is rebuilt on every deploy, so backups run the released code", () => {
+    const deploy = read("infra/staging/deploy.sh");
+    expect(deploy).toMatch(
+      /^docker build [^\n]*--target backup -t jobflow-backup:staging \./m,
+    );
+    expect(compose).toMatch(/image: jobflow-backup:staging/);
+    expect(deploy.indexOf("--target backup")).toBeLessThan(
+      deploy.indexOf("run --rm migrate"),
+    );
+  });
 });
 
 describe("deploy gate (#64)", () => {
