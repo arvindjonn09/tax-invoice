@@ -1,0 +1,36 @@
+# Nightly encrypted JobFlow backup (#63). Install with jobflow-backup.timer.
+[Unit]
+Description=JobFlow encrypted backup (database + documents)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jobflow-backup
+WorkingDirectory=/srv/jobflow
+# DATABASE_URL (a read-only backup role), S3_* and APP_ENV.
+EnvironmentFile=/etc/jobflow/backup.env
+# BACKUP_ENCRYPTION_KEY only; root-owned 0400, kept apart from the backups.
+EnvironmentFile=/etc/jobflow/backup-key.env
+ExecStart=/srv/jobflow/infra/backup/run-backup.sh
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadWritePaths=/var/backups/jobflow
