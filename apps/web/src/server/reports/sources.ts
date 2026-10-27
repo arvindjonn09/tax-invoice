@@ -20,60 +20,60 @@ export async function sourceLabels(
     receipts,
     payments,
   ] = await Promise.all([
-      tx.invoice.findMany({
-        where: { companyId, id: { in: unique } },
-        select: {
-          id: true,
-          kind: true,
-          reference: true,
-          number: true,
-          customer: { select: { name: true } },
-        },
-      }),
-      tx.supplierBill.findMany({
-        where: { companyId, id: { in: unique } },
-        select: { id: true, supplierName: true, supplierReference: true },
-      }),
-      tx.supplierCredit.findMany({
-        where: { companyId, id: { in: unique } },
-        select: {
-          id: true,
-          supplierReference: true,
-          bill: { select: { supplierName: true } },
-        },
-      }),
-      tx.expense.findMany({
-        where: { companyId, id: { in: unique } },
-        select: { id: true, supplierName: true, description: true },
-      }),
-      tx.gstManualAdjustment.findMany({
-        where: { companyId, id: { in: unique } },
-        select: { id: true, reason: true },
-      }),
-      tx.timesheet.findMany({
-        where: { companyId, id: { in: unique } },
-        select: {
-          id: true,
-          workDate: true,
-          employee: { select: { name: true } },
-        },
-      }),
-      // Cash-basis GST lines come from the settlement itself.
-      tx.customerReceipt.findMany({
-        where: { companyId, id: { in: unique } },
-        select: {
-          id: true,
-          kind: true,
-          method: true,
-          reference: true,
-          customer: { select: { name: true } },
-        },
-      }),
-      tx.supplierPayment.findMany({
-        where: { companyId, id: { in: unique } },
-        select: { id: true, method: true, reference: true, payeeName: true },
-      }),
-    ]);
+    tx.invoice.findMany({
+      where: { companyId, id: { in: unique } },
+      select: {
+        id: true,
+        kind: true,
+        reference: true,
+        number: true,
+        customer: { select: { name: true } },
+      },
+    }),
+    tx.supplierBill.findMany({
+      where: { companyId, id: { in: unique } },
+      select: { id: true, supplierName: true, supplierReference: true },
+    }),
+    tx.supplierCredit.findMany({
+      where: { companyId, id: { in: unique } },
+      select: {
+        id: true,
+        supplierReference: true,
+        bill: { select: { supplierName: true } },
+      },
+    }),
+    tx.expense.findMany({
+      where: { companyId, id: { in: unique } },
+      select: { id: true, supplierName: true, description: true },
+    }),
+    tx.gstManualAdjustment.findMany({
+      where: { companyId, id: { in: unique } },
+      select: { id: true, reason: true },
+    }),
+    tx.timesheet.findMany({
+      where: { companyId, id: { in: unique } },
+      select: {
+        id: true,
+        workDate: true,
+        employee: { select: { name: true } },
+      },
+    }),
+    // Cash-basis GST lines come from the settlement itself.
+    tx.customerReceipt.findMany({
+      where: { companyId, id: { in: unique } },
+      select: {
+        id: true,
+        kind: true,
+        method: true,
+        reference: true,
+        customer: { select: { name: true } },
+      },
+    }),
+    tx.supplierPayment.findMany({
+      where: { companyId, id: { in: unique } },
+      select: { id: true, method: true, reference: true, payeeName: true },
+    }),
+  ]);
   const labels = new Map<string, SourceLabel>();
   for (const i of invoices)
     labels.set(i.id, {
