@@ -577,6 +577,17 @@ export async function financialEvents(
           );
   }
   const expenseById = new Map(expenses.map((row) => [row.id, row]));
+  /** Follow reverses/corrects links to the original purchase (cycle-safe). */
+  const rootExpense = (row: (typeof expenses)[number]) => {
+    let current = row;
+    for (let hops = 0; hops < 10; hops += 1) {
+      const parentId = current.reversesId ?? current.correctsId;
+      const parent = parentId ? expenseById.get(parentId) : undefined;
+      if (!parent) break;
+      current = parent;
+    }
+    return current;
+  };
   for (const row of expenses) {
     const day =
       (row.reversesId || row.correctsId) && row.decidedAt
@@ -595,16 +606,15 @@ export async function financialEvents(
       row.jobCostCents ?? 0n,
     );
     const status = gstStatusOn(periods, toDay(row.purchasedOn));
-    const original = row.reversesId
-      ? expenseById.get(row.reversesId)
-      : row.correctsId
-        ? expenseById.get(row.correctsId)
-        : undefined;
+    // The chain's root purchase (#169): a reversal of a correction must
+    // follow the correction back to the paid original, or on the cash
+    // basis the correction's claim is never reversed.
+    const root = rootExpense(row);
     const taxDate =
       status.basis === "cash"
         ? row.paidOn
           ? toDay(row.paidOn)
-          : original?.paidOn
+          : root !== row && root.paidOn
             ? day
             : null
         : day;
