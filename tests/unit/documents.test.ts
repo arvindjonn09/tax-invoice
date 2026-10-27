@@ -158,4 +158,19 @@ describe("S3 bucket initialisation (#110 review)", () => {
       "DeleteObjectCommand",
     ]);
   });
+
+  it("deletes with a DeleteObject-only credential without checking the bucket", async () => {
+    const calls: string[] = [];
+    const client = {
+      send: async (input: unknown) => {
+        const name = command(input);
+        calls.push(name);
+        if (name !== "DeleteObjectCommand") throw new Error("AccessDenied");
+        return {};
+      },
+    };
+    const store = new S3Store(settings, client as never, true);
+    await store.delete("documents/obsolete");
+    expect(calls).toEqual(["DeleteObjectCommand"]);
+  });
 });

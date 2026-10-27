@@ -32,7 +32,7 @@ async function main() {
       "--grace-days must be a whole number of days, 1 or more",
     );
   const graceDays = grace === undefined ? UNATTACHED_GRACE_DAYS : Number(grace);
-  const store = storeFromEnvironment();
+  const store = storeFromEnvironment(process.env, true);
   if (!store) throw new Error("Document storage isn't configured");
   if (
     ["staging", "production"].includes(process.env.APP_ENV ?? "") &&
