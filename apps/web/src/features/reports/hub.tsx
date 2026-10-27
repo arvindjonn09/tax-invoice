@@ -44,6 +44,7 @@ type Totals = {
 };
 type Warning = { sourceId: string; message: string };
 type Profitability = {
+  range: { jobId?: string };
   totals: Totals;
   jobs: (Totals & { jobId: string })[];
   positions: {
@@ -127,6 +128,9 @@ const SOURCE_TYPE: Record<string, string> = {
   expense: "Expense",
   gst_adjustment: "GST adjustment",
   timesheet: "Labour",
+  customer_receipt: "Customer receipt",
+  customer_refund: "Customer refund",
+  supplier_payment: "Supplier payment",
 };
 const sourceHref = (id: string, source?: Source) =>
   source?.type === "invoice" || source?.type === "credit_note"
@@ -135,7 +139,12 @@ const sourceHref = (id: string, source?: Source) =>
       ? `/payments/bills/${id}`
       : source?.type === "expense"
         ? `/expenses/${id}`
-        : null;
+        : source?.type === "customer_receipt" ||
+            source?.type === "customer_refund"
+          ? `/payments/receipts/${id}`
+          : source?.type === "supplier_payment"
+            ? `/payments/supplier/${id}`
+            : null;
 
 const LINK =
   "inline-flex min-h-11 max-w-full items-center font-semibold underline [overflow-wrap:anywhere]";
@@ -440,6 +449,11 @@ function ProfitView({
   const { data, error, reload } = useRemote<Profitability>(
     `/api/reports/profitability?${query}`,
   );
+  // A filtered response holds only the chosen job, so the selector keeps
+  // the positions of the last unfiltered response (#58).
+  const [jobs, setJobs] = useState<Profitability["positions"]>([]);
+  if (data && !data.range.jobId && data.positions !== jobs)
+    setJobs(data.positions);
   if (error) return <Failure error={error} reload={reload} />;
   if (!data) return <p role="status">Loading job profit…</p>;
   const t = data.totals;
@@ -461,7 +475,7 @@ function ProfitView({
               }}
             >
               <option value="">All jobs</option>
-              {data.positions.map((p) => (
+              {jobs.map((p) => (
                 <option key={p.jobId} value={p.jobId}>
                   {p.reference} · {p.title}
                 </option>
@@ -471,7 +485,10 @@ function ProfitView({
         </Field>
         {canExport ? (
           <ExportLink
-            href={`/api/exports/profitability?${new URLSearchParams(range)}`}
+            href={`/api/exports/profitability?${new URLSearchParams({
+              ...range,
+              ...(jobId ? { jobId } : {}),
+            })}`}
           >
             Export CSV
           </ExportLink>

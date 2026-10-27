@@ -1993,6 +1993,21 @@ describe("chronological settlement safety and legacy report isolation", () => {
       });
       expect(close.status).toBe(409);
       expect((await close.json()).warnings[0].sourceId).toBe(f.invoice.id);
+      // The accountant's GST exports refuse the same incomplete draft.
+      for (const name of ["gst-summary", "gst-lines"]) {
+        const exported = await exportHandlers(() => db).run({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/exports/${name}?from=2026-07-01&to=2026-09-30`,
+          ),
+          context: { params: Promise.resolve({ name }) },
+        });
+        expect(exported.status, name).toBe(basis === "cash" ? 409 : 200);
+        if (basis === "cash")
+          expect((await exported.json()).warnings[0].sourceId).toBe(
+            f.invoice.id,
+          );
+      }
       expect(
         await db.gstPeriod.count({ where: { companyId: f.company.id } }),
       ).toBe(0);
@@ -2603,6 +2618,42 @@ describe("bounded report sources (#157)", () => {
     expect(tooBig.status).toBe(400);
   });
 
+  it("pages a finalised period's stored events too", async () => {
+    const f = await fixture(true, "non_cash");
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({
+        from: "2026-07-01",
+        to: "2026-09-30",
+        note: "Synthetic paging check",
+      }),
+      context: undefined,
+    });
+    expect(close.status).toBe(201);
+    const get = async (query: string) =>
+      (
+        await reportHandlers(() => db).gst({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/reports?from=2026-07-01&to=2026-09-30${query}`,
+          ),
+          context: undefined,
+        })
+      ).json();
+    const all = await get("");
+    const second = await get("&eventsPageSize=1&eventsPage=2");
+    expect(all.finalization).toBeDefined();
+    expect(all.eventsPage.total).toBeGreaterThan(1);
+    expect(second.events).toEqual([all.events[1]]);
+    expect(second.eventsPage).toEqual({
+      page: 2,
+      pageSize: 1,
+      total: all.eventsPage.total,
+    });
+    expect(second.oneA).toBe(all.oneA);
+    expect(second.finalization).toEqual(all.finalization);
+  });
+
   it("reads only documents active in the window", async () => {
     const { financialEvents } =
       await import("../../apps/web/src/server/reports/events");
@@ -3149,6 +3200,95 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
     });
   });
 
+  it("labels cash-basis GST lines with their receipt or payment", async () => {
+    const f = await fixture(true, "cash");
+    expect(
+      (
+        await receiptHandlers(() => db).create({
+          actor: f.actor,
+          request: req({
+            customerId: f.customer.id,
+            receivedOn: "2026-07-15",
+            amountCents: "100000",
+            method: "bank_transfer",
+            reference: "Synthetic remittance",
+            allocations: [{ invoiceId: f.invoice.id, amountCents: "100000" }],
+          }),
+          context: undefined,
+        })
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await supplierPaymentHandlers(() => db).create({
+          actor: f.actor,
+          request: req({
+            paidOn: "2026-07-15",
+            amountCents: "40000",
+            method: "card",
+            allocations: [{ billId: f.supplier.id, amountCents: "40000" }],
+          }),
+          context: undefined,
+        })
+      ).status,
+    ).toBe(201);
+    const lines = parseCsv(
+      await (
+        await runExport(f.actor, "gst-lines", "from=2026-07-01&to=2026-09-30")
+      ).text(),
+    );
+    const settled = lines.filter((l) =>
+      ["customer_receipt", "supplier_payment"].includes(l.source_type!),
+    );
+    expect(settled.find((l) => l.bas_label === "1A")).toMatchObject({
+      source_type: "customer_receipt",
+      source_reference: "Synthetic remittance",
+      party_name: expect.stringMatching(/\S/),
+    });
+    // Without a reference, the payment method identifies it.
+    expect(settled.find((l) => l.bas_label === "1B")).toMatchObject({
+      source_type: "supplier_payment",
+      source_reference: "card",
+      party_name: expect.stringMatching(/\S/),
+    });
+    expect(lines.filter((l) => l.source_type === "")).toEqual([]);
+  });
+
+  it("exports profitability for one job, as the filtered report shows it", async () => {
+    const f = await fixture(true, "non_cash");
+    const range = "from=2026-07-01&to=2026-09-30";
+    const report = await (
+      await reportHandlers(() => db).profitability({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports?${range}&jobId=${f.job.id}`,
+        ),
+        context: undefined,
+      })
+    ).json();
+    const rows = parseCsv(
+      await (
+        await runExport(f.actor, "profitability", `${range}&jobId=${f.job.id}`)
+      ).text(),
+    );
+    expect(
+      rows.filter((r) => r.row_type === "job").map((r) => r.job_id),
+    ).toEqual([f.job.id]);
+    expect(rows.find((r) => r.row_type === "total")).toMatchObject({
+      revenue_exclusive_cents: report.totals.revenue,
+      job_cost_exclusive_cents: report.totals.cost,
+      gross_profit_cents: report.totals.profit,
+    });
+    // Another company's job, or a malformed id, reads nothing.
+    const other = await fixture(true, "non_cash");
+    await expect(
+      runExport(f.actor, "profitability", `${range}&jobId=${other.job.id}`),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(
+      (await runExport(f.actor, "profitability", `${range}&jobId=nope`)).status,
+    ).toBe(400);
+  });
+
   it("only owners and accountants reach ageing, cash and exports", async () => {
     const f = await fixture(false, "non_cash");
     const auth = createAuth({
@@ -3226,4 +3366,65 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
         ).toBe(["owner", "accountant"].includes(role) ? 200 : 403);
     }
   }, 120_000);
+});
+
+describe("reversing a correction of a paid expense (#169)", () => {
+  it("reverses the correction's cash-basis claim too", async () => {
+    const f = await fixture(true, "cash");
+    const expenses = expenseHandlers(() => db);
+    const [originalId] = f.expenseIds; // $150 + $15 taxable, paid at purchase
+    const today = async () =>
+      (
+        await (
+          await reportHandlers(() => db).gst({
+            actor: f.actor,
+            request: new Request(
+              `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+            ),
+            context: undefined,
+          })
+        ).json()
+      ).oneB as string;
+    const reverse = (id: string) =>
+      expenses.reverse({
+        actor: f.actor,
+        request: req({ note: "Synthetic correction" }),
+        context: context(id),
+      });
+    expect((await reverse(originalId!)).status).toBe(201);
+    const corrected = await expenses.create({
+      actor: f.actor,
+      request: req({
+        jobId: f.job.id,
+        category: "materials",
+        description: "Synthetic purchase (50% business use)",
+        purchasedOn: "2026-07-15",
+        priceEntry: "exclusive",
+        amountCents: "15000",
+        taxCode: "TAXABLE_10",
+        creditablePercent: "50",
+        receiptDocumentId: await f.doc(),
+        settlement: "paid_at_purchase",
+        paymentMethod: "card",
+        correctsExpenseId: originalId,
+      }),
+      context: undefined,
+    });
+    expect(corrected.status, await corrected.clone().text()).toBe(201);
+    const { id: correctionId } = (await corrected.json()) as { id: string };
+    expect(
+      (
+        await expenses.decide({
+          actor: f.actor,
+          request: req({ decision: "approve", evidenceVerified: true }),
+          context: context(correctionId),
+        })
+      ).status,
+    ).toBe(200);
+    // Reversal −1500 and correction +750, both dated today.
+    expect(await today()).toBe("-750");
+    expect((await reverse(correctionId)).status).toBe(201);
+    // The correction's 750 comes back off: the chain nets to the reversal.
+    expect(await today()).toBe("-1500");
+  });
 });

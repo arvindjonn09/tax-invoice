@@ -107,6 +107,12 @@ test("accountant inspects GST composition, ageing and cash, and exports CSV", as
   const customer = await write<{ id: string }>(page, "/api/customers", {
     name,
   });
+  // Two jobs, so the profit view's job selector has a choice (#58).
+  for (const n of [1, 2])
+    await write(page, "/api/jobs", {
+      title: `Synthetic reported job ${n}`,
+      customerId: customer.id,
+    });
   const draft = await write<{ id: string }>(page, "/api/invoices", {
     customerId: customer.id,
     priceEntry: "exclusive",
@@ -249,6 +255,26 @@ test("accountant inspects GST composition, ageing and cash, and exports CSV", as
     page.getByRole("heading", { name: "What makes up these figures" }),
   ).toBeVisible();
   await audit(page, testInfo, "reports-profit");
+
+  // Choosing a job keeps every job in the selector, and the export follows
+  // the choice (#58).
+  const jobSelect = page.getByLabel("Job", { exact: true });
+  const options = jobSelect.locator("option");
+  await expect(options.nth(2)).toBeAttached();
+  const optionCount = await options.count();
+  const chosen = (await options.nth(1).getAttribute("value"))!;
+  const filtered = page.waitForResponse(
+    (r) =>
+      r.url().includes("/api/reports/profitability") &&
+      r.url().includes(`jobId=${chosen}`),
+  );
+  await jobSelect.selectOption(chosen);
+  await filtered;
+  await expect(page.getByRole("link", { name: "Export CSV" })).toHaveAttribute(
+    "href",
+    new RegExp(`jobId=${chosen}`),
+  );
+  await expect(options).toHaveCount(optionCount);
 });
 
 test("report views follow each role; workers get no reports", async ({

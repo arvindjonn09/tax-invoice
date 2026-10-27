@@ -10,8 +10,16 @@ export async function sourceLabels(
   ids: readonly string[],
 ) {
   const unique = [...new Set(ids)];
-  const [invoices, bills, credits, expenses, adjustments, timesheets] =
-    await Promise.all([
+  const [
+    invoices,
+    bills,
+    credits,
+    expenses,
+    adjustments,
+    timesheets,
+    receipts,
+    payments,
+  ] = await Promise.all([
       tx.invoice.findMany({
         where: { companyId, id: { in: unique } },
         select: {
@@ -50,6 +58,21 @@ export async function sourceLabels(
           employee: { select: { name: true } },
         },
       }),
+      // Cash-basis GST lines come from the settlement itself.
+      tx.customerReceipt.findMany({
+        where: { companyId, id: { in: unique } },
+        select: {
+          id: true,
+          kind: true,
+          method: true,
+          reference: true,
+          customer: { select: { name: true } },
+        },
+      }),
+      tx.supplierPayment.findMany({
+        where: { companyId, id: { in: unique } },
+        select: { id: true, method: true, reference: true, payeeName: true },
+      }),
     ]);
   const labels = new Map<string, SourceLabel>();
   for (const i of invoices)
@@ -87,6 +110,18 @@ export async function sourceLabels(
       type: "timesheet",
       reference: t.workDate.toISOString().slice(0, 10),
       party: t.employee.name,
+    });
+  for (const r of receipts)
+    labels.set(r.id, {
+      type: r.kind === "refund" ? "customer_refund" : "customer_receipt",
+      reference: r.reference ?? r.method,
+      party: r.customer.name,
+    });
+  for (const p of payments)
+    labels.set(p.id, {
+      type: "supplier_payment",
+      reference: p.reference ?? p.method,
+      party: p.payeeName,
     });
   return labels;
 }
