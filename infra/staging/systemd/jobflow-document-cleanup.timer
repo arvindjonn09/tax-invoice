@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily JobFlow document cleanup
+[Timer]
+OnCalendar=*-*-* 03:15:00 Australia/Sydney
+Persistent=true
+RandomizedDelaySec=300
+[Install]
+WantedBy=timers.target

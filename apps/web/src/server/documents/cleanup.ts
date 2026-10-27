@@ -1,12 +1,12 @@
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
-import { lockRow } from "../db/locks";
 import type { ObjectStore } from "./store";
 
 /**
  * Unattached uploads (#137). A document that was uploaded but never attached
  * to an expense, bill, work evidence or anything else (an abandoned form, a
  * failed attach) isn't a business record: nothing in the books points to it.
- * After the grace period it is deleted, object first, with an audit event.
+ * After the grace period its row is deleted with an audit event and a durable
+ * storage-deletion outbox entry; the object is removed after commit.
  * Attached documents are never touched: every table that references
  * `documents` is read from the database catalog, so a new one is covered
  * without changing this code, and the foreign keys refuse the delete anyway.
@@ -99,8 +99,10 @@ export async function cleanUnattachedDocuments(
       throw new Error("Document references not found; refusing to clean up");
   const attached = attachedSql(references);
   const cutoff = new Date(now.getTime() - graceDays * DAY_MS);
-  const candidates = await db.$queryRawUnsafe<{ id: string }[]>(
-    `SELECT d.id FROM documents d
+  const candidates = await db.$queryRawUnsafe<
+    { id: string; company_id: string }[]
+  >(
+    `SELECT d.id, d.company_id FROM documents d
      WHERE d.created_at < $1 AND NOT (${attached})
      ORDER BY d.created_at, d.id LIMIT $2`,
     cutoff,
@@ -124,10 +126,18 @@ export async function cleanUnattachedDocuments(
     const short = kind.slice(0, 40);
     if (!result.errors.includes(short)) result.errors.push(short);
   };
-  for (const { id } of candidates) {
+  // Retry the durable backlog even when its document row is already gone.
+  const backlog = await db.documentDeleteRetry.findMany({
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
+  });
+  if (!dryRun)
+    for (const pending of backlog)
+      await finishDelete(pending.id, pending.objectKey);
+  for (const { id, company_id: companyId } of candidates) {
     let done: Awaited<ReturnType<typeof deleteOne>>;
     try {
-      done = await deleteOne(id);
+      done = await deleteOne(id, companyId);
     } catch (error) {
       note(error);
       // One database error doesn't stop the batch; the row is still there
@@ -142,10 +152,25 @@ export async function cleanUnattachedDocuments(
     result.deleted.push(done.summary);
     // The file goes only after the row's delete has committed, so a failure
     // can never leave a row that points to a missing file.
-    if (done.objectKey && !(await deleteObject(done.objectKey)))
-      result.objectsLeft += 1;
+    if (done.objectKey) await finishDelete(id, done.objectKey);
   }
+  result.objectsLeft = await db.documentDeleteRetry.count();
   return result;
+
+  async function finishDelete(id: string, key: string) {
+    try {
+      if (await deleteObject(key))
+        await db.documentDeleteRetry.deleteMany({ where: { id } });
+      else
+        await db.documentDeleteRetry.updateMany({
+          where: { id },
+          data: { attemptCount: { increment: 1 }, lastAttemptAt: now },
+        });
+    } catch (error) {
+      note(error);
+      result.failed++;
+    }
+  }
 
   async function deleteObject(key: string): Promise<boolean> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -162,13 +187,13 @@ export async function cleanUnattachedDocuments(
     return false;
   }
 
-  async function deleteOne(id: string) {
+  async function deleteOne(id: string, companyId: string) {
     return db.$transaction(
       async (tx) => {
         // FOR UPDATE: the same lock bills and expenses take to attach, and it
         // conflicts with the KEY SHARE lock any new referencing row takes, so
         // nothing can attach this document until we commit.
-        await lockRow(tx, "documents", id);
+        await tx.$executeRaw`SELECT jobflow_lock_document_for_cleanup(${companyId}::uuid,${id}::uuid)`;
         const [row] = await tx.$queryRawUnsafe<
           {
             id: string;
@@ -193,6 +218,13 @@ export async function cleanUnattachedDocuments(
           sizeBytes: row.size_bytes,
         };
         if (dryRun) return { summary, objectKey: null };
+        await tx.documentDeleteRetry.create({
+          data: {
+            id: row.id,
+            companyId: row.company_id,
+            objectKey: row.object_key,
+          },
+        });
         await tx.document.delete({ where: { id: row.id } });
         await tx.auditEvent.create({
           data: {

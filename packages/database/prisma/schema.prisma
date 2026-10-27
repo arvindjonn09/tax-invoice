@@ -110,6 +110,7 @@ model AuthRateLimit {
 }
 
 model Company {
+  documentDeleteRetries DocumentDeleteRetry[]
   id               String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name             String                   @db.VarChar(200)
   isDemo           Boolean                  @default(false) @map("is_demo")
@@ -1671,4 +1672,18 @@ model SubcontractorBillSubmissionItem {
 
   @@unique([submissionId, position], map: "subcontractor_bill_submission_items_position_key")
   @@map("subcontractor_bill_submission_items")
+}
+
+
+/// Private storage deletion outbox; never returned by web APIs/exports (#170).
+model DocumentDeleteRetry {
+ id String @id @db.Uuid
+ companyId String @map("company_id") @db.Uuid
+ objectKey String @unique @map("object_key") @db.VarChar(500)
+ attemptCount Int @default(0) @map("attempt_count")
+ lastAttemptAt DateTime? @map("last_attempt_at") @db.Timestamptz(3)
+ createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+ company Company @relation(fields:[companyId],references:[id],onDelete:NoAction,onUpdate:NoAction)
+ @@unique([companyId,id])
+ @@map("document_delete_retries")
 }

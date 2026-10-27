@@ -33,3 +33,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 REVOKE UPDATE, DELETE, TRUNCATE ON audit_events FROM jobflow_app;
 -- Migration bookkeeping belongs to the owner.
 REVOKE ALL ON _prisma_migrations FROM jobflow_app;
+
+-- Private maintenance channel (#170), reapplied after blanket grants.
+REVOKE DELETE ON documents FROM jobflow_app;
+REVOKE ALL ON document_delete_retries FROM jobflow_app;
+REVOKE ALL ON FUNCTION jobflow_lock_document_for_cleanup(uuid,uuid) FROM jobflow_app;

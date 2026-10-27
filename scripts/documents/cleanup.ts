@@ -34,8 +34,15 @@ async function main() {
   const graceDays = grace === undefined ? UNATTACHED_GRACE_DAYS : Number(grace);
   const store = storeFromEnvironment();
   if (!store) throw new Error("Document storage isn't configured");
+  if (
+    ["staging", "production"].includes(process.env.APP_ENV ?? "") &&
+    !process.env.MAINTENANCE_DATABASE_URL
+  )
+    throw new Error("Document cleanup needs MAINTENANCE_DATABASE_URL");
   const db = createDatabaseClient(
-    requireDatabaseUrl(process.env.DATABASE_URL).toString(),
+    requireDatabaseUrl(
+      process.env.MAINTENANCE_DATABASE_URL ?? process.env.DATABASE_URL,
+    ).toString(),
   );
   try {
     const result = await cleanUnattachedDocuments(db, store, {
