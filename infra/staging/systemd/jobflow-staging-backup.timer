@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly JobFlow staging backup (02:15 Australia/Sydney)
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 Australia/Sydney
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
