@@ -2660,3 +2660,64 @@ describe("bounded report sources (#157)", () => {
     expect(future.events).toEqual([]);
   });
 });
+
+describe("reversing a correction of a paid expense (#169)", () => {
+  it("reverses the correction's cash-basis claim too", async () => {
+    const f = await fixture(true, "cash");
+    const expenses = expenseHandlers(() => db);
+    const [originalId] = f.expenseIds; // $150 + $15 taxable, paid at purchase
+    const today = async () =>
+      (
+        await (
+          await reportHandlers(() => db).gst({
+            actor: f.actor,
+            request: new Request(
+              `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+            ),
+            context: undefined,
+          })
+        ).json()
+      ).oneB as string;
+    const reverse = (id: string) =>
+      expenses.reverse({
+        actor: f.actor,
+        request: req({ note: "Synthetic correction" }),
+        context: context(id),
+      });
+    expect((await reverse(originalId!)).status).toBe(201);
+    const corrected = await expenses.create({
+      actor: f.actor,
+      request: req({
+        jobId: f.job.id,
+        category: "materials",
+        description: "Synthetic purchase (50% business use)",
+        purchasedOn: "2026-07-15",
+        priceEntry: "exclusive",
+        amountCents: "15000",
+        taxCode: "TAXABLE_10",
+        creditablePercent: "50",
+        receiptDocumentId: await f.doc(),
+        settlement: "paid_at_purchase",
+        paymentMethod: "card",
+        correctsExpenseId: originalId,
+      }),
+      context: undefined,
+    });
+    expect(corrected.status, await corrected.clone().text()).toBe(201);
+    const { id: correctionId } = (await corrected.json()) as { id: string };
+    expect(
+      (
+        await expenses.decide({
+          actor: f.actor,
+          request: req({ decision: "approve", evidenceVerified: true }),
+          context: context(correctionId),
+        })
+      ).status,
+    ).toBe(200);
+    // Reversal −1500 and correction +750, both dated today.
+    expect(await today()).toBe("-750");
+    expect((await reverse(correctionId)).status).toBe(201);
+    // The correction's 750 comes back off: the chain nets to the reversal.
+    expect(await today()).toBe("-1500");
+  });
+});
