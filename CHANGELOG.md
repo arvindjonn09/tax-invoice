@@ -8,6 +8,8 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 - Subcontractors send their own tax invoices for accepted work; the office verifies them and approves them into supplier bills (#139).
 - Deployment and rollback runbook, and user guides for invoices, payments and GST (#66).
+- Debtor and creditor ageing as at any day, cash movement (not profit), and accountant CSV exports for GST, profit, ageing and cash, for owners and accountants only (#56).
+- Report reads load only the documents active in the range, and drill-down events are paged (#157).
 
 ## M5 Production pilot (in progress)
 
