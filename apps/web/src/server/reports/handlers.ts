@@ -101,9 +101,13 @@ export function reportHandlers(db: () => PrismaClient) {
               },
             });
             if (finalized?.revisions[0])
+              // The stored snapshot pages like a draft (#157).
               return privateJson({
                 range: query,
-                ...(finalized.revisions[0].report as Record<string, unknown>),
+                ...page(
+                  finalized.revisions[0].report as { events: unknown[] },
+                  parsed.data,
+                ),
                 finalization: {
                   periodId: finalized.id,
                   revision: finalized.revisions[0].revision,
