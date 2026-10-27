@@ -16,7 +16,7 @@ x-logging: &logging
 services:
   postgres:
     <<: *logging
-    image: postgres:16.15-bookworm
+    image: postgres:16.15-bookworm@sha256:d81f7b51697014367236d07ec58b54153fc28f828b72bf247fe5c7487520bcb0
     restart: unless-stopped
     env_file: env/postgres.env
     volumes:
@@ -77,7 +77,7 @@ services:
 
   nginx:
     <<: *logging
-    image: nginx:1.28.0-bookworm
+    image: nginx:1.28.0-bookworm@sha256:552e7481ca93ffccd046aa658dbbed22caefbc09c66fa7cd247cbb90b8a5c609
     restart: unless-stopped
     env_file: env/nginx.env
     depends_on: [web]
@@ -123,7 +123,7 @@ services:
   #   docker compose -f infra/staging/compose.yml --profile certbot run --rm certbot \
   #     certonly --webroot -w /var/www/acme -d "$JOBFLOW_DOMAIN" --email "$ACME_EMAIL" --agree-tos --no-eff-email
   certbot:
-    image: certbot/certbot:v4.0.0
+    image: certbot/certbot:v4.0.0@sha256:0e40d51116b9e1058466aa2fd8f342b1d676dfbc17e47877a9e02c3e2460580a
     profiles: [certbot]
     volumes:
       - letsencrypt:/etc/letsencrypt
