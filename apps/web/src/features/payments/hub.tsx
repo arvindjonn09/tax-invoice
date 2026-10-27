@@ -6,6 +6,7 @@ import { Field } from "@/components/form/field";
 import { Button } from "@/components/ui/button";
 import { formatAudCents } from "@/components/money-display";
 import { useRemote } from "@/components/data/use-remote";
+import { SubmissionQueue } from "./submissions";
 import {
   BILL_STATUS,
   type Bill,
@@ -91,7 +92,7 @@ function Empty({ title, text }: { title: string; text: string }) {
 const LINK =
   "inline-flex min-h-11 max-w-full items-center font-semibold underline [overflow-wrap:anywhere]";
 
-function Bills() {
+function Bills({ canDecide }: { canDecide: boolean }) {
   const [status, setStatus] = useState("live");
   const [page, setPage] = useState(1);
   const { data, error, reload } = useRemote<{
@@ -103,6 +104,7 @@ function Bills() {
   );
   return (
     <>
+      <SubmissionQueue canDecide={canDecide} onDecided={reload} />
       <div className="grid items-end gap-4 rounded-lg border bg-card p-4 sm:grid-cols-3">
         <Field id="bill-status-filter" label="Show">
           {(control) => (
@@ -362,7 +364,7 @@ export function PaymentsHub({
           <p className="text-muted-foreground">{current.description}</p>
         </div>
         {current.value === "bills" ? (
-          <Bills />
+          <Bills canDecide={canRecordBills} />
         ) : current.value === "payments" ? (
           <Payments />
         ) : (

@@ -97,6 +97,38 @@ export async function latestAdjustmentDay(
   ].flatMap((date) => (date ? [toDay(date)] : []));
   return days.length > 0 ? days.sort().at(-1)! : null;
 }
+/**
+ * The supplier-side counterpart (#140): the latest live supplier credit's
+ * received date or cash GST correction day on a bill, or null. Payment
+ * attribution uses the bill's current credits, so on the cash basis a
+ * payment may not be dated before them.
+ */
+export async function latestBillAdjustmentDay(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  billId: string,
+): Promise<string | null> {
+  const [credits, corrections, voids] = await Promise.all([
+    tx.supplierCredit.aggregate({
+      where: { companyId, billId, voidedAt: null },
+      _max: { receivedOn: true },
+    }),
+    tx.supplierCreditGstAdjustment.aggregate({
+      where: { companyId, billId },
+      _max: { adjustedOn: true },
+    }),
+    tx.supplierPaymentGstAdjustment.aggregate({
+      where: { companyId, billId },
+      _max: { adjustedOn: true },
+    }),
+  ]);
+  const days = [
+    credits._max.receivedOn,
+    corrections._max.adjustedOn,
+    voids._max.adjustedOn,
+  ].flatMap((date) => (date ? [toDay(date)] : []));
+  return days.length > 0 ? days.sort().at(-1)! : null;
+}
 /** Call only while holding the invoice/bill locks used for money allocation. */
 export async function receiptDateProblem(
   tx: Prisma.TransactionClient,
@@ -120,6 +152,23 @@ export async function supplierPaymentDateProblem(
 ) {
   const rows = await tx.supplierPaymentAllocation.findMany({
     where: { companyId, billId },
+    include: { payment: true },
+  });
+  return settlementHistoryProblem(total, [
+    ...supplierPaymentHistory(rows),
+    candidate,
+  ]);
+}
+/** The same check for a payment to an on-account expense (#141). */
+export async function expensePaymentDateProblem(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  expenseId: string,
+  total: bigint,
+  candidate: DatedSettlement,
+) {
+  const rows = await tx.supplierPaymentExpenseAllocation.findMany({
+    where: { companyId, expenseId },
     include: { payment: true },
   });
   return settlementHistoryProblem(total, [
