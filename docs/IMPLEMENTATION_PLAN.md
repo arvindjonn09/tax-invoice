@@ -80,7 +80,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [x] Database and storage backup/restore test — #63: AES-256-GCM encrypted backups of the database (streamed `pg_dump`) and every document, manifest checksums, empty-target restore, 30 daily + 12 monthly retention, nightly systemd timer with off-site copy, and a recorded restore drill ([runbook](ops/backups.md), [drills](ops/restore-drills/))
 - [ ] Staging deployment (Docker, HTTPS) and smoke test with synthetic data — config, image build and CI checks in #64 ([docs/ops/staging.md](ops/staging.md)); the first deploy is an owner step
 - [ ] Deployment, rollback and user documentation — runbook ([ops/deployment.md](ops/deployment.md)), user guides ([user/](user/)) and [CHANGELOG](../CHANGELOG.md) in #66; commands still to be verified on the first staging deploy
-- [ ] Accountant review of GST outputs before real use
+- [ ] Accountant review of GST outputs before real use — review pack and generator test ready (#67, docs/research/accountant-review-pack.md); sign-off pending
 
 ## Acceptance
 Invoice $2,500 ex GST; costs $1,450; profit $1,050; margin 42%; customer receipt $1,000 leaves $1,500 outstanding
