@@ -86,3 +86,5 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 | Date | Environment | Commit | Backup before | Checks                                                       |
 | ---- | ----------- | ------ | ------------- | ------------------------------------------------------------ |
 | —    | staging     | —      | —             | First deploy waits for the owner to provision staging (#64). |
+
+- Bound PDF rendering input, pages, output, concurrency and cooperative layout time; preserve text-only rendering and typed CSV protections (#70).

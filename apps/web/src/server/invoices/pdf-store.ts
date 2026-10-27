@@ -14,6 +14,7 @@ import type { ObjectStore } from "../documents/store";
 import { clientIp, throttle } from "../http/throttle";
 import { uuidOrNull } from "../http/fields";
 import {
+  PdfLimitError,
   PDF_RENDERER_VERSION,
   invoiceDocument,
   pdfInput,
@@ -147,6 +148,14 @@ export function invoicePdfHandlers(deps: PdfDeps) {
         return privateJson(
           { error: "Issue the invoice first; drafts have no PDF" },
           { status: 409 },
+        );
+      if (error instanceof PdfLimitError)
+        return privateJson(
+          {
+            error:
+              "PDF generation is temporarily unavailable. Try again later.",
+          },
+          { status: 503, headers: { "retry-after": "5" } },
         );
       if (error instanceof StorageUnavailable)
         return privateJson(
