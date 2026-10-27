@@ -11,6 +11,7 @@ import { withAudit } from "../../../../../packages/database/src/index";
 import { z } from "zod";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 import { invalid } from "../company/handlers";
+import { Refusal, inTransaction } from "../jobs/handlers";
 import { financialEvents } from "../reports/events";
 import {
   AgeingQuery,
@@ -47,38 +48,54 @@ async function sourceLabels(
   ids: readonly string[],
 ) {
   const unique = [...new Set(ids)];
-  const [invoices, bills, credits, expenses, adjustments] = await Promise.all([
-    tx.invoice.findMany({
-      where: { companyId, id: { in: unique } },
-      select: {
-        id: true,
-        kind: true,
-        reference: true,
-        number: true,
-        customer: { select: { name: true } },
-      },
-    }),
-    tx.supplierBill.findMany({
-      where: { companyId, id: { in: unique } },
-      select: { id: true, supplierName: true, supplierReference: true },
-    }),
-    tx.supplierCredit.findMany({
-      where: { companyId, id: { in: unique } },
-      select: {
-        id: true,
-        supplierReference: true,
-        bill: { select: { supplierName: true } },
-      },
-    }),
-    tx.expense.findMany({
-      where: { companyId, id: { in: unique } },
-      select: { id: true, supplierName: true, description: true },
-    }),
-    tx.gstManualAdjustment.findMany({
-      where: { companyId, id: { in: unique } },
-      select: { id: true, reason: true },
-    }),
-  ]);
+  const [invoices, bills, credits, expenses, adjustments, receipts, payments] =
+    await Promise.all([
+      tx.invoice.findMany({
+        where: { companyId, id: { in: unique } },
+        select: {
+          id: true,
+          kind: true,
+          reference: true,
+          number: true,
+          customer: { select: { name: true } },
+        },
+      }),
+      tx.supplierBill.findMany({
+        where: { companyId, id: { in: unique } },
+        select: { id: true, supplierName: true, supplierReference: true },
+      }),
+      tx.supplierCredit.findMany({
+        where: { companyId, id: { in: unique } },
+        select: {
+          id: true,
+          supplierReference: true,
+          bill: { select: { supplierName: true } },
+        },
+      }),
+      tx.expense.findMany({
+        where: { companyId, id: { in: unique } },
+        select: { id: true, supplierName: true, description: true },
+      }),
+      tx.gstManualAdjustment.findMany({
+        where: { companyId, id: { in: unique } },
+        select: { id: true, reason: true },
+      }),
+      // Cash-basis GST lines come from the settlement itself.
+      tx.customerReceipt.findMany({
+        where: { companyId, id: { in: unique } },
+        select: {
+          id: true,
+          kind: true,
+          method: true,
+          reference: true,
+          customer: { select: { name: true } },
+        },
+      }),
+      tx.supplierPayment.findMany({
+        where: { companyId, id: { in: unique } },
+        select: { id: true, method: true, reference: true, payeeName: true },
+      }),
+    ]);
   const labels = new Map<string, SourceLabel>();
   for (const i of invoices)
     labels.set(i.id, {
@@ -109,6 +126,18 @@ async function sourceLabels(
       type: "gst_adjustment",
       reference: a.reason,
       party: "",
+    });
+  for (const r of receipts)
+    labels.set(r.id, {
+      type: r.kind === "refund" ? "customer_refund" : "customer_receipt",
+      reference: r.reference ?? r.method,
+      party: r.customer.name,
+    });
+  for (const p of payments)
+    labels.set(p.id, {
+      type: "supplier_payment",
+      reference: p.reference ?? p.method,
+      party: p.payeeName,
     });
   return labels;
 }
@@ -281,6 +310,23 @@ export async function buildExport(
   }
   // GST: a finalised period exports its locked revision, exactly as shown.
   const locked = await finalised(tx, companyId, range);
+  // Like period finalisation, a draft whose cash-basis GST couldn't be
+  // replayed safely is refused rather than exported with reduced totals.
+  const draft = locked
+    ? null
+    : await financialEvents(tx, companyId, { since: range.from });
+  const omitted = draft?.warnings.filter((warning) => warning.omittedGst);
+  if (omitted?.length)
+    throw new Refusal(
+      privateJson(
+        {
+          error:
+            "Some cash-basis GST is left out until these records are reviewed. Nothing was exported.",
+          warnings: omitted,
+        },
+        { status: 409 },
+      ),
+    );
   const gst = locked
     ? {
         status: "finalised",
@@ -299,10 +345,7 @@ export async function buildExport(
     : {
         status: "draft",
         revision: null,
-        ...draftGstReport(
-          (await financialEvents(tx, companyId, { since: range.from })).events,
-          range,
-        ),
+        ...draftGstReport(draft!.events, range),
       };
   if (name === "gst-summary") {
     const label = "Draft BAS/GST summary — not lodged";
@@ -394,34 +437,37 @@ export function exportHandlers(db: () => PrismaClient) {
       params,
     );
     if (!checked.success) return invalid(checked.error);
-    const result = await withAudit(
-      db(),
-      async (tx, audit) => {
-        const out = await buildExport(tx, actor.companyId, name.data, params);
-        if (out instanceof z.ZodError) return out;
-        await audit({
-          companyId: actor.companyId,
-          actorUserId: actor.userId,
-          action: "report.exported",
-          target: { type: "report_export", id: name.data },
-          after: { export: name.data, params, rows: out.rows.length },
-        });
-        return out;
-      },
-      { isolationLevel: "RepeatableRead" },
-    );
-    if (result instanceof z.ZodError) return invalid(result);
-    return new Response(
-      csvStream(result.columns, result.rows as Iterable<never>),
-      {
-        headers: {
-          "content-type": "text/csv; charset=utf-8",
-          "content-disposition": `attachment; filename="${result.filename}"`,
-          "cache-control": "private, no-store",
-          "x-content-type-options": "nosniff",
+    // An incomplete draft GST export ends in a Refusal (nothing audited).
+    return inTransaction(async () => {
+      const result = await withAudit(
+        db(),
+        async (tx, audit) => {
+          const out = await buildExport(tx, actor.companyId, name.data, params);
+          if (out instanceof z.ZodError) return out;
+          await audit({
+            companyId: actor.companyId,
+            actorUserId: actor.userId,
+            action: "report.exported",
+            target: { type: "report_export", id: name.data },
+            after: { export: name.data, params, rows: out.rows.length },
+          });
+          return out;
         },
-      },
-    );
+        { isolationLevel: "RepeatableRead" },
+      );
+      if (result instanceof z.ZodError) return invalid(result);
+      return new Response(
+        csvStream(result.columns, result.rows as Iterable<never>),
+        {
+          headers: {
+            "content-type": "text/csv; charset=utf-8",
+            "content-disposition": `attachment; filename="${result.filename}"`,
+            "cache-control": "private, no-store",
+            "x-content-type-options": "nosniff",
+          },
+        },
+      );
+    });
   };
   return { run };
 }

@@ -26,6 +26,7 @@ Owners and accountants only. JSON reports need `ledger_report.read`; CSV exports
 - **Formula-safe text:** a text cell that starts with `=`, `+`, `-` or `@` (after leading whitespace or control characters), or with a control character, is prefixed with `'` so spreadsheets don't run it as a formula (#70).
 - **One snapshot:** each export reads one repeatable-read snapshot, records a `report.exported` audit event, then streams.
 - **Refused requests:** an invalid request returns 400 and reads and records nothing.
+- **Incomplete GST is refused:** if a draft GST export would leave out cash-basis GST (records that can't be replayed safely), `gst-summary` and `gst-lines` return 409 with the `warnings` to review, like period finalisation. Nothing is exported or audited.
 
 | Export | Query | Columns |
 |---|---|---|
@@ -40,6 +41,7 @@ Owners and accountants only. JSON reports need `ledger_report.read`; CSV exports
 **GST lines:**
 - `gst_cents` of `1A` lines sums to label 1A, and `1B` lines to 1B.
 - Credit notes, voids and corrections appear as their own signed lines on their own dates.
-- `source_type` is one of `invoice`, `credit_note`, `supplier_bill`, `supplier_credit`, `expense` or `gst_adjustment`.
+- `source_type` is one of `invoice`, `credit_note`, `supplier_bill`, `supplier_credit`, `expense`, `gst_adjustment`, or, on the cash basis, `customer_receipt`, `customer_refund` or `supplier_payment`.
+- For a receipt or payment, `source_reference` is its reference, or its payment method when it has none.
 
 **Draft only:** this is a draft for the accountant; JobFlow does not lodge anything.
