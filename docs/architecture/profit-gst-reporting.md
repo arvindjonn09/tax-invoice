@@ -131,3 +131,11 @@ This backend PR is **not completion of M4**. Remaining before closing
 sync after #146, #151 and #152 merge. Follow-on M4 work: #56 exports/ageing/cash, #57 real dashboard, #58 report UI,
 #142 late-evidence reclassification and #59 end-to-end reconciliation. No UI,
 production deployment or accountant sign-off is included here.
+
+## Posting privileges (#166)
+
+The runtime role reads `gst_source_postings` but cannot insert, update, delete or truncate it. Only the three owner-installed source trigger functions execute as the migration owner. Their search paths put `pg_catalog` first and `pg_temp` last. The posting helper remains SECURITY INVOKER and has no PUBLIC/runtime EXECUTE grant; the trigger functions also have no PUBLIC/runtime EXECUTE grant, preventing reuse on attacker-owned temporary tables. Normal source inserts, allocations, voids and late entries still use the existing reporting gate and open-period checks.
+
+Migration `20261027110000_gst_posting_privileges` restricts existing installations; `runtime-role.sql` reapplies the restrictions after every deployment's blanket grants. Fully append-only records also lose UPDATE/DELETE/TRUNCATE grants. Draft/voidable document headers retain the operations their guards validate. Future append-only tables and posting triggers must extend these restrictions. This hardens the database runtime boundary; HTTP role/company/object checks remain required.
+
+The rollback is for empty disposable test databases only: it restores the previous insecure grant model and must not be applied to a live environment.
