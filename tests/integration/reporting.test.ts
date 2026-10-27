@@ -2601,6 +2601,42 @@ describe("bounded report sources (#157)", () => {
     expect(tooBig.status).toBe(400);
   });
 
+  it("pages a finalised period's stored events too", async () => {
+    const f = await fixture(true, "non_cash");
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({
+        from: "2026-07-01",
+        to: "2026-09-30",
+        note: "Synthetic paging check",
+      }),
+      context: undefined,
+    });
+    expect(close.status).toBe(201);
+    const get = async (query: string) =>
+      (
+        await reportHandlers(() => db).gst({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/reports?from=2026-07-01&to=2026-09-30${query}`,
+          ),
+          context: undefined,
+        })
+      ).json();
+    const all = await get("");
+    const second = await get("&eventsPageSize=1&eventsPage=2");
+    expect(all.finalization).toBeDefined();
+    expect(all.eventsPage.total).toBeGreaterThan(1);
+    expect(second.events).toEqual([all.events[1]]);
+    expect(second.eventsPage).toEqual({
+      page: 2,
+      pageSize: 1,
+      total: all.eventsPage.total,
+    });
+    expect(second.oneA).toBe(all.oneA);
+    expect(second.finalization).toEqual(all.finalization);
+  });
+
   it("reads only documents active in the window", async () => {
     const { financialEvents } =
       await import("../../apps/web/src/server/reports/events");
