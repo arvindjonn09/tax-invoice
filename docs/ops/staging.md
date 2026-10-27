@@ -33,7 +33,7 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
 ## Health checks
 
 - **`GET /api/health` (liveness):** says the process is up. The image's `HEALTHCHECK` uses it.
-- **`GET /api/health/ready` (readiness):** 200 only when the database answers a query and document storage is configured, otherwise 503. It never says which part failed. The deploy smoke test uses it.
+- **`GET /api/health/ready` (readiness):** 200 only when the database answers a query and document storage is configured, otherwise 503. It never says which part failed. Concurrent probes share one result for two seconds to avoid repeated database checks; the response itself is never cached by clients. The deploy smoke test uses it.
 
 ## Logs and alerts
 
@@ -126,6 +126,6 @@ The job then polls `/api/health/ready` until it answers 200.
 
 ## Known follow-ups before production
 
-- **Pin images by digest.** On the host, pin the base images and the Compose images by digest (`NODE_IMAGE` build argument, plus `image: …@sha256:…`). CI tests the image built from the same tags.
+- **Image digest refresh.** The Dockerfile syntax and Node base, plus PostgreSQL, nginx and Certbot in Compose, are pinned to registry multi-architecture digests (verified against Docker Hub on 28 October 2026). Update each tag and digest together after reviewing the release and running the image, staging and security checks. Do not override `NODE_IMAGE` with an unpinned value on the host.
 - **Migration owner role.** The migration owner is the image's bootstrap role, which is a superuser. For production, create a non-superuser owner and run migrations as it.
 - **Cloud metadata.** Block the instance metadata address (169.254.169.254) from containers on the host, so a future SSRF can't reach cloud credentials.

@@ -39,11 +39,18 @@ describe("staging Compose (#64)", () => {
     expect(service("migrate")).toMatch(/env_file: env\/migrate\.env/);
   });
 
-  it("pins every image to a version", () => {
+  it("pins every external image and both Dockerfile bases by digest (#168)", () => {
     for (const [, image] of compose.matchAll(/image: (\S+)/g)) {
-      expect(image).toMatch(/:[\w.-]+$/);
-      expect(image).not.toMatch(/:latest$/);
+      if (image!.startsWith("jobflow-")) continue; // locally built release image
+      expect(image).toMatch(/:[\w.-]+@sha256:[a-f0-9]{64}$/);
     }
+    expect(dockerfile).toMatch(
+      /^# syntax=docker\/dockerfile:1@sha256:[a-f0-9]{64}$/m,
+    );
+    expect(dockerfile).toMatch(
+      /^ARG NODE_IMAGE=node:24-bookworm-slim@sha256:[a-f0-9]{64}$/m,
+    );
+    expect(dockerfile.match(/^FROM \$\{NODE_IMAGE\}/gm)).toHaveLength(2);
   });
 });
 
