@@ -1,7 +1,7 @@
 # Database and financial rules
 
 ## Tables
-companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, supplier_payment_gst_adjustments, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, receipt_gst_adjustments, gst_adjustments, documents, audit_events, idempotency_keys.
+companies, company_gst_registrations, gst_periods, users, memberships, user_invitations, customers, customer_contacts, locations, quotes, quote_items, jobs, job_visits, job_status_events, assignments, employees, employee_rate_history, timesheets, contractors, contractor_offers, contractor_acceptances, job_costs, supplier_bills, supplier_bill_items, supplier_payments, supplier_payment_allocations, supplier_payment_gst_adjustments, supplier_credits, supplier_credit_items, supplier_credit_gst_adjustments, supplier_payment_expense_allocations, supplier_payment_expense_gst_adjustments, invoices, invoice_items, invoice_credit_notes, customer_receipts, receipt_allocations, receipt_gst_adjustments, gst_adjustments, documents, audit_events, idempotency_keys.
 
 Each company-owned entity has company_id and unique ID; human job/invoice numbers unique per company. All date-times UTC with Australia/Sydney display; AUD cents stored as integer/BigInt with bounds and explicit rounding rules.
 
@@ -17,6 +17,40 @@ Every invoice, quote, bill and expense line stores: tax code, GST rate snapshot,
 - Margin = profit / invoiced job revenue; N/A for zero.
 - Customer due = invoices (GST-inclusive) - credits - allocated receipts.
 - Supplier due = bills (GST-inclusive) - credits - allocated supplier payments.
+- On-account expenses (#141): an approved original expense settled "on account" owes its supplier its GST-inclusive total, less live supplier payments allocated to it.
+  - A supplier payment settles either bills or on-account expenses, never both in one payment, and pays one supplier: the same contractor, or the same supplier name.
+  - The rules match bills: an idempotency key, no overpayment, cash-basis input tax credit attributed per allocation, and append-only corrections (`supplier_payment_expense_gst_adjustments`) when a payment is voided.
+  - **GST snapshot used for payments:** a payment attributes against the expense's live tax snapshot. After a cost-only reversal, that's the approved correction's creditable GST, or none if there isn't one.
+  - **Changes while payments exist:** a reversal of an on-account expense, and a correction of one (on submission and on approval), are refused while live payments are allocated. Void the payments first, then re-pay, so a claim already made never goes stale.
+  - **Payment dates:** a payment can't be dated before the purchase date, or before the expense's latest GST adjustment.
+  - **Unnamed suppliers:** expenses without a supplier name are paid one at a time.
+  - **Reports (#54):**
+    - The cash moves on the payment date.
+    - On the cash basis, the attributed input tax credit moves on the payment date too.
+    - A void reverses on the void day. Its correction is dated on its own `adjusted_on`.
+    - Allocations and corrections post to `gst_source_postings` like bill payments, and payment dates follow the same date-ordering check.
+  - A supplier-credit reversal cancels the balance. It's refused while live payments are allocated, so void them first. Payments and reversals take the same expense row lock, so whichever comes first wins.
+  - A cost-only reversal leaves the supplier balance payable.
+- Subcontractor bills (#139): a subcontractor submits their own tax invoice for one of their accepted offers (`subcontractor_bill_submissions` and its items).
+  - **Submitting:** the subcontractor attaches a tax invoice or receipt they uploaded themselves, and the lines must be valid for their current GST registration. One pending submission is allowed per invoice number, with at most 20 pending per contractor. An invoice number already recorded as a bill is refused.
+  - **Deciding:** the office decides once (`bill.write`), and a trigger prevents edits, deletes, a second decision, or lines added afterwards. The office queue shows the agreed offer amount and what's already billed against it. Approval needs the reviewer to confirm the invoice's lines, GST and total match the attached tax invoice.
+    - Approval records the supplier bill through the same path as an office bill (#46): it uses the contractor's details, the offer link, and the office's evidence check and creditable share. The reviewer can set a partial claimable share, with a reason. GST lines are re-checked against the contractor's registration at that moment. The new bill is linked as `bill_id`. The approval note stays internal, as the bill's note.
+    - Rejection needs a note, and the subcontractor can then resubmit.
+  - **What the subcontractor sees:** only their own invoice, its status and the office's note. Never the job price, committed cost, or the bill's job cost or GST snapshot (T03).
+  - **Documents:** a document stays with its submission, even a rejected one. It can't back an expense, another bill or a credit, and a resubmission uses a new upload. The cleanup of unattached uploads (#137) treats it as attached.
+- Supplier credits (#140): an adjustment note against one bill. It snapshots the creditable GST it takes back, its non-creditable GST and the job cost it removes, all at the bill's own creditable share and worked out on the cumulative credited GST.
+  - **Non-cash basis:** for the purchaser, the creditable GST taken back is an *increasing* adjustment (s19-80; ATO "reduction in purchase price"). It's made whether or not a note is held, and is dated the later of the issue date and `received_on`.
+  - **Voids:** voiding a credit is a reversal dated on the void (`voided_at`, in Sydney time). It never rewrites the earlier period.
+  - **Overcredit:** a credit can't take the bill's ex-GST amount, its GST, or what's still owing below zero. One live credit is allowed per supplier note reference on a bill.
+  - **Credits on paid bills:** money already paid comes back as a supplier refund, which isn't built yet. Until then, a credit on a fully paid bill can't be recorded, and the accountant must adjust it on the BAS manually.
+  - **Cash basis:** a bill's payments attribute against the net bill (incl GST − live credits). A credit, or its void, writes an append-only `supplier_credit_gst_adjustments` row when that changes what's attributed. The row is dated the latest of these: the credit's issue date, its received date, the GST posting date of the last live payment (`gst_source_postings.effective_on`, which is later than the payment date when the payment was entered late) and any earlier correction on the bill. On the cash basis, a supplier payment can't be dated before the bill's latest live credit or GST correction, which matches the rule for receipts (#54). A void's row is dated the day of the void. A row that *raises* the claim is, for the purchaser, a decreasing adjustment (the s19-80 credit itself is increasing), and needs a verified adjustment note when that adjustment is over $75.
+  - **Bills:** a bill with live credits can't be voided. Commitments from accepted offers follow the gross bill.
+  - **Reports (#54):**
+    - A credit lowers the job cost on `received_on`.
+    - On the non-cash basis, it lowers 1B on that date.
+    - On the cash basis, only its recorded adjustment rows count.
+    - A void reverses on the void day.
+    - Credits and their adjustment rows are GST sources with a `gst_source_postings` row. One dated inside a finalised period posts to the current open period, so a finalised period never changes.
 - Draft net GST = GST on sales (1A) - creditable GST on purchases (1B) ± adjustments, attributed per the company's accounting basis. This is a liability/asset, not profit.
 - Cash movement = receipts minus payments, **not** profit.
 - Do not count both timesheet and derived cost; link underlying record to cost once.
@@ -75,4 +109,6 @@ rather than silently repairing it; its test-only rollback removes only that inde
 ## Record retention and company export (#62)
 
 - **Retention:** `jobflow_guard_retention(years)` refuses deleting a row until that many years after its last change (the later of `created_at` and `updated_at`). It covers companies, memberships, customers, customer contacts, locations, jobs, job visits, assignments and contractors at **5 years**, and employees (workplace records) at **7 years**. Issued or approved financial records already can't be deleted at all. Unattached uploads (`documents`) stay deletable for cleanup (#137); attached ones are protected by the records that reference them. Truncate isn't covered, because it's an operator action outside the app.
-- **Export:** `GET /api/company/export` (`export.run`: owner, accountant) downloads every table that has `company_id`, found from the catalog so later tables are included. It also contains the company row and the members' id, email and name. It never includes credentials, invitation token hashes, storage object keys, idempotency internals or other companies' rows. Values are lossless: cents and numerics are strings, instants are ISO, dates are `YYYY-MM-DD`, and each column's type is in the manifest (`decodeCompanyExport`). The export reads one repeatable-read snapshot, is throttled, and is audited (`company.exported`). File contents of uploads are not included; their metadata and SHA-256 are.
+- **Export:** `GET /api/company/export` (`export.run` plus `employee.cost_rate.read`: currently owner only) downloads every table that has `company_id`, found from the catalog so later tables are included. It also contains the company row and the members' id, email and name. It never includes credentials, invitation token hashes, storage object keys, idempotency internals or other companies' rows. Values are lossless: cents and numerics are strings, instants are ISO, dates are `YYYY-MM-DD`, and each column's type is in the manifest (`decodeCompanyExport`). The export reads one repeatable-read snapshot, is throttled, and is audited (`company.exported`). File contents of uploads are not included; their metadata and SHA-256 are.
+
+Full company exports require both export and cost-rate access because rate history, timesheet snapshots and audit payloads include restricted employee data. Accountant report exports remain separate. Assignment retention uses the later of assigned_at and ended_at; missing retention timestamps fail closed.

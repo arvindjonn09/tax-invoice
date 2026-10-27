@@ -1,3 +1,4 @@
+import { requirePermission } from "@jobflow/authz";
 import {
   Prisma,
   type PrismaClient,
@@ -167,13 +168,16 @@ export function decodeCompanyExport(text: string) {
 }
 
 /**
- * Download the whole company as one JSON file (owner, accountant: export.run).
+ * Download the whole company as one JSON file (export.run + employee.cost_rate.read).
  * Throttled and audited; never cached.
  */
 export function companyExportHandler(
   db: () => PrismaClient,
 ): PolicyHandler<unknown> {
   return async ({ actor, request }) => {
+    // Full-fidelity records and audit JSON include protected rate snapshots.
+    // Require both permissions rather than partially redacting a full backup.
+    requirePermission(actor, "employee.cost_rate.read");
     await throttle(db(), "export", {
       userId: actor.userId,
       ip: clientIp(request.headers),

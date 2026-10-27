@@ -165,6 +165,51 @@ describe("record retention (#62)", () => {
   });
 });
 
+it("keeps assignments for five years after assignment or its later end", async () => {
+  const c = await customer("Synthetic assignment customer", new Date());
+  const job = await db.job.create({
+    data: {
+      companyId,
+      customerId: c.id,
+      number: 62,
+      reference: "JOB-62-RETENTION",
+      title: "Synthetic assignment retention",
+      createdBy: userIds.owner,
+    },
+  });
+  const employee = await db.employee.create({
+    data: {
+      companyId,
+      name: "Synthetic assigned worker",
+      createdBy: userIds.owner,
+    },
+  });
+  const assignment = (assignedAt: Date, endedAt: Date | null) =>
+    db.assignment.create({
+      data: {
+        companyId,
+        jobId: job.id,
+        employeeId: employee.id,
+        createdBy: userIds.owner,
+        assignedAt,
+        endedAt,
+        endedBy: endedAt ? userIds.owner : null,
+      },
+    });
+  const recent = await assignment(yearsAgo(0.1), null);
+  await expect(
+    db.assignment.delete({ where: { id: recent.id } }),
+  ).rejects.toThrow(/jobflow_retention_period/);
+  const endedRecently = await assignment(yearsAgo(6), yearsAgo(1));
+  await expect(
+    db.assignment.delete({ where: { id: endedRecently.id } }),
+  ).rejects.toThrow(/jobflow_retention_period/);
+  const old = await assignment(yearsAgo(7), yearsAgo(6));
+  await expect(
+    db.assignment.delete({ where: { id: old.id } }),
+  ).resolves.toMatchObject({ id: old.id });
+});
+
 describe("full company export (#62)", () => {
   const download = (who: Who) => {
     const h = new Headers(cookies[who]);
@@ -175,7 +220,8 @@ describe("full company export (#62)", () => {
     )(new Request(`${ORIGIN}/api/company/export`, { headers: h }), undefined);
   };
 
-  it("only owners and accountants can export", async () => {
+  it("requires permission to export protected cost-rate records", async () => {
+    expect((await download("accountant")).status).toBe(403);
     expect((await download("manager")).status).toBe(403);
     expect((await download("employee")).status).toBe(403);
   });
@@ -217,7 +263,7 @@ describe("full company export (#62)", () => {
       },
     });
 
-    const response = await download("accountant");
+    const response = await download("owner");
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("content-disposition")).toMatch(
@@ -285,6 +331,6 @@ describe("full company export (#62)", () => {
       await db.auditEvent.findFirst({
         where: { companyId, action: "company.exported" },
       }),
-    ).toMatchObject({ createdBy: userIds.accountant });
+    ).toMatchObject({ createdBy: userIds.owner });
   });
 });

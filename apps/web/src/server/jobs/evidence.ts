@@ -1,3 +1,4 @@
+import { lockDocumentClaim } from "../documents/claim";
 import { type Actor, notFound } from "@jobflow/authz";
 import { type JobStatus, transitionProblem } from "@jobflow/domain";
 import { z } from "zod";
@@ -228,10 +229,13 @@ export function evidenceHandlers(db: () => PrismaClient) {
               );
           }
           if (data.kind !== "note") {
-            const document = await tx.document.findFirst({
-              where: { id: data.documentId, companyId: actor.companyId },
-              include: { workEvidence: { select: { id: true } } },
-            });
+            // The claim lock bills and expenses take (and the unattached
+            // cleanup, #137), so a concurrent cleanup is a clean 400 here.
+            const document = await lockDocumentClaim(
+              tx,
+              actor.companyId,
+              data.documentId!,
+            );
             // Only the worker's own upload, an image, used once.
             if (
               !document ||
