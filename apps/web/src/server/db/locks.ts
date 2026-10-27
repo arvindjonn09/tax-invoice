@@ -32,20 +32,18 @@ export type Tx = Prisma.TransactionClient | PrismaClient;
 /**
  * Lock one row until the transaction ends, so the "before" snapshot an audit
  * event records is the value this update really replaced, never a stale read
- * from before a concurrent change committed. Pass `companyId` when `id` came
- * from the request, so another company's row is never locked (#53).
+ * from before a concurrent change committed. Company scope is mandatory for
+ * every call, so another company's row is never locked (#53).
  */
 export async function lockRow(
   tx: Tx,
   table: string,
   id: string,
-  companyId?: string,
+  companyId: string,
 ) {
   if (!LOCKABLE.has(table)) throw new Error(`Not lockable: ${table}`);
   // The table name comes from the allowlist above, never from input.
-  await (companyId
-    ? tx.$queryRaw`SELECT 1 FROM ${Prisma.raw(`"${table}"`)} WHERE id = ${id}::uuid AND company_id = ${companyId}::uuid FOR UPDATE`
-    : tx.$queryRaw`SELECT 1 FROM ${Prisma.raw(`"${table}"`)} WHERE id = ${id}::uuid FOR UPDATE`);
+  await tx.$queryRaw`SELECT 1 FROM ${Prisma.raw(`"${table}"`)} WHERE id = ${id}::uuid AND company_id = ${companyId}::uuid FOR UPDATE`;
 }
 
 /** A unique-constraint violation, optionally on a named index/constraint. */

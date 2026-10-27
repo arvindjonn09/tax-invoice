@@ -72,7 +72,7 @@ export function assignmentHandlers(db: () => PrismaClient) {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
           // Status is checked under the job lock, so it can't change meanwhile.
-          const current = await lockedJob(tx, job.id);
+          const current = await lockedJob(tx, job.id, actor.companyId);
           if (!isJobEditable(current.status))
             throw new Refusal(
               fail(409, `A ${current.status} job can't be assigned`),
@@ -93,7 +93,7 @@ export function assignmentHandlers(db: () => PrismaClient) {
           }
           // Deactivation uses the same employee row lock. Recheck after taking
           // it so a stale preflight read cannot assign an inactive employee.
-          await lockRow(tx, "employees", employeeId);
+          await lockRow(tx, "employees", employeeId, actor.companyId);
           const active = await tx.employee.findFirst({
             where: {
               id: employeeId,
@@ -147,7 +147,7 @@ export function assignmentHandlers(db: () => PrismaClient) {
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
         // Read under the job lock: two concurrent ends can't both apply.
-        await lockedJob(tx, job.id);
+        await lockedJob(tx, job.id, actor.companyId);
         const before = requireSameCompany(
           actor,
           safe

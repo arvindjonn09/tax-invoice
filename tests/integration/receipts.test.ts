@@ -665,7 +665,7 @@ describe("access", () => {
     });
     // Control: an unscoped lock would hold it.
     await db.$transaction(async (tx) => {
-      await lockRow(tx, "customer_receipts", outsiderReceiptId);
+      await tx.$queryRaw`SELECT 1 FROM customer_receipts WHERE id = ${outsiderReceiptId}::uuid FOR UPDATE`;
       await expect(lockedElsewhere()).rejects.toThrow();
     });
   });

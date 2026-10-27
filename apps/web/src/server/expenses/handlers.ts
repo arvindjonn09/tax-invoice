@@ -379,7 +379,7 @@ async function correctionOf(
     throw new Refusal(
       fail(400, "Only the office can correct an expense", field),
     );
-  await lockRow(tx, "expenses", originalId);
+  await lockRow(tx, "expenses", originalId, actor.companyId);
   const original = requireSameCompany(
     actor,
     await tx.expense.findUnique({
@@ -451,17 +451,21 @@ async function lockEligibility(
   jobId: string | null,
 ) {
   const job = jobId ? uuidOrNull(jobId) : null;
-  if (job) await lockRow(tx, "jobs", job);
+  if (job) await lockRow(tx, "jobs", job, actor.companyId);
   if (can(actor.role, "expense.read_all")) return;
   const employee = await tx.employee.findFirst({
     where: { companyId: actor.companyId, userId: actor.userId },
     select: { id: true },
   });
-  if (employee) await lockRow(tx, "employees", employee.id);
+  if (employee) await lockRow(tx, "employees", employee.id, actor.companyId);
 }
 
-async function lockedExpense(tx: Prisma.TransactionClient, id: string) {
-  await lockRow(tx, "expenses", id);
+async function lockedExpense(
+  tx: Prisma.TransactionClient,
+  id: string,
+  companyId: string,
+) {
+  await lockRow(tx, "expenses", id, companyId);
   return tx.expense.findUniqueOrThrow({
     where: { id },
     include: OFFICE_INCLUDE,
@@ -646,7 +650,7 @@ export function expenseHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
-          const before = await lockedExpense(tx, owned.id);
+          const before = await lockedExpense(tx, owned.id, actor.companyId);
           if (before.status !== "submitted")
             throw new Refusal(
               fail(
@@ -759,7 +763,7 @@ export function expenseHandlers(db: () => PrismaClient) {
     const { decision, note, evidenceVerified = false } = parsed.data;
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        const before = await lockedExpense(tx, owned.id);
+        const before = await lockedExpense(tx, owned.id, actor.companyId);
         if (before.status !== "submitted")
           throw new Refusal(
             fail(409, `This expense is already ${before.status}`),
@@ -810,7 +814,7 @@ export function expenseHandlers(db: () => PrismaClient) {
         // supplier payments take) and refuse while payments are allocated,
         // so a cash-basis claim already made never goes stale.
         if (before.correctsId) {
-          await lockRow(tx, "expenses", before.correctsId);
+          await lockRow(tx, "expenses", before.correctsId, actor.companyId);
           if (await livePayments(tx, actor.companyId, before.correctsId))
             throw new Refusal(
               fail(
@@ -895,7 +899,7 @@ export function expenseHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
-          const original = await lockedExpense(tx, owned.id);
+          const original = await lockedExpense(tx, owned.id, actor.companyId);
           if (original.status !== "approved" || original.reversesId)
             throw new Refusal(
               fail(409, "Only an approved expense can be reversed"),
@@ -931,7 +935,7 @@ export function expenseHandlers(db: () => PrismaClient) {
           // too: lock that original (correction, then original, as decide
           // does) and check its payments.
           if (original.correctsId)
-            await lockRow(tx, "expenses", original.correctsId);
+            await lockRow(tx, "expenses", original.correctsId, actor.companyId);
           const root = original.correctsId
             ? await tx.expense.findUnique({
                 where: { id: original.correctsId },
