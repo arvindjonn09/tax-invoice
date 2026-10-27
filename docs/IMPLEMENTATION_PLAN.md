@@ -82,3 +82,5 @@ Invoice $2,500 ex GST; costs $1,450; profit $1,050; margin 42%; customer receipt
 or $590 (registered) outstanding. Payments and recoverable GST do not change profit. See [GST.md](GST.md#combined-gst-and-profit-acceptance-fixture).
 
 At every milestone: implement schema, routes, UI, tests and documentation; do not mark done without passing tests. Avoid bulk unreviewed implementation.
+
+- #142 review follow-up: bills and late evidence claim purchase documents under the same lock; bill creation refuses a document already used as late evidence, including racing requests.

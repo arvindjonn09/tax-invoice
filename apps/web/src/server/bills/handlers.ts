@@ -570,7 +570,12 @@ export function billHandlers(db: () => PrismaClient) {
                 "Attach an uploaded tax invoice or receipt",
                 "documentId",
               );
-            if (found.expense || found.workEvidence || found.supplierBill)
+            if (
+              found.expense ||
+              found.workEvidence ||
+              found.supplierBill ||
+              found.billEvidence
+            )
               throw refuse(
                 400,
                 "That document is already attached to another record",

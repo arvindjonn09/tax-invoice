@@ -1330,3 +1330,79 @@ describe("late bill evidence (#142)", () => {
     expect(total("gst_purchases", "2026-08-05")).toBe(4_500n);
   });
 });
+
+describe("late-evidence document exclusivity (#142)", () => {
+  it("refuses creating another bill with a document already claimed as late evidence", async () => {
+    const recorded = await record({
+      contractorId,
+      issuedOn: "2026-07-15",
+      lines: [SUBCONTRACT_LINE],
+      documentId: await document(),
+    });
+    expect(recorded.status).toBe(201);
+    const evidenceId = await document();
+    const held = await r().evidence(
+      call("accountant", "POST", {
+        heldOn: "2026-08-05",
+        documentId: evidenceId,
+      }),
+      one(recorded.body.id),
+    );
+    expect(held.status).toBe(200);
+    const before = await db.supplierBill.count({ where: { companyId } });
+    const duplicate = await record({
+      contractorId,
+      issuedOn: "2026-08-06",
+      lines: [SUBCONTRACT_LINE],
+      documentId: evidenceId,
+      evidenceVerified: true,
+    });
+    expect(duplicate.status).toBe(400);
+    expect(await db.supplierBill.count({ where: { companyId } })).toBe(before);
+    expect(
+      await db.supplierBillEvidence.count({
+        where: { companyId, documentId: evidenceId },
+      }),
+    ).toBe(1);
+  });
+  it("serialises racing bill creation and late evidence on the same document", async () => {
+    const recorded = await record({
+      contractorId,
+      issuedOn: "2026-07-15",
+      lines: [SUBCONTRACT_LINE],
+      documentId: await document(),
+    });
+    const shared = await document();
+    const [bill, evidence] = await Promise.all([
+      record({
+        contractorId,
+        issuedOn: "2026-08-06",
+        lines: [SUBCONTRACT_LINE],
+        documentId: shared,
+        evidenceVerified: true,
+      }),
+      r().evidence(
+        call("accountant", "POST", {
+          heldOn: "2026-08-05",
+          documentId: shared,
+        }),
+        one(recorded.body.id),
+      ),
+    ]);
+    expect([
+      [201, 400],
+      [400, 200],
+    ]).toContainEqual([bill.status, evidence.status]);
+    expect(Number(bill.status === 201) + Number(evidence.status === 200)).toBe(
+      1,
+    );
+    expect(
+      (await db.supplierBill.count({
+        where: { companyId, documentId: shared },
+      })) +
+        (await db.supplierBillEvidence.count({
+          where: { companyId, documentId: shared },
+        })),
+    ).toBe(1);
+  });
+});
