@@ -92,6 +92,33 @@ services:
     networks: [edge]
     security_opt: ["no-new-privileges:true"]
 
+  # Nightly encrypted backup (#173), run on demand by the host timer:
+  #   docker compose -f infra/staging/compose.yml --env-file infra/staging/env/compose.env \
+  #     --profile backup run --rm backup
+  # On the data network (reaches postgres) and edge (storage, off-site copy).
+  backup:
+    <<: *logging
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+      target: backup
+    image: jobflow-backup:staging
+    profiles: [backup]
+    env_file:
+      - env/backup.env
+      # The encryption key lives apart from the backups, root-managed.
+      - path: /etc/jobflow/backup-key.env
+        required: false
+    volumes:
+      - /var/backups/jobflow:/backups
+    networks: [data, edge]
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+
   # Certificates (HTTP-01 via the webroot nginx serves). Run on demand:
   #   docker compose -f infra/staging/compose.yml --profile certbot run --rm certbot \
   #     certonly --webroot -w /var/www/acme -d "$JOBFLOW_DOMAIN" --email "$ACME_EMAIL" --agree-tos --no-eff-email

@@ -37,6 +37,9 @@ compose() {
   docker compose -f infra/staging/compose.yml --env-file infra/staging/env/compose.env "$@"
 }
 compose build migrate web
+# The backup image too (#173): it carries this release's backup CLI, and its
+# Compose profile needs backup.env, so build it directly under the same tag.
+docker build --quiet -f apps/web/Dockerfile --target backup -t jobflow-backup:staging . >/dev/null
 compose up -d --wait postgres
 # Migrations and grants first; a failure stops here with the old app running.
 compose run --rm migrate
