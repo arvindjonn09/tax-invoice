@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import { inflateSync } from "node:zlib";
 import { PDFDocument } from "pdf-lib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type InvoicePdfInput,
   aud,
   invoiceDocument,
   longDate,
   renderInvoicePdf,
+  PDF_LIMITS,
+  PdfLimitError,
 } from "../src/server/invoices/pdf";
 import { syntheticAbn } from "../../../tests/helpers/abn";
 
@@ -318,4 +320,96 @@ describe("renderer controls (#70)", () => {
     expect(model.notes).toContain("<script>");
     expect(model.to[0]).toContain("<img");
   });
+});
+
+describe("PDF resource budgets (#70)", () => {
+  it("does not fetch hostile network, file or metadata references", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Unexpected network"));
+    try {
+      const model = invoiceDocument({
+        ...registered,
+        notes:
+          '<script>fetch("http://169.254.169.254/latest/meta-data")</script> file:///etc/passwd http://127.0.0.1 http://10.0.0.1',
+      });
+      await renderInvoicePdf(model);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+  it("rejects oversized input before rendering", async () => {
+    const model = invoiceDocument(registered);
+    await expect(
+      renderInvoicePdf({
+        ...model,
+        rows: Array.from({ length: PDF_LIMITS.rows + 1 }, () => model.rows[0]!),
+      }),
+    ).rejects.toBeInstanceOf(PdfLimitError);
+    await expect(
+      renderInvoicePdf({
+        ...model,
+        notes: "x".repeat(PDF_LIMITS.cellCharacters + 1),
+      }),
+    ).rejects.toBeInstanceOf(PdfLimitError);
+  });
+  it("enforces page, output and cooperative clock budgets and releases capacity after failure", async () => {
+    const model = invoiceDocument(registered);
+    await expect(renderInvoicePdf(model, { pages: 0 })).rejects.toBeInstanceOf(
+      PdfLimitError,
+    );
+    await expect(renderInvoicePdf(model, { bytes: 1 })).rejects.toBeInstanceOf(
+      PdfLimitError,
+    );
+    const tall = invoiceDocument({
+      ...registered,
+      lines: [
+        {
+          ...registered.lines[0]!,
+          description: Array.from(
+            { length: 100 },
+            () => "Synthetic continued line",
+          ).join("\n"),
+        },
+      ],
+    });
+    await expect(renderInvoicePdf(tall, { pages: 1 })).rejects.toBeInstanceOf(
+      PdfLimitError,
+    );
+    let calls = 0;
+    await expect(
+      renderInvoicePdf(
+        { ...model, notes: "x".repeat(20_000) },
+        { timeMs: 2 },
+        () => (++calls > 500 ? 3 : 0),
+      ),
+    ).rejects.toBeInstanceOf(PdfLimitError);
+    await expect(renderInvoicePdf(model)).resolves.toBeInstanceOf(Uint8Array);
+  });
+  it("caps concurrent renders without creating an unbounded queue", async () => {
+    const model = invoiceDocument(registered);
+    const results = await Promise.allSettled(
+      Array.from({ length: 3 }, () => renderInvoicePdf(model)),
+    );
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+    expect(
+      (results.find((r) => r.status === "rejected") as PromiseRejectedResult)
+        .reason,
+    ).toBeInstanceOf(PdfLimitError);
+  });
+});
+
+it("PDF limits permit the application's maximum 200 ordinary invoice lines", async () => {
+  const input = {
+    ...registered,
+    lines: Array.from({ length: 200 }, () => ({
+      ...registered.lines[0]!,
+      description: "A".repeat(500),
+    })),
+  };
+  await expect(
+    renderInvoicePdf(invoiceDocument(input)),
+  ).resolves.toBeInstanceOf(Uint8Array);
 });
