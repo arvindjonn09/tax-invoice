@@ -211,7 +211,7 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
             );
           // Lock order as bills: contractor, then job, then document. Re-read
           // under the lock so archiving or a GST change can't race this.
-          await lockRow(tx, "contractors", found.id);
+          await lockRow(tx, "contractors", found.id, actor.companyId);
           const contractor = await tx.contractor.findUniqueOrThrow({
             where: { id: found.id },
           });
@@ -243,7 +243,7 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
           });
           if (!acceptance)
             throw refuse(400, "Choose one of your accepted offers", "offerId");
-          await lockRow(tx, "jobs", acceptance.jobId);
+          await lockRow(tx, "jobs", acceptance.jobId, actor.companyId);
           data.lines.forEach((line, index) => {
             const problem = billLineProblem(
               {
@@ -455,7 +455,7 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
     actor: Actor,
     id: string,
   ) {
-    await lockRow(tx, "subcontractor_bill_submissions", id);
+    await lockRow(tx, "subcontractor_bill_submissions", id, actor.companyId);
     const row = requireSameCompany(
       actor,
       await tx.subcontractorBillSubmission.findUnique({

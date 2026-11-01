@@ -99,8 +99,10 @@ export async function cleanUnattachedDocuments(
       throw new Error("Document references not found; refusing to clean up");
   const attached = attachedSql(references);
   const cutoff = new Date(now.getTime() - graceDays * DAY_MS);
-  const candidates = await db.$queryRawUnsafe<{ id: string }[]>(
-    `SELECT d.id FROM documents d
+  const candidates = await db.$queryRawUnsafe<
+    { id: string; company_id: string }[]
+  >(
+    `SELECT d.id, d.company_id FROM documents d
      WHERE d.created_at < $1 AND NOT (${attached})
      ORDER BY d.created_at, d.id LIMIT $2`,
     cutoff,
@@ -124,10 +126,10 @@ export async function cleanUnattachedDocuments(
     const short = kind.slice(0, 40);
     if (!result.errors.includes(short)) result.errors.push(short);
   };
-  for (const { id } of candidates) {
+  for (const { id, company_id: companyId } of candidates) {
     let done: Awaited<ReturnType<typeof deleteOne>>;
     try {
-      done = await deleteOne(id);
+      done = await deleteOne(id, companyId);
     } catch (error) {
       note(error);
       // One database error doesn't stop the batch; the row is still there
@@ -162,13 +164,13 @@ export async function cleanUnattachedDocuments(
     return false;
   }
 
-  async function deleteOne(id: string) {
+  async function deleteOne(id: string, companyId: string) {
     return db.$transaction(
       async (tx) => {
         // FOR UPDATE: the same lock bills and expenses take to attach, and it
         // conflicts with the KEY SHARE lock any new referencing row takes, so
         // nothing can attach this document until we commit.
-        await lockRow(tx, "documents", id);
+        await lockRow(tx, "documents", id, companyId);
         const [row] = await tx.$queryRawUnsafe<
           {
             id: string;

@@ -207,9 +207,11 @@ export async function invoiceBalances(
 /** Lock invoice rows in a fixed order (no deadlocks between receipts). */
 async function lockInvoices(
   tx: Prisma.TransactionClient,
+  companyId: string,
   ids: readonly string[],
 ) {
-  for (const id of [...new Set(ids)].sort()) await lockRow(tx, "invoices", id);
+  for (const id of [...new Set(ids)].sort())
+    await lockRow(tx, "invoices", id, companyId);
 }
 
 async function replay(
@@ -310,7 +312,7 @@ export function receiptHandlers(db: () => PrismaClient) {
           if (!customer)
             throw new Refusal(fail(400, "Choose a customer", "customerId"));
           const ids = data.allocations.map((a) => a.invoiceId);
-          await lockInvoices(tx, ids);
+          await lockInvoices(tx, actor.companyId, ids);
           // A concurrent duplicate may have committed while we waited for the
           // invoice locks: replay it rather than judging it as an overpayment.
           const duplicate = await replay(tx, actor, key, hash);
@@ -466,7 +468,7 @@ export function receiptHandlers(db: () => PrismaClient) {
     if (!id) throw notFound();
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        await lockRow(tx, "customer_receipts", id);
+        await lockRow(tx, "customer_receipts", id, actor.companyId);
         const before = requireSameCompany(
           actor,
           await tx.customerReceipt.findUnique({
@@ -476,7 +478,7 @@ export function receiptHandlers(db: () => PrismaClient) {
         );
         if (before.voidedAt) throw new Refusal(fail(409, "It's already void"));
         const ids = before.allocations.map((a) => a.invoiceId);
-        await lockInvoices(tx, ids);
+        await lockInvoices(tx, actor.companyId, ids);
         // Under the invoice locks, the money left after this void must stay
         // between nothing and what's due, for receipts and refunds alike.
         const balances = await invoiceBalances(tx, actor.companyId, ids);

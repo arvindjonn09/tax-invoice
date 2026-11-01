@@ -123,12 +123,12 @@ async function lockedSubmitter(
   actor: Actor,
   jobId: string,
 ) {
-  await lockRow(tx, "jobs", jobId);
+  await lockRow(tx, "jobs", jobId, actor.companyId);
   const employee = await tx.employee.findFirst({
     where: { companyId: actor.companyId, userId: actor.userId },
   });
   if (!employee) return null;
-  await lockRow(tx, "employees", employee.id);
+  await lockRow(tx, "employees", employee.id, actor.companyId);
   const current = await tx.employee.findUniqueOrThrow({
     where: { id: employee.id },
     include: {
@@ -179,8 +179,12 @@ async function eligibility(
   return { employeeId: employee.id };
 }
 
-async function lockedTimesheet(tx: Prisma.TransactionClient, id: string) {
-  await lockRow(tx, "timesheets", id);
+async function lockedTimesheet(
+  tx: Prisma.TransactionClient,
+  id: string,
+  companyId: string,
+) {
+  await lockRow(tx, "timesheets", id, companyId);
   return tx.timesheet.findUniqueOrThrow({
     where: { id },
     include: OFFICE_INCLUDE,
@@ -310,7 +314,7 @@ export function timesheetHandlers(db: () => PrismaClient) {
     const data = parsed.data;
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        const before = await lockedTimesheet(tx, owned.id);
+        const before = await lockedTimesheet(tx, owned.id, actor.companyId);
         if (before.status !== "submitted")
           throw new Refusal(
             fail(409, `A ${before.status} timesheet can't be changed`),
@@ -375,7 +379,7 @@ export function timesheetHandlers(db: () => PrismaClient) {
     const { decision, note } = parsed.data;
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        const before = await lockedTimesheet(tx, owned.id);
+        const before = await lockedTimesheet(tx, owned.id, actor.companyId);
         if (before.status !== "submitted")
           throw new Refusal(
             fail(409, `This timesheet is already ${before.status}`),
@@ -464,7 +468,7 @@ export function timesheetHandlers(db: () => PrismaClient) {
     const owned = await ownTimesheet(db(), actor, (await context.params).id);
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        const original = await lockedTimesheet(tx, owned.id);
+        const original = await lockedTimesheet(tx, owned.id, actor.companyId);
         if (original.status !== "approved" || original.reversesId)
           throw new Refusal(
             fail(409, "Only an approved timesheet can be reversed"),
