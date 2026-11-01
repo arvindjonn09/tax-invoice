@@ -62,6 +62,16 @@ test("owner uses live dashboard filters and reaches an overdue invoice in one cl
     { issueDate: issuedOn },
   );
   await page.goto("/dashboard");
+  // Fill the filters only once the page has loaded its first figures:
+  // typed dates entered before hydration are reset to the defaults.
+  await expect(page.getByText("Invoiced revenue", { exact: true })).toBeVisible(
+    { timeout: 30_000 },
+  );
+  await expect(
+    page
+      .getByLabel("Customer", { exact: true })
+      .locator("option", { hasText: name }),
+  ).toHaveCount(1);
   await page.getByLabel("From", { exact: true }).fill(issuedOn);
   await page.getByLabel("To", { exact: true }).fill(today);
   await page.getByLabel("Customer", { exact: true }).selectOption(customer.id);
