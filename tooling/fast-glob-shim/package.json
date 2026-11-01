@@ -1,0 +1,10 @@
+{
+  "name": "fast-glob-shim",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Replaces fast-glob for @next/eslint-plugin-next only, removing braces (GHSA-vfj7-8cjw-p6xm). Development tooling.",
+  "main": "index.cjs",
+  "engines": {
+    "node": ">=22"
+  }
+}

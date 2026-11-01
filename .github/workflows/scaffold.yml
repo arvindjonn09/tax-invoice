@@ -95,12 +95,9 @@ jobs:
           name: domain-coverage
           path: coverage/domain/
           retention-days: 14
-      - name: Check audit exception review deadline
-        run: |
-          node --input-type=module -e 'if (new Date() >= new Date("2026-11-21T00:00:00+11:00")) throw new Error("Audit exception requires owner review: GHSA-vfj7-8cjw-p6xm")'
       - name: Audit production dependencies without exceptions
         run: pnpm audit:prod
-      - name: Audit all dependencies with approved exception
+      - name: Audit all dependencies without exceptions
         run: pnpm audit --audit-level high
   gate-regressions:
     runs-on: ubuntu-latest

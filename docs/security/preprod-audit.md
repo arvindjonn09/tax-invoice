@@ -21,7 +21,7 @@ Performed on 2 November 2026 by Claude B, on `main` after #198 (pinned images), 
 | **Exports** | Exports are throttled to 5 a minute per user and per IP, audited, and sent `no-store`. Incomplete GST is refused. | `reporting.test.ts` (#56) |
 | **Design samples** | The unauthenticated M0 design previews and design-system sample return 404 in production. Staging and development still serve them. | `tests/unit/design-gate.test.ts`. Checked against a production build: `APP_ENV=production` returned 404 on all four paths; `APP_ENV=staging` returned 200. |
 | **Database privileges** | The web role can't change append-only financial history or GST postings (#166). It can't delete documents or read the cleanup outbox (#170). | `runtime-role.test.ts`; `document-cleanup.test.ts` |
-| **Dependencies** | `pnpm audit --prod`: **no known vulnerabilities**. Full audit: 2 moderate advisories in development-only ESLint tooling (minimatch), plus the one approved high exception (see below). | Run on 2 November 2026 |
+| **Dependencies** | `pnpm audit --prod`: **no known vulnerabilities**. Full audit: 2 moderate advisories in development-only ESLint tooling (minimatch), plus the braces high advisory, since removed (item 4 below). | Run on 2 November 2026 |
 | **Supply chain** | External container images and GitHub Actions are pinned to digests or commits. | #198; `staging-config.test.ts` |
 
 ## Open before real data (owner and operations)
@@ -29,7 +29,7 @@ Performed on 2 November 2026 by Claude B, on `main` after #198 (pinned images), 
 1. **Malware scanning of uploads (#136).** Deferred by the owner on 24 October. This is an open risk, not an accepted one: uploads are private and never executed, but files are not scanned.
 2. **Staging host hardening (#168).** Still to do: a non-superuser migration owner, the SCRAM password-verifier handoff, a policy blocking access to the cloud metadata service, Postgres/nginx privilege limits, and IPv6 rollout checks. These need the real host.
 3. **Maintenance credentials (#170).** Provision the separate maintenance database login, the delete-only S3 credential and the cleanup timer when staging is set up.
-4. **Development audit exception.** `GHSA-vfj7-8cjw-p6xm` (braces, in ESLint tooling) **expires 21 November 2026**, and CI fails after that date. Either upgrade the tooling or get a fresh owner decision before then. The production audit has no exceptions.
+4. ~~**Development audit exception.**~~ Closed on 2 November 2026: braces is no longer installed, and neither audit has exceptions (see [audit exceptions](audit-exceptions.md)).
 5. **Accountant review (#67)** of the GST outputs before real use.
 6. **Staging smoke test (#65)** with synthetic data, once staging exists.
 
