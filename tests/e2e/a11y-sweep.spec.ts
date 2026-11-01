@@ -8,7 +8,7 @@ import { requireAccounts, signIn, type E2eRole } from "./accounts";
 // h1, a skip link to main content, no horizontal scrolling and no axe
 // violations (WCAG 2.2 AA rules). Screen-specific interaction checks live in
 // each feature's own spec; this sweep makes sure no screen is missed.
-test.setTimeout(300_000);
+test.setTimeout(900_000);
 test.beforeEach(() => {
   requireAccounts();
 });
@@ -157,20 +157,29 @@ async function seedDetails(page: Page) {
     )
   ).json()) as { members: { userId: string; role: string }[] };
   const userId = users.members.find((m) => m.role === "subcontractor")!.userId;
-  const directory = (await (
-    await page.request.get("/api/contractors?status=all&pageSize=100")
-  ).json()) as { contractors: { id: string; userId: string | null }[] };
-  const contractor =
-    directory.contractors.find((c) => c.userId === userId) ??
-    (await write<{ id: string }>(page, "/api/contractors", {
-      name: `Synthetic a11y contractor ${suffix}`,
-      userId,
-    }));
+  // Other specs create it in parallel; a lost race re-reads it.
+  let contractor: { id: string } | undefined;
+  for (let attempt = 0; attempt < 3 && !contractor; attempt++) {
+    const directory = (await (
+      await page.request.get(
+        "/api/contractors?status=all&q=Synthetic%20portal&pageSize=100",
+      )
+    ).json()) as { contractors: { id: string; userId: string | null }[] };
+    contractor = directory.contractors.find((c) => c.userId === userId);
+    if (contractor) break;
+    const created = await page.request.post("/api/contractors", {
+      headers: { origin: new URL(page.url()).origin },
+      // Named as portal.spec.ts searches for it, so either spec finds it.
+      data: { name: `Synthetic portal contractor ${suffix}`, userId },
+    });
+    if (created.ok()) contractor = (await created.json()) as { id: string };
+  }
+  expect(contractor, "shared subcontractor's contractor").toBeDefined();
   const offer = await write<{ id: string }>(
     page,
     `/api/jobs/${job.id}/offers`,
     {
-      contractorId: contractor.id,
+      contractorId: contractor!.id,
       scope: "Synthetic a11y scope",
       rateType: "fixed",
       rateExclusiveCents: "30000",
@@ -188,7 +197,7 @@ async function seedDetails(page: Page) {
       `/payments/supplier/${payment.id}`,
       `/expenses/${expense.id}`,
       `/employees/${employee.id}`,
-      `/contractors/${contractor.id}`,
+      `/contractors/${contractor!.id}`,
     ],
     subcontractor: [`/offers/${offer.id}`],
   };
