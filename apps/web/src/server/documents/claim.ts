@@ -13,7 +13,7 @@ export async function lockDocumentClaim(
   companyId: string,
   documentId: string,
 ) {
-  await lockRow(tx, "documents", documentId);
+  await lockRow(tx, "documents", documentId, companyId);
   return tx.document.findFirst({
     where: { id: documentId, companyId },
     include: {

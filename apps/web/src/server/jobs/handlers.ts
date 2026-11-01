@@ -347,7 +347,7 @@ export function jobHandlers(db: () => PrismaClient) {
     };
     return inTransaction(async () => {
       const job = await withAudit(db(), async (tx, audit) => {
-        const before = await lockedJob(tx, owned.id);
+        const before = await lockedJob(tx, owned.id, actor.companyId);
         if (!isJobEditable(before.status))
           throw new Refusal(
             fail(409, `A ${before.status} job can't be edited`),
@@ -443,7 +443,7 @@ export function jobHandlers(db: () => PrismaClient) {
       return fail(400, "The visit must end after it starts", "endsAt");
     return inTransaction(async () => {
       const visit = await withAudit(db(), async (tx, audit) => {
-        const job = await lockedJob(tx, owned.id);
+        const job = await lockedJob(tx, owned.id, actor.companyId);
         if (!isJobEditable(job.status))
           throw new Refusal(
             fail(409, `A ${job.status} job can't get new visits`),
@@ -486,7 +486,7 @@ export function jobHandlers(db: () => PrismaClient) {
     const data = defined(parsed.data);
     return inTransaction(async () => {
       const visit = await withAudit(db(), async (tx, audit) => {
-        const job = await lockedJob(tx, owned.id);
+        const job = await lockedJob(tx, owned.id, actor.companyId);
         // A final job's visits are frozen, like the job itself.
         if (!isJobEditable(job.status))
           throw new Refusal(
@@ -566,8 +566,9 @@ export async function inTransaction(
 export async function lockedJob(
   tx: Prisma.TransactionClient,
   id: string,
+  companyId: string,
 ): Promise<Job> {
-  await lockRow(tx, "jobs", id);
+  await lockRow(tx, "jobs", id, companyId);
   return tx.job.findUniqueOrThrow({ where: { id } });
 }
 

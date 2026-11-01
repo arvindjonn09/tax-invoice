@@ -207,7 +207,7 @@ async function lockedInvoice(
   id: string | null,
 ): Promise<Row> {
   if (!id) throw notFound();
-  await lockRow(tx, "invoices", id).catch(() => undefined);
+  await lockRow(tx, "invoices", id, actor.companyId).catch(() => undefined);
   return requireSameCompany(
     actor,
     await tx.invoice.findUnique({ where: { id }, include: { items: true } }),
@@ -548,7 +548,7 @@ export function invoiceHandlers(
         // void is seen.
         let original: Invoice | null = null;
         if (before.kind === "credit_note") {
-          await lockRow(tx, "invoices", before.creditsId!);
+          await lockRow(tx, "invoices", before.creditsId!, actor.companyId);
           original = await tx.invoice.findUniqueOrThrow({
             where: { id: before.creditsId! },
           });
@@ -757,7 +757,7 @@ export function invoiceHandlers(
             )
           : 0n;
         if (kind === "invoice" && updated.jobId) {
-          await lockRow(tx, "jobs", updated.jobId);
+          await lockRow(tx, "jobs", updated.jobId, actor.companyId);
           const job = await tx.job.findUniqueOrThrow({
             where: { id: updated.jobId },
           });
@@ -927,7 +927,8 @@ export function invoiceHandlers(
               "Money has been received against this invoice; credit it, or void the receipts first",
             ),
           );
-        if (before.creditsId) await lockRow(tx, "invoices", before.creditsId);
+        if (before.creditsId)
+          await lockRow(tx, "invoices", before.creditsId, actor.companyId);
         const updated = await tx.invoice.update({
           where: { id: before.id },
           data: {
