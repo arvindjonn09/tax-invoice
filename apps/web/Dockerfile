@@ -1,10 +1,10 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 # JobFlow web image (#64). Build from the repository root:
 #   docker build -f apps/web/Dockerfile --target runtime -t jobflow-web .
 #   docker build -f apps/web/Dockerfile --target migrate -t jobflow-migrate .
 #   docker build -f apps/web/Dockerfile --target backup -t jobflow-backup .
-# Pin NODE_IMAGE to a digest in the deploy environment (see docs/ops/staging.md).
-ARG NODE_IMAGE=node:24-bookworm-slim
+# The default and deployed build both use this verified multi-arch digest.
+ARG NODE_IMAGE=node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 
 FROM ${NODE_IMAGE} AS base
 # COREPACK_HOME outside root's home so the non-root migrate job finds the
