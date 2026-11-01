@@ -27,6 +27,7 @@ await withIsolatedDatabase(async env => {
     await checkAuth(true);
     // Roll back newest first: later migrations depend on users/companies.
     await run('rollbacks/20261102110000_bill_evidence.sql');
+    await run('rollbacks/20261102100000_record_retention.sql');
     await run('rollbacks/20261027123000_document_maintenance.sql');
     await run('rollbacks/20261027110000_gst_posting_privileges.sql');
     await run('rollbacks/20261025100000_subcontractor_bills.sql');
@@ -81,6 +82,7 @@ await withIsolatedDatabase(async env => {
     await run('migrations/20261025100000_subcontractor_bills/migration.sql');
     await run('migrations/20261027110000_gst_posting_privileges/migration.sql');
     await run('migrations/20261027123000_document_maintenance/migration.sql');
+    await run('migrations/20261102100000_record_retention/migration.sql');
     await run('migrations/20261102110000_bill_evidence/migration.sql');
     await check(true);
     await checkAuth(true);
