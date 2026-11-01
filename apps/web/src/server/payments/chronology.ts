@@ -108,7 +108,7 @@ export async function latestBillAdjustmentDay(
   companyId: string,
   billId: string,
 ): Promise<string | null> {
-  const [credits, corrections, voids] = await Promise.all([
+  const [credits, corrections, voids, evidence] = await Promise.all([
     tx.supplierCredit.aggregate({
       where: { companyId, billId, voidedAt: null },
       _max: { receivedOn: true },
@@ -121,11 +121,17 @@ export async function latestBillAdjustmentDay(
       where: { companyId, billId },
       _max: { adjustedOn: true },
     }),
+    // Late evidence (#142): its cash catch-up covered what was paid by then.
+    tx.supplierBillEvidence.findFirst({
+      where: { companyId, billId },
+      select: { adjustedOn: true },
+    }),
   ]);
   const days = [
     credits._max.receivedOn,
     corrections._max.adjustedOn,
     voids._max.adjustedOn,
+    evidence?.adjustedOn,
   ].flatMap((date) => (date ? [toDay(date)] : []));
   return days.length > 0 ? days.sort().at(-1)! : null;
 }

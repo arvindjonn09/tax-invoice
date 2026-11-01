@@ -19,6 +19,7 @@ export async function sourceLabels(
     timesheets,
     receipts,
     payments,
+    lateEvidence,
   ] = await Promise.all([
     tx.invoice.findMany({
       where: { companyId, id: { in: unique } },
@@ -73,6 +74,15 @@ export async function sourceLabels(
       where: { companyId, id: { in: unique } },
       select: { id: true, method: true, reference: true, payeeName: true },
     }),
+    // A bill's late tax invoice (#142): its own GST credit line.
+    tx.supplierBillEvidence.findMany({
+      where: { companyId, id: { in: unique } },
+      select: {
+        id: true,
+        billId: true,
+        bill: { select: { supplierName: true, supplierReference: true } },
+      },
+    }),
   ]);
   const labels = new Map<string, SourceLabel>();
   for (const i of invoices)
@@ -123,6 +133,12 @@ export async function sourceLabels(
       type: "supplier_payment",
       reference: p.reference ?? p.method,
       party: p.payeeName,
+    });
+  for (const e of lateEvidence)
+    labels.set(e.id, {
+      type: "bill_evidence",
+      reference: e.bill.supplierReference ?? "",
+      party: e.bill.supplierName,
     });
   return labels;
 }

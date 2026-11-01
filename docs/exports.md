@@ -42,7 +42,7 @@ Owners and accountants only. JSON reports need `ledger_report.read`; CSV exports
 **GST lines:**
 - `gst_cents` of `1A` lines sums to label 1A, and `1B` lines to 1B.
 - Credit notes, voids and corrections appear as their own signed lines on their own dates.
-- `source_type` is one of `invoice`, `credit_note`, `supplier_bill`, `supplier_credit`, `expense`, `gst_adjustment`, or, on the cash basis, `customer_receipt`, `customer_refund` or `supplier_payment`.
+- `source_type` is one of `invoice`, `credit_note`, `supplier_bill`, `supplier_credit`, `expense`, `gst_adjustment`, `bill_evidence` (a bill's late tax invoice, #142), or, on the cash basis, `customer_receipt`, `customer_refund` or `supplier_payment`.
 - For a receipt or payment, `source_reference` is its reference, or its payment method when it has none.
 
 **Draft only:** this is a draft for the accountant; JobFlow does not lodge anything.

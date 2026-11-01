@@ -283,6 +283,7 @@ export function billSubmissionHandlers(db: () => PrismaClient) {
             document.workEvidence ||
             document.supplierBill ||
             document.supplierCredit ||
+            document.billEvidence ||
             document.billSubmission
           )
             throw refuse(

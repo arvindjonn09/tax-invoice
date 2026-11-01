@@ -311,7 +311,8 @@ async function checkDraft(
     if (
       document.supplierBill ||
       document.supplierCredit ||
-      document.billSubmission
+      document.billSubmission ||
+      document.billEvidence
     )
       return [
         "receiptDocumentId",
