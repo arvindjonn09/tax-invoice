@@ -92,3 +92,4 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 - Security (#166): reserve GST posting writes to hardened source triggers and remove mutation grants from append-only financial records; period-lock and runtime-role regressions added.
 - Bound PDF rendering input, pages, output, concurrency and cooperative layout time; preserve text-only rendering and typed CSV protections (#70).
+- Production hardening (#168, in progress): pin external container images to verified digests and share readiness results for two seconds across concurrent probes.

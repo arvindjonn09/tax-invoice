@@ -1,5 +1,6 @@
 import { getDatabase } from "../../../../server/auth";
 import { storeFromEnvironment } from "../../../../server/documents/store";
+import { cachedReadiness } from "../../../../server/health/readiness";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +11,7 @@ export const dynamic = "force-dynamic";
  */
 const TIMEOUT_MS = 3000;
 
-export async function GET() {
+const probe = cachedReadiness(async () => {
   let ready = storeFromEnvironment() !== null;
   if (ready) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -28,6 +29,11 @@ export async function GET() {
       clearTimeout(timer);
     }
   }
+  return ready;
+});
+
+export async function GET() {
+  const ready = await probe();
   return Response.json(
     { status: ready ? "ready" : "not ready", service: "jobflow-web" },
     { status: ready ? 200 : 503, headers: { "Cache-Control": "no-store" } },
