@@ -8,6 +8,7 @@ import {
   companyExportHandler,
   decodeCompanyExport,
   decodeValue,
+  exportCompany,
 } from "../../apps/web/src/server/company/export";
 import {
   type CommittedDatabase,
@@ -211,6 +212,24 @@ it("keeps assignments for five years after assignment or its later end", async (
 });
 
 describe("full company export (#62)", () => {
+  it("omits the private document deletion outbox even with owner DB access", async () => {
+    await expect(
+      db.$transaction(async (tx) => {
+        // This table comes from #170; create it inside a rolled-back test
+        // transaction while the two branches are being reviewed separately.
+        await tx.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS document_delete_retries (
+          id uuid PRIMARY KEY, company_id uuid NOT NULL, object_key text NOT NULL)`);
+        await tx.$executeRaw`
+          INSERT INTO document_delete_retries(id, company_id, object_key)
+          VALUES (gen_random_uuid(), ${companyId}::uuid, 'private-documents/secret-object-key')`;
+        const exportData = await exportCompany(tx, companyId);
+        expect(exportData.tables).not.toHaveProperty("document_delete_retries");
+        expect(JSON.stringify(exportData)).not.toContain("secret-object-key");
+        throw new Error("rollback private outbox fixture");
+      }),
+    ).rejects.toThrow("rollback private outbox fixture");
+  });
+
   const download = (who: Who) => {
     const h = new Headers(cookies[who]);
     h.set("origin", ORIGIN);

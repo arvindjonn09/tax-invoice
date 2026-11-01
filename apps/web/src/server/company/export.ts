@@ -18,7 +18,11 @@ export const EXPORT_FORMAT = "jobflow.company-export";
 export const EXPORT_VERSION = 1;
 
 /** Internal state or secrets, never exported. */
-const EXCLUDED_TABLES = new Set(["idempotency_keys", "_prisma_migrations"]);
+const EXCLUDED_TABLES = new Set([
+  "idempotency_keys",
+  "document_delete_retries", // private maintenance outbox; contains storage keys
+  "_prisma_migrations",
+]);
 const EXCLUDED_COLUMNS = new Set([
   "user_invitations.token_hash",
   "documents.object_key",
