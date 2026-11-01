@@ -109,16 +109,13 @@ Cash adjustment timing follows the refund distinction in
 The migration brings valid legacy credited-invoice GST balances forward with a
 dated correction; immutable historical allocations remain unchanged.
 
-## Known pilot query limit
+## Bounded reads and exports
 
-The projection currently loads all company-scoped source rows inside its
-repeatable-read snapshot, then filters by date in memory. Memory and query cost
-therefore grow with company history. JSON reads stay protected and private/no-store;
-this PR does not enable bulk exports. [Follow-up #157](https://github.com/arvindjonn09/tax-invoice/issues/157)
-tracks bounded queries or materialised postings and paged drill-down for #56 and
-#58. Resolve it before enabling bulk exports or expanding report screens. Do not
-truncate totals or drop earlier credits, settlements, voids or opening balances
-when adding bounds.
+Report reads load only documents active on or after the range start, each with its
+whole history (#157); drill-down events are paged, and totals always cover every event.
+Ageing, cash movement and the CSV exports (#56) are described in
+[docs/exports.md](../exports.md). Do not truncate totals or drop earlier credits,
+settlements, voids or opening balances when changing bounds.
 
 ## Verification and remaining work
 
@@ -134,3 +131,11 @@ This backend PR is **not completion of M4**. Remaining before closing
 sync after #146, #151 and #152 merge. Follow-on M4 work: #56 exports/ageing/cash, #57 real dashboard, #58 report UI,
 #142 late-evidence reclassification and #59 end-to-end reconciliation. No UI,
 production deployment or accountant sign-off is included here.
+
+## Posting privileges (#166)
+
+The runtime role reads `gst_source_postings` but cannot insert, update, delete or truncate it. Only the three owner-installed source trigger functions execute as the migration owner. Their search paths put `pg_catalog` first and `pg_temp` last. The posting helper remains SECURITY INVOKER and has no PUBLIC/runtime EXECUTE grant; the trigger functions also have no PUBLIC/runtime EXECUTE grant, preventing reuse on attacker-owned temporary tables. Normal source inserts, allocations, voids and late entries still use the existing reporting gate and open-period checks.
+
+Migration `20261027110000_gst_posting_privileges` restricts existing installations; `runtime-role.sql` reapplies the restrictions after every deployment's blanket grants. Fully append-only records also lose UPDATE/DELETE/TRUNCATE grants. Draft/voidable document headers retain the operations their guards validate. Future append-only tables and posting triggers must extend these restrictions. This hardens the database runtime boundary; HTTP role/company/object checks remain required.
+
+The rollback is for empty disposable test databases only: it restores the previous insecure grant model and must not be applied to a live environment.

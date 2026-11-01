@@ -59,6 +59,23 @@ async function main() {
       await client.query(rows[0].sql);
       await client.query("GRANT jobflow_app TO jobflow_web");
     }
+    // The nightly backup's read-only LOGIN role (#173), when configured:
+    // it can read every table and nothing else.
+    const backupPassword = process.env.BACKUP_DATABASE_PASSWORD;
+    if (backupPassword) {
+      if (backupPassword.length < 24)
+        throw new UsageError("BACKUP_DATABASE_PASSWORD must be 24+ characters");
+      const has = await client.query(
+        "SELECT 1 FROM pg_roles WHERE rolname = 'jobflow_backup'",
+      );
+      const verb = has.rowCount ? "ALTER" : "CREATE";
+      const { rows } = await client.query(
+        `SELECT format('${verb} ROLE jobflow_backup LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS INHERIT PASSWORD %L', $1::text) AS sql`,
+        [backupPassword],
+      );
+      await client.query(rows[0].sql);
+      await client.query("GRANT pg_read_all_data TO jobflow_backup");
+    }
   } finally {
     await client.end();
   }

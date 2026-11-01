@@ -57,6 +57,8 @@ export const PERMISSIONS = [
   "payment.write",
   "report.read",
   "gst_report.read",
+  /** Debtor/creditor ageing and cash movement (#56): owner/accountant. */
+  "ledger_report.read",
   "export.run",
 ] as const;
 
@@ -111,6 +113,7 @@ const GRANTS: Record<Role, readonly Permission[]> = {
     "bill.write",
     "payment.write",
     "gst_report.read",
+    "ledger_report.read",
     "export.run",
     "audit.read",
   ],

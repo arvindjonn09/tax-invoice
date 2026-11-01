@@ -37,6 +37,15 @@ jobs:
           docker exec db psql -U jobflow_owner -d jobflow -tAc \
             "SELECT pg_has_role('jobflow_web','jobflow_app','member')" | grep -qx t
           docker rm -f db
+      - name: Build the backup image
+        run: docker build -f apps/web/Dockerfile --target backup -t jobflow-backup:ci .
+      - name: Backup image has pg_dump 16, runs non-root on a read-only filesystem
+        run: |
+          docker run --rm --entrypoint pg_dump jobflow-backup:ci --version | grep -E ' 16\.'
+          test "$(docker run --rm --entrypoint id jobflow-backup:ci -u)" != "0"
+          mkdir -p "$RUNNER_TEMP/backups/2026-01-01T000000Z" && chmod -R 777 "$RUNNER_TEMP/backups"
+          docker run --rm --read-only --tmpfs /tmp -v "$RUNNER_TEMP/backups:/backups" \
+            --entrypoint pnpm jobflow-backup:ci --silent backup:prune /backups --keep-daily 1 --keep-monthly 1
       - name: Runtime image runs as non-root and holds no source, tests or env files
         run: |
           test "$(docker run --rm --entrypoint id jobflow-web:ci -u)" != "0"

@@ -53,6 +53,7 @@ describe("staging env examples (#64)", () => {
 
   it("hold placeholders only, and the real files are git-ignored", () => {
     expect(examples.sort()).toEqual([
+      "backup.env.example",
       "compose.env.example",
       "migrate.env.example",
       "nginx.env.example",
@@ -123,6 +124,45 @@ describe("nginx upstream and unknown hosts (#64)", () => {
     expect(nginx).toMatch(/proxy_set_header Host \$server_name;/);
     expect(service("nginx")).toMatch(
       /nginx\/default\.conf:\/etc\/nginx\/conf\.d\/default\.conf:ro/,
+    );
+  });
+});
+
+describe("staging backup (#173)", () => {
+  it("runs on the stack's data network, as the read-only role, hardened", () => {
+    const backup = service("backup");
+    expect(backup).toMatch(/networks: \[data, edge\]/);
+    expect(backup).toMatch(/profiles: \[backup\]/);
+    expect(backup).toMatch(/read_only: true/);
+    expect(backup).toMatch(/cap_drop: \[ALL\]/);
+    expect(backup).toMatch(/\/var\/backups\/jobflow:\/backups/);
+    expect(backup).toMatch(/path: \/etc\/jobflow\/backup-key\.env/);
+    expect(backup).not.toMatch(/\n\s+ports:/);
+    const env = read("infra/staging/env/backup.env.example");
+    expect(env).toMatch(/^DATABASE_URL=postgresql:\/\/jobflow_backup:/m);
+    expect(env).not.toMatch(/BACKUP_ENCRYPTION_KEY/);
+  });
+
+  it("has a pg_dump that matches the server and a timer that runs it", () => {
+    const stage = dockerfile
+      .split(/^FROM .* AS backup$/m)[1]!
+      .split(/^FROM /m)[0]!;
+    expect(stage).toMatch(/postgresql-client-16/);
+    expect(compose).toMatch(/image: postgres:16\./);
+    expect(stage).toMatch(/^USER node$/m);
+    const unit = read("infra/staging/systemd/jobflow-staging-backup.service");
+    expect(unit).toMatch(/--profile backup run --rm backup/);
+    expect(unit).toMatch(/WorkingDirectory=\/opt\/jobflow/);
+  });
+
+  it("is rebuilt on every deploy, so backups run the released code", () => {
+    const deploy = read("infra/staging/deploy.sh");
+    expect(deploy).toMatch(
+      /^docker build [^\n]*--target backup -t jobflow-backup:staging \./m,
+    );
+    expect(compose).toMatch(/image: jobflow-backup:staging/);
+    expect(deploy.indexOf("--target backup")).toBeLessThan(
+      deploy.indexOf("run --rm migrate"),
     );
   });
 });

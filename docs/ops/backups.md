@@ -41,9 +41,11 @@ pnpm backup:drill --record docs/ops/restore-drills
   - With `APP_ENV=production`, it also needs `RESTORE_CONFIRM=restore-into-empty-database`.
 - **Error messages** never print connection strings or keys.
 
-## Schedule (production and staging)
+## Schedule
 
-`infra/backup/` holds a systemd unit and timer, plus `run-backup.sh`.
+There are two ways to run the nightly job. Both run `infra/backup/run-backup.sh`.
+- **Staging (Compose)** runs it in a container. See [Staging (Compose)](#staging-compose) below.
+- **A host with Node, `pg_dump` 16 and the pnpm CLI** uses the unit and timer in `infra/backup/`. It runs from `/srv/jobflow`, so set `WorkingDirectory` and `ExecStart` to your checkout.
 
 - **Nightly** at 02:15 Australia/Sydney, the job will:
   - back up
@@ -65,6 +67,40 @@ systemctl list-timers jobflow-backup.timer
 **Targets:**
 - **RPO:** 24 hours, from the nightly backups. Shorten it by running the timer more often, or by adding PostgreSQL WAL archiving later.
 - **RTO:** under 1 hour for pilot-sized data. Re-measure with every drill.
+
+## Staging (Compose)
+
+Staging's database sits on an internal network with no published port. So the backup runs as the `backup` Compose service, on the same network (#173).
+- **Image:** the `backup` target of `apps/web/Dockerfile`, which has `pg_dump` 16 and the AWS CLI. `deploy.sh` rebuilds it with every release, so backups always run the released code.
+- **Runs as:** non-root, with a read-only filesystem and all capabilities dropped.
+- **Writes to:** `/var/backups/jobflow` on the host.
+
+**Set it up once:**
+1. In `migrate.env`, set `BACKUP_DATABASE_PASSWORD` to 24+ random hex characters. The next deploy's `migrate` job then creates the read-only `jobflow_backup` role (`pg_read_all_data`).
+2. Copy `infra/staging/env/backup.env.example` to `backup.env` and set `DATABASE_URL` to that role, using the same password. Give it a storage key that can only **read** the documents bucket. Optionally set the off-site bucket and its key too.
+3. Put the key in `/etc/jobflow/backup-key.env` as `BACKUP_ENCRYPTION_KEY=…`. Make the file readable only by `deploy` (`chown root:deploy`, `chmod 0440`).
+4. Create the backup directory for the container's user (uid 1000): `sudo install -d -o 1000 -g 1000 -m 0700 /var/backups/jobflow`.
+5. Install the timer:
+
+   ```sh
+   sudo install -m 0644 infra/staging/systemd/jobflow-staging-backup.{service,timer} /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now jobflow-staging-backup.timer
+   sudo systemctl start jobflow-staging-backup.service && journalctl -u jobflow-staging-backup.service -n 20
+   ```
+
+**Restore on staging.** Create the empty database inside the stack, then restore as the **owner** role:
+
+```sh
+cd /opt/jobflow
+C="docker compose -f infra/staging/compose.yml --env-file infra/staging/env/compose.env"
+$C exec postgres sh -c 'createdb -U "$POSTGRES_USER" jobflow_restored'
+$C --profile backup run --rm \
+  -e RESTORE_DATABASE_URL="postgresql://jobflow_owner:<owner password>@postgres:5432/jobflow_restored" \
+  -e RESTORE_S3_BUCKET=jobflow-staging-documents-restored \
+  backup pnpm --silent backup:restore /backups/<stamp>
+```
+
+For the restore, use a storage key that can write the restore bucket, passed with `-e S3_ACCESS_KEY_ID=… -e S3_SECRET_ACCESS_KEY=…`. Never use the nightly read-only key for this.
 
 ## The encryption key
 

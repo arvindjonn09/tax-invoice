@@ -4,7 +4,7 @@ This is the runbook for putting a JobFlow release on staging and taking it back 
 
 > **Status:**
 > - The deploy steps match the staging configuration (`infra/staging/deploy.sh`, `.github/workflows/staging.yml`). They haven't run on a real host yet. #66 stays open until the owner provisions staging and records the first deploy below.
-> - The pre-deploy backup is blocked on #173.
+> - On staging, the pre-deploy backup runs through the Compose `backup` service (#173, [backups.md § Staging](backups.md#staging-compose)).
 
 ## What a release is
 
@@ -20,11 +20,11 @@ This is the runbook for putting a JobFlow release on staging and taking it back 
 3. Take a backup and verify it, then write down the stamp:
 
    ```sh
-   sudo systemctl start jobflow-backup.service
-   journalctl -u jobflow-backup.service -n 20      # expect "jobflow backup <stamp> ok"
+   sudo systemctl start jobflow-staging-backup.service      # staging (Compose)
+   journalctl -u jobflow-staging-backup.service -n 20      # expect "jobflow backup <stamp> ok"
    ```
 
-   > **On staging, this step doesn't work yet.** The backup unit can't reach the Compose stack's database: #173. Until that's fixed, don't deploy a release with a migration that isn't backward-compatible.
+   On a host without Compose, use `jobflow-backup.service` instead.
 
 **Backward-compatible** means the previous app version still works against the new schema. These are safe:
 - a new table
@@ -93,7 +93,7 @@ A rollback is always a new commit on `main`, because the deploy gate only accept
 2. Restore the pre-deploy backup into a **new, empty** database and bucket ([backups.md § Restore runbook](backups.md#restore-runbook)).
    - Run the restore as the **same owner role** that `migrate.env` uses. The dump is `--no-owner`, so the tables belong to whoever restores them.
    - **Skip that runbook's `pnpm db:migrate` check.** The checkout is still on the bad commit, so running it would re-apply the bad migration.
-   - On staging, the restore can't reach the database from the host yet (#173).
+   - On staging, create the database and restore through the stack ([backups.md § Staging](backups.md#staging-compose)).
 3. Repoint every environment at the restored database and bucket:
    - `infra/staging/env/migrate.env`: `DATABASE_URL`.
    - `web.env`: `DATABASE_URL`, `S3_BUCKET`, and a key that can reach that bucket.

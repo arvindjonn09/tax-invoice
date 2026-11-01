@@ -152,7 +152,7 @@ export async function recordBill(
   // document) take. Inserting the bill only key-shares rows already
   // locked here, so a racing expense or offer write can't deadlock it.
   if (data.contractorId) {
-    await lockRow(tx, "contractors", data.contractorId);
+    await lockRow(tx, "contractors", data.contractorId, actor.companyId);
     const contractor = await tx.contractor.findFirst({
       where: { id: data.contractorId, companyId: actor.companyId },
     });
@@ -202,7 +202,7 @@ export async function recordBill(
       "supplierAbn",
     );
   if (jobId) {
-    await lockRow(tx, "jobs", jobId);
+    await lockRow(tx, "jobs", jobId, actor.companyId);
     const job = await tx.job.findFirst({
       where: { id: jobId, companyId: actor.companyId },
       select: { id: true },
@@ -687,15 +687,21 @@ export async function expenseBalances(
 /** Lock expense rows in a fixed order, after any bills (no deadlocks). */
 async function lockExpenses(
   tx: Prisma.TransactionClient,
+  companyId: string,
   ids: readonly string[],
 ) {
-  for (const id of [...new Set(ids)].sort()) await lockRow(tx, "expenses", id);
+  for (const id of [...new Set(ids)].sort())
+    await lockRow(tx, "expenses", id, companyId);
 }
 
 /** Lock bill rows in a fixed order (no deadlocks between payments). */
-async function lockBills(tx: Prisma.TransactionClient, ids: readonly string[]) {
+async function lockBills(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  ids: readonly string[],
+) {
   for (const id of [...new Set(ids)].sort())
-    await lockRow(tx, "supplier_bills", id);
+    await lockRow(tx, "supplier_bills", id, companyId);
 }
 
 /**
@@ -897,7 +903,7 @@ export function billHandlers(db: () => PrismaClient) {
     if (!id) throw notFound();
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        await lockRow(tx, "supplier_bills", id);
+        await lockRow(tx, "supplier_bills", id, actor.companyId);
         const before = requireSameCompany(
           actor,
           await tx.supplierBill.findUnique({
@@ -1063,8 +1069,8 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
           const ids = data.allocations.map((a) => (a.billId ?? a.expenseId)!);
           // Bills, then expenses — each in id order (the order every payment,
           // payment void and expense reversal takes).
-          if (forExpenses) await lockExpenses(tx, ids);
-          else await lockBills(tx, ids);
+          if (forExpenses) await lockExpenses(tx, actor.companyId, ids);
+          else await lockBills(tx, actor.companyId, ids);
           // A concurrent duplicate may have committed while we waited for the
           // locks: replay it rather than judging it as an overpayment.
           const duplicate = await replay(tx, actor, key, hash);
@@ -1292,7 +1298,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
     if (!id) throw notFound();
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        await lockRow(tx, "supplier_payments", id);
+        await lockRow(tx, "supplier_payments", id, actor.companyId);
         const before = requireSameCompany(
           actor,
           await tx.supplierPayment.findUnique({
@@ -1304,7 +1310,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
         // Under the bill locks, keep each bill's live credit at the rounded
         // share of what stays paid: record the correction, never edit history.
         const ids = before.allocations.map((allocation) => allocation.billId);
-        await lockBills(tx, ids);
+        await lockBills(tx, actor.companyId, ids);
         const balances = await billBalances(tx, actor.companyId, ids);
         const voidedAt = new Date(),
           voidDay = sydneyToday(voidedAt);
@@ -1353,7 +1359,7 @@ export function supplierPaymentHandlers(db: () => PrismaClient) {
         const expenseIds = before.expenseAllocations.map(
           (allocation) => allocation.expenseId,
         );
-        await lockExpenses(tx, expenseIds);
+        await lockExpenses(tx, actor.companyId, expenseIds);
         const owed = await expenseBalances(tx, actor.companyId, expenseIds);
         for (const allocation of before.expenseAllocations) {
           const balance = owed.get(allocation.expenseId);
@@ -1541,7 +1547,7 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
-          await lockRow(tx, "supplier_bills", billId);
+          await lockRow(tx, "supplier_bills", billId, actor.companyId);
           const bill = requireSameCompany(
             actor,
             await tx.supplierBill.findUnique({ where: { id: billId } }),
@@ -1747,8 +1753,8 @@ export function supplierCreditHandlers(db: () => PrismaClient) {
           await tx.supplierCredit.findUnique({ where: { id } }),
         );
         // Bill first, then the credit: the order recording a credit takes.
-        await lockRow(tx, "supplier_bills", found.billId);
-        await lockRow(tx, "supplier_credits", id);
+        await lockRow(tx, "supplier_bills", found.billId, actor.companyId);
+        await lockRow(tx, "supplier_credits", id, actor.companyId);
         const before = await tx.supplierCredit.findUniqueOrThrow({
           where: { id },
         });

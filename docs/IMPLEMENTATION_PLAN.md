@@ -74,6 +74,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] End-to-end critical acceptance test (registered and not-registered variants) and reconciliation tests
 
 ## M5 Production pilot
+- [ ] #166 GST posting privilege hardening: migration and runtime-role attack regressions implemented; pending independent review and CI.
 - [ ] Mobile-responsive UX and accessibility audit
 - [ ] Threat-model/permission audit
 - [ ] Record retention and data export
@@ -88,3 +89,6 @@ Invoice $2,500 ex GST; costs $1,450; profit $1,050; margin 42%; customer receipt
 or $590 (registered) outstanding. Payments and recoverable GST do not change profit. See [GST.md](GST.md#combined-gst-and-profit-acceptance-fixture).
 
 At every milestone: implement schema, routes, UI, tests and documentation; do not mark done without passing tests. Avoid bulk unreviewed implementation.
+
+- #57 real dashboard implemented: shared report/ageing calculations, date/customer/job filters, role-scoped GST/ledger, direct overdue-invoice links, fixture reconciliation and mobile/axe tests. Pending independent review and CI; #59 remains separate.
+- #70 PDF/CSV hardening: explicit PDF budgets, hostile-input/no-fetch and maximum-document tests, existing typed CSV injection controls reviewed; pending CI and independent security review.
