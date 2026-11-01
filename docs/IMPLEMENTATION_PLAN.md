@@ -90,4 +90,5 @@ or $590 (registered) outstanding. Payments and recoverable GST do not change pro
 
 At every milestone: implement schema, routes, UI, tests and documentation; do not mark done without passing tests. Avoid bulk unreviewed implementation.
 
+- #57 real dashboard implemented: shared report/ageing calculations, date/customer/job filters, role-scoped GST/ledger, direct overdue-invoice links, fixture reconciliation and mobile/axe tests. Pending independent review and CI; #59 remains separate.
 - #170 document maintenance: dedicated least-privilege DB login, private durable storage-deletion outbox and Compose/timer configuration implemented; pending CI and independent review.

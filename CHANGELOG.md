@@ -11,6 +11,8 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 - Debtor and creditor ageing as at any day, cash movement (not profit), and accountant CSV exports for GST, profit, ageing and cash, for owners and accountants only (#56).
 - Report reads load only the documents active in the range, and drill-down events are paged (#157).
 - Reports screens: job profit, draft GST with its composition, who owes what and cash movement, with date filters, drill-down to the source records and CSV export (#58).
+- The real financial dashboard: filtered profit and cash, outstanding balances, draft GST and direct links to overdue invoices (#57).
+- The critical acceptance test runs end to end for a not-registered company and three GST-registered variants, reconciling the dashboard, reports and database (#59).
 
 ## M5 Production pilot (in progress)
 
