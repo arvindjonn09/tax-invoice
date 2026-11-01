@@ -91,3 +91,4 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 | —    | staging     | —      | —             | First deploy waits for the owner to provision staging (#64). |
 
 - Security (#166): reserve GST posting writes to hardened source triggers and remove mutation grants from append-only financial records; period-lock and runtime-role regressions added.
+- Bound PDF rendering input, pages, output, concurrency and cooperative layout time; preserve text-only rendering and typed CSV protections (#70).
