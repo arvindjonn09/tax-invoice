@@ -6,6 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- Pre-production security audit with a generated route permission matrix kept in step with the code by CI; the static design samples are not served in production (#61).
 - Subcontractors send their own tax invoices for accepted work; the office verifies them and approves them into supplier bills (#139).
 - Deployment and rollback runbook, and user guides for invoices, payments and GST (#66).
 - Debtor and creditor ageing as at any day, cash movement (not profit), and accountant CSV exports for GST, profit, ageing and cash, for owners and accountants only (#56).
