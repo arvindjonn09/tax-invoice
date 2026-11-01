@@ -10,7 +10,7 @@ Local environment: Node 24.21.0, pnpm 9.15.4, Linux.
 - `pnpm test:integration`: one route-contract test passed. This is not database integration coverage.
 - `pnpm build`: passed; home and /api/health routes generated.
 - `pnpm audit:prod`: no known vulnerabilities; invokes `pnpm audit --prod --audit-level high` in an isolated copy with all manifest audit exceptions removed.
-- `pnpm audit --audit-level high`: passes with exactly one ignored advisory, GHSA-vfj7-8cjw-p6xm in braces 3.0.3. Owner-approved, development-only exception expires for review on 21 November 2026 or when #10 lands, whichever is sooner. See [audit exception record](../security/audit-exceptions.md). All other high/critical findings remain blocking.
+- `pnpm audit --audit-level high`: no ignored advisories. The braces advisory GHSA-vfj7-8cjw-p6xm was removed on 2 November 2026 by replacing fast-glob for the Next ESLint plugin (see [audit exception record](../security/audit-exceptions.md)). Every high/critical finding is blocking.
 - `pnpm test:e2e`: **12 passed against development (7.7s) and production (2.8s) builds** in local Chromium after extracting Ubuntu browser libraries into /tmp/jobflow-browser-libs (no system package installation). The original smoke test also passed in GitHub Actions run 39768121004. CI installs system dependencies with Playwright's --with-deps option.
 
 ## Review status and limitations

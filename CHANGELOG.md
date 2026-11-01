@@ -17,6 +17,10 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 - The real financial dashboard: filtered profit and cash, outstanding balances, draft GST and direct links to overdue invoices (#57).
 - The critical acceptance test runs end to end for a not-registered company and three GST-registered variants, reconciling the dashboard, reports and database (#59).
 
+### Security
+
+- The development-tooling audit exception for braces (GHSA-vfj7-8cjw-p6xm) is gone: braces is no longer installed, and the full and production audits both run with no exceptions (#202).
+
 ## M5 Production pilot (in progress)
 
 ### Added (2026-10-25)
