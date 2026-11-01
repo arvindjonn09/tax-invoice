@@ -1,11 +1,12 @@
 # Accessibility and responsive audit (#60)
 
 `tests/e2e/a11y-sweep.spec.ts` opens every screen each role can reach, at **360, 768 and 1440 px** in **light and dark**:
-- **Owner:** 21 screens, including every Reports tab and all three Payments views.
-- **Accountant, manager, employee and subcontractor:** each one's own screens.
+- **Owner:** 24 directory and create screens, including every Reports tab and all three Payments views, plus 10 detail screens opened on synthetic records the test creates: customer, job, quote, issued invoice, receipt, bill, supplier payment, expense, employee and contractor.
+- **Accountant, manager, employee and subcontractor:** each one's own screens. The subcontractor also gets an offer detail screen.
 - **Standalone pages:** sign-in and account.
 
 On every screen it checks:
+- that the screen has finished loading: a screen still showing a loading message after 30 s fails the audit;
 - exactly one `h1` and one `main`, and (in the app shell) one "Skip to main content" link;
 - no horizontal scrolling;
 - **axe with the WCAG 2.0, 2.1 and 2.2 A/AA rule sets: no violations**;
