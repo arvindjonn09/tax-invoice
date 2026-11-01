@@ -127,8 +127,15 @@ export async function cleanUnattachedDocuments(
     if (!result.errors.includes(short)) result.errors.push(short);
   };
   // Retry the durable backlog even when its document row is already gone.
+  // Never-tried entries first, then the least recently tried: a failure
+  // moves an entry to the back, so entries that keep failing can't block
+  // the rest of the backlog.
   const backlog = await db.documentDeleteRetry.findMany({
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    orderBy: [
+      { lastAttemptAt: { sort: "asc", nulls: "first" } },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
     take: limit,
   });
   if (!dryRun)

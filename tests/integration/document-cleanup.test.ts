@@ -302,6 +302,51 @@ describe("durable object deletion and maintenance privilege (#170)", () => {
     ).toBeNull();
     expect(await store.get(doc.objectKey)).toBeNull();
   });
+  it("rotates entries that keep failing so the rest of the backlog progresses", async () => {
+    const stuck = `documents/${companyId}/synthetic-stuck-${Date.now()}`;
+    const ok = `documents/${companyId}/synthetic-ok-${Date.now()}`;
+    await store.put(ok, Buffer.from("synthetic"));
+    const old = new Date("2000-01-01T00:00:00Z");
+    for (const [objectKey, offset] of [
+      [stuck, 0],
+      [ok, 1000],
+    ] as const)
+      await db.documentDeleteRetry.create({
+        data: {
+          id: randomUUID(),
+          companyId,
+          objectKey,
+          createdAt: new Date(old.getTime() + offset),
+        },
+      });
+    const denying = new Proxy(store, {
+      get(target, key) {
+        if (key === "delete")
+          return async (objectKey: string) => {
+            if (objectKey === stuck) throw new Error("Synthetic denied");
+            return target.delete(objectKey);
+          };
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    // One entry per run: the oldest fails first, then moves behind the
+    // never-tried entry, which the next run deletes.
+    const first = new Date(NOW.getTime() + 60_000);
+    await cleanUnattachedDocuments(db, denying, { now: first, limit: 1 });
+    expect(
+      await db.documentDeleteRetry.findFirst({ where: { objectKey: stuck } }),
+    ).toMatchObject({ attemptCount: 1, lastAttemptAt: first });
+    await cleanUnattachedDocuments(db, denying, {
+      now: new Date(NOW.getTime() + 120_000),
+      limit: 1,
+    });
+    expect(
+      await db.documentDeleteRetry.findFirst({ where: { objectKey: ok } }),
+    ).toBeNull();
+    expect(await store.get(ok)).toBeNull();
+    await db.documentDeleteRetry.deleteMany({ where: { objectKey: stuck } });
+  });
   it("runs cleanup as a separate maintenance login while the web role cannot delete/read private outbox", async () => {
     const { Client } = createRequire(
       new URL("../../packages/database/package.json", import.meta.url),
