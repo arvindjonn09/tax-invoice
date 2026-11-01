@@ -11,6 +11,7 @@ import { invoiceHandlers } from "../../apps/web/src/server/invoices/handlers";
 import {
   type PdfDeps,
   ensureInvoicePdf,
+  storePdfAfterResponse,
   invoicePdfHandlers,
 } from "../../apps/web/src/server/invoices/pdf-store";
 import { syntheticAbn } from "../helpers/abn";
@@ -357,5 +358,79 @@ describe("invoice PDFs (#48)", () => {
     expect((await link(invoice.id, "employee")).status).toBe(403);
     expect((await link(invoice.id, "outsider")).status).toBe(404);
     expect((await link(invoice.id, "owner")).status).toBe(200);
+  });
+});
+
+describe("issue responds before the PDF is stored (#158)", () => {
+  it("schedules storage after the response; running it stores the PDF", async () => {
+    const tasks: (() => Promise<unknown>)[] = [];
+    const deferred = invoiceHandlers(() => db, {
+      afterIssue: storePdfAfterResponse(deps, (task) => tasks.push(task)),
+    });
+    const draft = (await (
+      await r().create(
+        call("accountant", "POST", {
+          customerId,
+          lines: [
+            {
+              description: "Synthetic deferred PDF",
+              quantity: "1",
+              unitPriceCents: "10000",
+              taxCode: "TAXABLE_10",
+            },
+          ],
+        }),
+        undefined,
+      )
+    ).json()) as { id: string };
+    // The scheduled task has not run, so the response can't have waited on it.
+    const response = await withPolicy<One>("invoice.issue", deferred.issue)(
+      call("accountant", "POST", { issueDate: "2026-07-15" }),
+      one(draft.id),
+    );
+    expect(response.status).toBe(200);
+    expect(tasks).toHaveLength(1);
+    expect(
+      await db.invoicePdf.findFirst({ where: { invoiceId: draft.id } }),
+    ).toBeNull();
+    await tasks[0]!();
+    expect(
+      await db.invoicePdf.findFirst({ where: { invoiceId: draft.id } }),
+    ).not.toBeNull();
+  });
+
+  it("a failed deferred store is logged, never thrown", async () => {
+    const tasks: (() => Promise<unknown>)[] = [];
+    const deferred = invoiceHandlers(() => db, {
+      afterIssue: storePdfAfterResponse(
+        { ...deps, store: () => null },
+        (task) => tasks.push(task),
+      ),
+    });
+    const draft = (await (
+      await r().create(
+        call("accountant", "POST", {
+          customerId,
+          lines: [
+            {
+              description: "Synthetic unstored PDF",
+              quantity: "1",
+              unitPriceCents: "10000",
+              taxCode: "TAXABLE_10",
+            },
+          ],
+        }),
+        undefined,
+      )
+    ).json()) as { id: string };
+    const response = await withPolicy<One>("invoice.issue", deferred.issue)(
+      call("accountant", "POST", { issueDate: "2026-07-15" }),
+      one(draft.id),
+    );
+    expect(response.status).toBe(200);
+    await expect(tasks[0]!()).resolves.toBeUndefined();
+    expect(
+      await db.invoicePdf.findFirst({ where: { invoiceId: draft.id } }),
+    ).toBeNull();
   });
 });

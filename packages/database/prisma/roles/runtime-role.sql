@@ -33,3 +33,32 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 REVOKE UPDATE, DELETE, TRUNCATE ON audit_events FROM jobflow_app;
 -- Migration bookkeeping belongs to the owner.
 REVOKE ALL ON _prisma_migrations FROM jobflow_app;
+
+-- #166: reapply after the blanket grants above on EVERY deploy.
+-- Mutable document headers retain UPDATE for draft edits/one-way voids;
+-- their existing guard triggers remain authoritative.
+REVOKE UPDATE, DELETE, TRUNCATE ON
+  audit_events,
+  job_status_events,
+  employee_rate_history,
+  contractor_acceptances,
+  work_evidence,
+  supplier_bill_items,
+  receipt_allocations,
+  receipt_gst_adjustments,
+  supplier_payment_allocations,
+  supplier_payment_gst_adjustments,
+  invoice_pdfs,
+  gst_source_postings,
+  gst_periods,
+  gst_report_revisions,
+  gst_manual_adjustments,
+  credit_cash_adjustments,
+  supplier_credit_items,
+  supplier_credit_gst_adjustments,
+  supplier_payment_expense_allocations,
+  supplier_payment_expense_gst_adjustments,
+  subcontractor_bill_submission_items
+FROM jobflow_app;
+REVOKE INSERT ON gst_source_postings FROM jobflow_app;
+REVOKE ALL ON FUNCTION jobflow_guard_report_source(), jobflow_supplier_credit_posting(), jobflow_expense_payment_posting(), jobflow_record_gst_posting(uuid, uuid, date) FROM jobflow_app;
