@@ -26,6 +26,7 @@ await withIsolatedDatabase(async env => {
     await check(true);
     await checkAuth(true);
     // Roll back newest first: later migrations depend on users/companies.
+    await run('rollbacks/20261102100000_record_retention.sql');
     await run('rollbacks/20261027123000_document_maintenance.sql');
     await run('rollbacks/20261027110000_gst_posting_privileges.sql');
     await run('rollbacks/20261025100000_subcontractor_bills.sql');
@@ -80,6 +81,7 @@ await withIsolatedDatabase(async env => {
     await run('migrations/20261025100000_subcontractor_bills/migration.sql');
     await run('migrations/20261027110000_gst_posting_privileges/migration.sql');
     await run('migrations/20261027123000_document_maintenance/migration.sql');
+    await run('migrations/20261102100000_record_retention/migration.sql');
     await check(true);
     await checkAuth(true);
     const { rows } = await client.query("SELECT tgname FROM pg_trigger WHERE tgname = 'audit_events_append_only'");
