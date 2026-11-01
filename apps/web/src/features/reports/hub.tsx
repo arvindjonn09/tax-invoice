@@ -131,6 +131,7 @@ const SOURCE_TYPE: Record<string, string> = {
   customer_receipt: "Customer receipt",
   customer_refund: "Customer refund",
   supplier_payment: "Supplier payment",
+  bill_evidence: "Late tax invoice for bill",
 };
 const sourceHref = (id: string, source?: Source) =>
   source?.type === "invoice" || source?.type === "credit_note"

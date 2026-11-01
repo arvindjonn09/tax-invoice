@@ -6,6 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- A bill's tax invoice that arrives later moves its claimable GST from job cost to GST credits on the day it's held, without editing the bill (#142).
 - Accessibility sweep: every screen for every role passes axe (WCAG 2.2 AA) and reflows at 360, 768 and 1440 px in both themes, with a keyboard skip-link check (#60).
 - Pre-production security audit with a generated route permission matrix kept in step with the code by CI; the static design samples are not served in production (#61).
 - Subcontractors send their own tax invoices for accepted work; the office verifies them and approves them into supplier bills (#139).

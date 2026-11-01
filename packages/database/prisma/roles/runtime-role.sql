@@ -63,7 +63,8 @@ REVOKE UPDATE, DELETE, TRUNCATE ON
   supplier_credit_gst_adjustments,
   supplier_payment_expense_allocations,
   supplier_payment_expense_gst_adjustments,
-  subcontractor_bill_submission_items
+  subcontractor_bill_submission_items,
+  supplier_bill_evidence
 FROM jobflow_app;
 REVOKE INSERT ON gst_source_postings FROM jobflow_app;
 REVOKE ALL ON FUNCTION jobflow_guard_report_source(), jobflow_supplier_credit_posting(), jobflow_expense_payment_posting(), jobflow_record_gst_posting(uuid, uuid, date) FROM jobflow_app;

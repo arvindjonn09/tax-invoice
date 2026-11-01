@@ -111,35 +111,35 @@ model AuthRateLimit {
 
 model Company {
   documentDeleteRetries DocumentDeleteRetry[]
-  id               String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name             String                   @db.VarChar(200)
-  isDemo           Boolean                  @default(false) @map("is_demo")
-  legalName        String?                  @map("legal_name") @db.VarChar(200)
+  id                    String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String                   @db.VarChar(200)
+  isDemo                Boolean                  @default(false) @map("is_demo")
+  legalName             String?                  @map("legal_name") @db.VarChar(200)
   /// 11 digits, checksum-validated by the application (#25).
-  abn              String?                  @db.Char(11)
-  addressLine1     String?                  @map("address_line1") @db.VarChar(200)
-  addressLine2     String?                  @map("address_line2") @db.VarChar(200)
-  suburb           String?                  @db.VarChar(100)
-  state            String?                  @db.VarChar(3)
-  postcode         String?                  @db.Char(4)
-  invoicePrefix    String                   @default("INV-") @map("invoice_prefix") @db.VarChar(10)
-  jobPrefix        String                   @default("JOB-") @map("job_prefix") @db.VarChar(10)
-  basPeriod        BasReportingPeriod       @default(quarterly) @map("bas_period")
-  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy        String                   @map("created_by") @db.Uuid
+  abn                   String?                  @db.Char(11)
+  addressLine1          String?                  @map("address_line1") @db.VarChar(200)
+  addressLine2          String?                  @map("address_line2") @db.VarChar(200)
+  suburb                String?                  @db.VarChar(100)
+  state                 String?                  @db.VarChar(3)
+  postcode              String?                  @db.Char(4)
+  invoicePrefix         String                   @default("INV-") @map("invoice_prefix") @db.VarChar(10)
+  jobPrefix             String                   @default("JOB-") @map("job_prefix") @db.VarChar(10)
+  basPeriod             BasReportingPeriod       @default(quarterly) @map("bas_period")
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy             String                   @map("created_by") @db.Uuid
   // Migration defers this FK until commit so company + first owner can be atomic.
-  creator          Membership               @relation("CompanyCreator", fields: [id, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  memberships      Membership[]             @relation("CompanyMemberships")
-  auditEvents      AuditEvent[]
-  idempotencyKeys  IdempotencyKey[]
-  authSessions     AuthSession[]
-  gstRegistrations CompanyGstRegistration[]
-  employees        Employee[]
-  customers        Customer[]
-  numberSequences  NumberSequence[]
-  documents        Document[]
-  contractors      Contractor[]
+  creator               Membership               @relation("CompanyCreator", fields: [id, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  memberships           Membership[]             @relation("CompanyMemberships")
+  auditEvents           AuditEvent[]
+  idempotencyKeys       IdempotencyKey[]
+  authSessions          AuthSession[]
+  gstRegistrations      CompanyGstRegistration[]
+  employees             Employee[]
+  customers             Customer[]
+  numberSequences       NumberSequence[]
+  documents             Document[]
+  contractors           Contractor[]
 
   userInvitations          UserInvitation[]
   defaultExpenseSettlement ExpenseSettlement @default(paid_at_purchase) @map("default_expense_settlement")
@@ -256,6 +256,7 @@ model Membership {
   gstPeriods               GstPeriod[]
   gstReportRevisions       GstReportRevision[]
   gstManualAdjustments     GstManualAdjustment[]
+  billEvidenceCreated      SupplierBillEvidence[]        @relation("BillEvidenceCreator")
 
   @@unique([companyId, userId])
   @@index([userId])
@@ -613,6 +614,7 @@ model Document {
   supplierBill   SupplierBill?
   supplierCredit SupplierCredit?
   billSubmission SubcontractorBillSubmission?
+  billEvidence   SupplierBillEvidence?
 
   @@unique([companyId, id])
   @@index([companyId, createdBy])
@@ -1305,6 +1307,7 @@ model SupplierBill {
   credits               SupplierCredit[]
   creditGstAdjustments  SupplierCreditGstAdjustment[]
   submission            SubcontractorBillSubmission?
+  evidence              SupplierBillEvidence?
 
   @@unique([companyId, id])
   @@unique([companyId, documentId])
@@ -1674,16 +1677,41 @@ model SubcontractorBillSubmissionItem {
   @@map("subcontractor_bill_submission_items")
 }
 
-
 /// Private storage deletion outbox; never returned by web APIs/exports (#170).
 model DocumentDeleteRetry {
- id String @id @db.Uuid
- companyId String @map("company_id") @db.Uuid
- objectKey String @unique @map("object_key") @db.VarChar(500)
- attemptCount Int @default(0) @map("attempt_count")
- lastAttemptAt DateTime? @map("last_attempt_at") @db.Timestamptz(3)
- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
- company Company @relation(fields:[companyId],references:[id],onDelete:NoAction,onUpdate:NoAction)
- @@unique([companyId,id])
- @@map("document_delete_retries")
+  id            String    @id @db.Uuid
+  companyId     String    @map("company_id") @db.Uuid
+  objectKey     String    @unique @map("object_key") @db.VarChar(500)
+  attemptCount  Int       @default(0) @map("attempt_count")
+  lastAttemptAt DateTime? @map("last_attempt_at") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, id])
+  @@map("document_delete_retries")
+}
+
+/// Late tax-invoice evidence for a bill recorded without it (#142, R6): an
+/// audited reclassification moving GST from job cost to creditable GST on the
+/// day the evidence is held. The bill's snapshot is never rewritten.
+model SupplierBillEvidence {
+  id                  String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId           String       @map("company_id") @db.Uuid
+  billId              String       @map("bill_id") @db.Uuid
+  documentId          String       @map("document_id") @db.Uuid
+  /// The day the evidence is held: GST moves from cost to credit on it.
+  adjustedOn          DateTime     @map("adjusted_on") @db.Date
+  /// Creditable GST added to the bill (and removed from its job cost).
+  creditableGstCents  BigInt       @map("creditable_gst_cents")
+  /// Cash basis: the credit already-paid amounts now attribute, on adjustedOn.
+  cashCatchUpGstCents BigInt       @default(0) @map("cash_catch_up_gst_cents")
+  createdBy           String       @map("created_by") @db.Uuid
+  createdAt           DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  bill                SupplierBill @relation(fields: [companyId, billId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  document            Document     @relation(fields: [companyId, documentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction)
+  creator             Membership   @relation("BillEvidenceCreator", fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, billId])
+  @@unique([companyId, documentId])
+  @@map("supplier_bill_evidence")
 }

@@ -20,6 +20,7 @@ export async function lockDocumentClaim(
       expense: { select: { id: true } },
       supplierBill: { select: { id: true } },
       supplierCredit: { select: { id: true } },
+      billEvidence: { select: { id: true } },
       workEvidence: { select: { id: true } },
       billSubmission: { select: { id: true, status: true } },
     },

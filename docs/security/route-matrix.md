@@ -14,6 +14,7 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 | `/api/bills` | POST | `bill.write` | owner, accountant |
 | `/api/bills/[id]` | GET | `bill.read` | owner, manager, accountant |
 | `/api/bills/[id]/credits` | POST | `bill.write` | owner, accountant |
+| `/api/bills/[id]/evidence` | POST | `bill.write` | owner, accountant |
 | `/api/bills/[id]/void` | POST | `bill.write` | owner, accountant |
 | `/api/company` | GET | `company.read` | owner, manager, accountant, employee, subcontractor |
 | `/api/company` | PATCH | `company.update` | owner |

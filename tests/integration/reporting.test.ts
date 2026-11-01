@@ -2125,24 +2125,18 @@ it("backfills GST source postings when deploying over legacy financial rows", as
   try {
     // Down/up leaves immutable source documents in place, simulating first
     // deployment of the reporting migration against a pre-reporting database.
-    await connection.query(
-      readFileSync(
-        new URL(
-          "../../packages/database/prisma/rollbacks/20261023210000_reporting_periods.sql",
-          import.meta.url,
+    // Later migrations roll back first and reapply after (newest first).
+    const sql = (path: string) =>
+      connection.query(
+        readFileSync(
+          new URL(`../../packages/database/prisma/${path}`, import.meta.url),
+          "utf8",
         ),
-        "utf8",
-      ),
-    );
-    await connection.query(
-      readFileSync(
-        new URL(
-          "../../packages/database/prisma/migrations/20261023210000_reporting_periods/migration.sql",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    );
+      );
+    await sql("rollbacks/20261102110000_bill_evidence.sql");
+    await sql("rollbacks/20261023210000_reporting_periods.sql");
+    await sql("migrations/20261023210000_reporting_periods/migration.sql");
+    await sql("migrations/20261102110000_bill_evidence/migration.sql");
   } finally {
     await connection.end();
   }
@@ -3779,5 +3773,138 @@ it("dashboard job/customer filters apply to balances as well as profit (#57)", a
   expect(await job.json()).toMatchObject({
     totals: { revenue: "250000", profit: "105000" },
     ledger: { receivables: { total: "275000" }, payables: { total: "99000" } },
+  });
+});
+
+describe("late bill evidence on current main (#142)", () => {
+  /** A $900 + $90 bill recorded without verified evidence (GST in cost). */
+  const unverifiedBill = async (f: Awaited<ReturnType<typeof fixture>>) => {
+    const created = await billHandlers(() => db).create({
+      actor: f.actor,
+      request: req({
+        jobId: f.job.id,
+        supplierName: "Synthetic Late Supplier",
+        supplierGstRegistered: true,
+        supplierAbn: syntheticAbn("545454547"),
+        issuedOn: "2026-07-10",
+        lines: [
+          {
+            description: "Synthetic materials",
+            taxCode: "TAXABLE_10",
+            exclusiveCents: "90000",
+            gstCents: "9000",
+          },
+        ],
+        documentId: await f.doc(),
+        evidenceVerified: false,
+      }),
+      context: undefined,
+    });
+    expect(created.status, await created.clone().text()).toBe(201);
+    return ((await created.json()) as { id: string }).id;
+  };
+  const hold = (f: { actor: Actor }, billId: string, heldOn?: string) =>
+    billHandlers(() => db).evidence({
+      actor: f.actor,
+      request: req(heldOn ? { heldOn } : {}),
+      context: context(billId),
+    });
+  const creditBill = (f: { actor: Actor }, billId: string) =>
+    supplierCreditHandlers(() => db).create({
+      actor: f.actor,
+      request: req({
+        supplierReference: `CN-${randomUUID().slice(0, 8)}`,
+        issuedOn: "2026-07-20",
+        receivedOn: "2026-07-20",
+        lines: [
+          {
+            description: "Synthetic price adjustment",
+            taxCode: "TAXABLE_10",
+            exclusiveCents: "10000",
+            gstCents: "1000",
+          },
+        ],
+      }),
+      context: context(billId),
+    });
+
+  it("never mixes late evidence with supplier credits on one bill", async () => {
+    const f = await fixture(true, "non_cash");
+    // Credit first: late evidence is refused, nothing is recorded.
+    const credited = await unverifiedBill(f);
+    expect((await creditBill(f, credited)).status).toBe(201);
+    const refused = await hold(f, credited, "2026-08-01");
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error).toMatch(/supplier credits/);
+    expect(
+      await db.supplierBillEvidence.count({ where: { billId: credited } }),
+    ).toBe(0);
+    // Evidence first: a later credit is refused.
+    const held = await unverifiedBill(f);
+    expect((await hold(f, held, "2026-08-01")).status).toBe(200);
+    const late = await creditBill(f, held);
+    expect(late.status).toBe(409);
+    expect((await late.json()).error).toMatch(/tax invoice arrived late/);
+  });
+
+  it("bounded reads and source labels include evidence held today", async () => {
+    const { financialEvents } =
+      await import("../../apps/web/src/server/reports/events");
+    const { sourceLabels } =
+      await import("../../apps/web/src/server/reports/sources");
+    const { draftGstReport, profitabilityReport } =
+      await import("../../packages/domain/src/index");
+    for (const basis of ["non_cash", "cash"] as const) {
+      const f = await fixture(true, basis);
+      const billId = await unverifiedBill(f);
+      if (basis === "cash") {
+        const paid = await supplierPaymentHandlers(() => db).create({
+          actor: f.actor,
+          request: req({
+            paidOn: "2026-07-15",
+            amountCents: "49500",
+            method: "bank_transfer",
+            allocations: [{ billId, amountCents: "49500" }],
+          }),
+          context: undefined,
+        });
+        expect(paid.status, await paid.clone().text()).toBe(201);
+      }
+      // Its only recent activity: the tax invoice held today.
+      expect((await hold(f, billId)).status).toBe(200);
+      const today = sydneyToday();
+      const [full, bounded] = await db.$transaction(
+        async (tx) => [
+          await financialEvents(tx, f.company.id),
+          await financialEvents(tx, f.company.id, { since: today }),
+        ],
+        { isolationLevel: "RepeatableRead" },
+      );
+      const range = { from: today, to: today };
+      const stable = (value: unknown) =>
+        JSON.stringify(value, (_k, v: unknown) =>
+          typeof v === "bigint" ? v.toString() : v,
+        );
+      const gst = draftGstReport(bounded.events, range);
+      expect(stable(gst)).toBe(stable(draftGstReport(full.events, range)));
+      expect(stable(profitabilityReport(bounded.events, range))).toBe(
+        stable(profitabilityReport(full.events, range)),
+      );
+      // Non-cash: the whole $90 credit; cash: catch-up for the half paid.
+      expect(gst.oneB).toBe(basis === "cash" ? 4500n : 9000n);
+      expect(profitabilityReport(full.events, range).totals.cost).toBe(-9000n);
+      const labels = await db.$transaction((tx) =>
+        sourceLabels(
+          tx,
+          f.company.id,
+          full.events.map((e) => e.sourceId),
+        ),
+      );
+      for (const event of full.events)
+        expect(labels.get(event.sourceId), event.id).toBeDefined();
+      expect([...labels.values()].map((l) => l.type)).toContain(
+        "bill_evidence",
+      );
+    }
   });
 });
