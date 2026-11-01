@@ -74,6 +74,7 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] End-to-end critical acceptance test (registered and not-registered variants) and reconciliation tests
 
 ## M5 Production pilot
+- [ ] #166 GST posting privilege hardening: migration and runtime-role attack regressions implemented; pending independent review and CI.
 - [ ] Mobile-responsive UX and accessibility audit
 - [ ] Threat-model/permission audit
 - [ ] Record retention and data export

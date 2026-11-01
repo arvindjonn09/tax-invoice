@@ -26,7 +26,15 @@ When your accountant has checked a period, an owner or accountant **closes** it.
 
 ## Where to see it
 
-The report screens with filters and CSV export are still being built (#58). Until then, these endpoints return the same figures the screens will show:
+Open **Reports**. Each tab shows only what your role may see:
+- **Job profit:** revenue, costs and gross profit ex GST, by job, with every record behind the figures. Cash received and paid is shown separately because it isn't profit.
+- **Draft GST:** G1, 1A, 1B and net GST. **GST composition** lists each invoice, credit note, bill, expense or adjustment that makes them up, with links to the record. A finalised period shows its locked revision.
+- **Who owes what:** what customers owe you, or what you owe suppliers, at the end of any day, grouped by how overdue it is.
+- **Cash movement:** money in less money out, by month. It isn't profit.
+
+Pick a quarter or financial year, or enter your own dates. Owners and accountants can also use **Export CSV** for your accountant; the [export schemas](../exports.md) describe each file.
+
+The same figures are available from these endpoints:
 
 - `GET /api/reports/gst?from=2026-07-01&to=2026-09-30` gives the draft summary. Owners and accountants only.
 - `GET /api/reports/profitability?from=…&to=…` gives job profit ex GST, for anyone allowed to see job profit.
