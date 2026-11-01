@@ -23,6 +23,11 @@ describe("fast-glob shim for @next/eslint-plugin-next", () => {
       "packages/shared-types",
     ]);
     expect(glob("does-not-exist/")).toEqual([]);
+    expect(glob("apps/web///")).toEqual(["apps/web/"]);
+    // A long run of slashes is trimmed in linear time.
+    const started = performance.now();
+    expect(glob(`does-not-exist${"/".repeat(100_000)}`)).toEqual([]);
+    expect(performance.now() - started).toBeLessThan(2_000);
     // Files never count as root directories.
     expect(glob("package.json")).toEqual([]);
     const absolute = glob(`${process.cwd()}/apps/web`);

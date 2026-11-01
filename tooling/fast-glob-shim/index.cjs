@@ -9,6 +9,14 @@
 const { globSync: nodeGlobSync } = require("node:fs");
 const path = require("node:path");
 
+// Trailing slashes, trimmed without a regular expression (no backtracking on
+// long runs of "/").
+function trimSlashes(value) {
+  let end = value.length;
+  while (end > 1 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
 function globSync(pattern, options = {}) {
   const extra = Object.keys(options).filter((key) => key !== "onlyDirectories");
   if (typeof pattern !== "string" || !options.onlyDirectories || extra.length)
@@ -18,7 +26,7 @@ function globSync(pattern, options = {}) {
   const trailingSlash = pattern.endsWith("/");
   const absolute = path.isAbsolute(pattern);
   const cwd = process.cwd();
-  return nodeGlobSync(pattern.replace(/\/+$/, "") || "/", {
+  return nodeGlobSync(trimSlashes(pattern), {
     withFileTypes: true,
   })
     .filter((entry) => entry.isDirectory())
