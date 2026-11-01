@@ -7,6 +7,11 @@ Build Plan: Custom Job Management & Accounting Application
 > [`docs/`](docs/) — [REQUIREMENTS](docs/REQUIREMENTS.md), [GST](docs/GST.md), [DATA_MODEL](docs/DATA_MODEL.md),
 > [ARCHITECTURE](docs/ARCHITECTURE.md), [SECURITY](docs/SECURITY.md), [UI_DESIGN](docs/UI_DESIGN.md) and the
 > [IMPLEMENTATION_PLAN](docs/IMPLEMENTATION_PLAN.md). AI agents follow [`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md).
+>
+> **Using and running it:**
+> - User guides: [invoices](docs/user/invoices.md), [payments](docs/user/payments.md) and [GST](docs/user/gst.md).
+> - Operations: [deployment and rollback](docs/ops/deployment.md), [staging](docs/ops/staging.md), [backups](docs/ops/backups.md) and [uploads cleanup](docs/ops/documents.md).
+> - Changes: [CHANGELOG](CHANGELOG.md).
 > Work is tracked in [GitHub Issues](https://github.com/arvindjonn09/tax-invoice/issues) under milestones M0–M5.
 
 We will build a web application similar to the core job-tracking features of MYOB Business Pro, but tailored to your contracting business.

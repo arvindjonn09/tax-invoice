@@ -8,6 +8,7 @@ import { MoneyDisplay, formatAudCents } from "@/components/money-display";
 import { Field, FormMessage, sendJson } from "@/components/form/field";
 import { Button } from "@/components/ui/button";
 import { day, time, statusLabel } from "@/features/jobs/types";
+import { BillSubmissionPanel } from "./bills";
 import { EvidencePanel } from "./evidence";
 import type { OwnOffer } from "./types";
 export function PortalDetail({ id }: { id: string }) {
@@ -191,13 +192,9 @@ export function PortalDetail({ id }: { id: string }) {
           refresh={reload}
         />
       ) : null}
-      <section className="space-y-2 rounded-lg border bg-card p-6">
-        <h2 className="text-xl font-semibold">Bill submission</h2>
-        <p>
-          Bill submission will be available here in a later release. Contact the
-          office about billing.
-        </p>
-      </section>
+      {data.status === "accepted" && data.contractorActive ? (
+        <BillSubmissionPanel offerId={id} />
+      ) : null}
       <Link
         className="inline-flex min-h-11 items-center underline"
         href="/offers"

@@ -15,3 +15,6 @@ packages/database/src/generated/
 
 # Python contract-test bytecode
 __pycache__/
+
+# Staging host secrets (#64); only the *.env.example files are committed.
+infra/staging/env/*.env

@@ -337,13 +337,21 @@ async function linkedContractor(db: PrismaClient, actor: Actor) {
  * (link, archive, GST registration) take the same contractor lock, so every
  * check below sees the contractor as it is when the write commits.
  */
-async function lockedContractor(tx: Prisma.TransactionClient, id: string) {
-  await lockRow(tx, "contractors", id);
+async function lockedContractor(
+  tx: Prisma.TransactionClient,
+  id: string,
+  companyId: string,
+) {
+  await lockRow(tx, "contractors", id, companyId);
   return tx.contractor.findUniqueOrThrow({ where: { id } });
 }
 
-async function lockedOffer(tx: Prisma.TransactionClient, id: string) {
-  await lockRow(tx, "contractor_offers", id);
+async function lockedOffer(
+  tx: Prisma.TransactionClient,
+  id: string,
+  companyId: string,
+) {
+  await lockRow(tx, "contractor_offers", id, companyId);
   return tx.contractorOffer.findUniqueOrThrow({
     where: { id },
     include: { contractor: true, acceptance: true },
@@ -474,7 +482,7 @@ export function contractorHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
-          await lockRow(tx, "contractors", owned.id);
+          await lockRow(tx, "contractors", owned.id, actor.companyId);
           const before = await tx.contractor.findUniqueOrThrow({
             where: { id: owned.id },
           });
@@ -574,7 +582,11 @@ export function contractorHandlers(db: () => PrismaClient) {
       return await inTransaction(async () => {
         const offer = await withAudit(db(), async (tx, audit) => {
           // Re-check the preflight under the contractor lock.
-          const current = await lockedContractor(tx, contractor.id);
+          const current = await lockedContractor(
+            tx,
+            contractor.id,
+            actor.companyId,
+          );
           if (current.archivedAt)
             throw new Refusal(
               fail(400, "Choose an active contractor", "contractorId"),
@@ -584,7 +596,7 @@ export function contractorHandlers(db: () => PrismaClient) {
             throw new Refusal(
               fail(400, recheck.problem[1], recheck.problem[0]),
             );
-          const job = await lockedJob(tx, owned.id);
+          const job = await lockedJob(tx, owned.id, actor.companyId);
           if (!isJobEditable(job.status))
             throw new Refusal(
               fail(409, `A ${job.status} job can't get new offers`),
@@ -641,8 +653,8 @@ export function contractorHandlers(db: () => PrismaClient) {
     const { status, note, estimatedHours, ...rest } = defined(parsed.data);
     return inTransaction(async () => {
       const offer = await withAudit(db(), async (tx, audit) => {
-        await lockedContractor(tx, owned.contractorId);
-        const before = await lockedOffer(tx, owned.id);
+        await lockedContractor(tx, owned.contractorId, actor.companyId);
+        const before = await lockedOffer(tx, owned.id, actor.companyId);
         if (before.status !== "offered")
           throw new Refusal(
             fail(409, `An ${before.status} offer can't be changed`),
@@ -668,7 +680,7 @@ export function contractorHandlers(db: () => PrismaClient) {
           });
           return updated;
         }
-        const job = await lockedJob(tx, before.jobId);
+        const job = await lockedJob(tx, before.jobId, actor.companyId);
         if (!isJobEditable(job.status))
           throw new Refusal(
             fail(409, `Offers on a ${job.status} job can't be changed`),
@@ -817,9 +829,13 @@ export function contractorHandlers(db: () => PrismaClient) {
       const offer = await withAudit(db(), async (tx, audit) => {
         // The office may have unlinked or relinked this contractor since the
         // preflight: answer only if the caller is still its login.
-        const current = await lockedContractor(tx, contractor.id);
+        const current = await lockedContractor(
+          tx,
+          contractor.id,
+          actor.companyId,
+        );
         if (current.userId !== actor.userId) throw notFound();
-        const before = await lockedOffer(tx, owned.id);
+        const before = await lockedOffer(tx, owned.id, actor.companyId);
         if (before.status !== "offered")
           throw new Refusal(
             fail(409, `This offer is already ${before.status}`),
@@ -831,7 +847,7 @@ export function contractorHandlers(db: () => PrismaClient) {
               "Your contractor record is archived. Contact the office.",
             ),
           );
-        const job = await lockedJob(tx, before.jobId);
+        const job = await lockedJob(tx, before.jobId, actor.companyId);
         if (!isJobEditable(job.status))
           throw new Refusal(fail(409, `The job is ${job.status}`));
         const respondedAt = new Date();

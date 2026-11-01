@@ -526,7 +526,7 @@ export function quoteHandlers(db: () => PrismaClient) {
         // A revision replaces its predecessor only while that's still open:
         // once accepted, sending the revision would let it convert again.
         if (before.revisesId) {
-          await lockRow(tx, "quotes", before.revisesId);
+          await lockRow(tx, "quotes", before.revisesId, actor.companyId);
           const predecessor = await tx.quote.findUniqueOrThrow({
             where: { id: before.revisesId },
             select: { status: true },
@@ -700,7 +700,8 @@ export function quoteHandlers(db: () => PrismaClient) {
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
         const before = await lockedQuote(tx, actor, id);
-        if (before.jobId) await lockRow(tx, "jobs", before.jobId);
+        if (before.jobId)
+          await lockRow(tx, "jobs", before.jobId, actor.companyId);
         const job = before.jobId
           ? await tx.job.findUniqueOrThrow({ where: { id: before.jobId } })
           : null;

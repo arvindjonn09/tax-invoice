@@ -17,6 +17,9 @@ const Query = z
     to: z.iso.date(),
     jobId: z.uuid().optional(),
     customerId: z.uuid().optional(),
+    /** Drill-down paging (#157). Totals always cover every event. */
+    eventsPage: z.coerce.number().int().min(1).max(100_000).default(1),
+    eventsPageSize: z.coerce.number().int().min(1).max(1000).default(500),
   })
   .refine((q) => q.from <= q.to, {
     message: "End date must be on or after start date",
@@ -29,6 +32,29 @@ const json = (value: unknown) =>
       typeof item === "bigint" ? item.toString() : item,
     ),
   ) as unknown;
+/**
+ * Page the drill-down events; every total was computed from all of them
+ * first, so paging never truncates a figure (#157).
+ */
+function page<T extends { events: readonly unknown[] }>(
+  report: T,
+  {
+    eventsPage,
+    eventsPageSize,
+  }: { eventsPage: number; eventsPageSize: number },
+) {
+  const start = (eventsPage - 1) * eventsPageSize;
+  return {
+    ...report,
+    events: report.events.slice(start, start + eventsPageSize),
+    eventsPage: {
+      page: eventsPage,
+      pageSize: eventsPageSize,
+      total: report.events.length,
+    },
+  };
+}
+
 export function reportHandlers(db: () => PrismaClient) {
   const run =
     (gst: boolean): PolicyHandler<unknown> =>
@@ -75,9 +101,13 @@ export function reportHandlers(db: () => PrismaClient) {
               },
             });
             if (finalized?.revisions[0])
+              // The stored snapshot pages like a draft (#157).
               return privateJson({
                 range: query,
-                ...(finalized.revisions[0].report as Record<string, unknown>),
+                ...page(
+                  finalized.revisions[0].report as { events: unknown[] },
+                  parsed.data,
+                ),
                 finalization: {
                   periodId: finalized.id,
                   revision: finalized.revisions[0].revision,
@@ -85,7 +115,21 @@ export function reportHandlers(db: () => PrismaClient) {
                 },
               });
           }
-          const source = await financialEvents(tx, actor.companyId);
+          // Bounded (#157): only documents active on or after `from`.
+          const source = await financialEvents(tx, actor.companyId, {
+            since: query.from,
+          });
+          // Commitments compare with every bill of the offer up to `to`,
+          // not only bills active in the range: a narrow, separate read.
+          const offerBills = await tx.supplierBill.findMany({
+            where: { companyId: actor.companyId, offerId: { not: null } },
+            select: {
+              offerId: true,
+              exclusiveCents: true,
+              issuedOn: true,
+              voidedAt: true,
+            },
+          });
           const warnings = source.warnings.filter(
             (warning) =>
               (!query.jobId || warning.jobId === query.jobId) &&
@@ -137,7 +181,7 @@ export function reportHandlers(db: () => PrismaClient) {
                       outstandingCommitment({
                         committed: a.committedCostCents,
                         committedExclusive: a.exclusiveCents,
-                        billedExclusive: source.bills
+                        billedExclusive: offerBills
                           .filter(
                             (b) =>
                               b.offerId === a.offerId &&
@@ -159,16 +203,19 @@ export function reportHandlers(db: () => PrismaClient) {
               range: query,
               warnings,
               incomplete: gst && warnings.some((warning) => warning.omittedGst),
-              ...(gst
-                ? draftGstReport(source.events, query)
-                : {
-                    ...profitabilityReport(source.events, query),
-                    positions,
-                    committedCost: positions.reduce(
-                      (total, p) => total + p.committedCost,
-                      0n,
-                    ),
-                  }),
+              ...page(
+                gst
+                  ? draftGstReport(source.events, query)
+                  : {
+                      ...profitabilityReport(source.events, query),
+                      positions,
+                      committedCost: positions.reduce(
+                        (total, p) => total + p.committedCost,
+                        0n,
+                      ),
+                    },
+                parsed.data,
+              ),
             }),
           );
         },

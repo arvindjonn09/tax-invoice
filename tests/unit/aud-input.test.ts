@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { audInput, parseAudInput } from "../../apps/web/src/lib/aud-input";
+import {
+  audInput,
+  parseAudInput,
+  percentToBasisPoints,
+} from "../../apps/web/src/lib/aud-input";
 describe("AUD form boundary", () => {
   it("converts decimal text to exact cents without floating-point amounts", () => {
     expect(parseAudInput("2500.01")).toBe("250001");
@@ -22,5 +26,30 @@ describe("AUD form boundary", () => {
       "10000000000.01",
     ])
       expect(() => parseAudInput(value), value).toThrow(RangeError);
+  });
+});
+
+describe("percentToBasisPoints (#139)", () => {
+  it("converts 0–100% with up to two decimals without floating point", () => {
+    const cases: [string, number | null][] = [
+      ["0", 0],
+      ["5", 500],
+      ["0.01", 1],
+      ["50.5", 5050],
+      ["99.99", 9999],
+      ["100", 10_000],
+      [" 100.00 ", 10_000],
+      ["", null],
+      ["-1", null],
+      ["100.01", null],
+      ["101", null],
+      ["05", null],
+      [".5", null],
+      ["50.", null],
+      ["50%", null],
+      ["1e2", null],
+    ];
+    for (const [input, expected] of cases)
+      expect(percentToBasisPoints(input), input).toBe(expected);
   });
 });

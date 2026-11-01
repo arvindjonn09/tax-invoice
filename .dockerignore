@@ -1,0 +1,20 @@
+# Keep the build context small and secret-free (#64).
+**/node_modules
+**/.next
+**/coverage
+**/test-results
+**/playwright-report
+**/*.tsbuildinfo
+.git
+.github
+.env
+.env.*
+**/.env
+**/.env.*
+docs
+infra/staging/env/*.env
+**/*.pem
+**/*.key
+**/.npmrc
+infra/staging/env/*
+!infra/staging/env/*.env.example

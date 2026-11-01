@@ -1078,3 +1078,40 @@ describe("decision guard freezes the GST-rate snapshot (Codex #117 review, P2)",
     ).rejects.toThrow(/deciding an expense can't change it/);
   });
 });
+
+it("refuses a foreign job without trying to lock it (#53)", async () => {
+  // Exercise the real expense create path while another transaction owns
+  // the foreign job lock. A scoped refusal is 400; an unscoped lock times out.
+  const constrained = new Proxy(db, {
+    get(target, property) {
+      if (property === "$transaction")
+        return (
+          run: (
+            tx: import("../../packages/database/src/generated/prisma/client").Prisma.TransactionClient,
+          ) => Promise<unknown>,
+          options: unknown,
+        ) =>
+          target.$transaction(
+            async (tx) => {
+              await tx.$executeRaw`SET LOCAL lock_timeout = '250ms'`;
+              return run(tx);
+            },
+            options as { timeout?: number },
+          );
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const route = withPolicy(
+    "expense.submit_own",
+    expenseHandlers(() => constrained).create,
+  );
+  await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT 1 FROM jobs WHERE id=${outsiderJobId}::uuid FOR UPDATE`;
+    const response = await route(
+      call("manager", "POST", { ...MATERIALS, jobId: outsiderJobId }),
+      undefined,
+    );
+    expect(response.status, await response.clone().text()).toBe(400);
+  });
+});

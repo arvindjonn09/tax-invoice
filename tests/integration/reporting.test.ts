@@ -13,12 +13,15 @@ import { quoteHandlers } from "../../apps/web/src/server/quotes/handlers";
 import { receiptHandlers } from "../../apps/web/src/server/receipts/handlers";
 import {
   billHandlers,
+  supplierCreditHandlers,
   supplierPaymentHandlers,
 } from "../../apps/web/src/server/bills/handlers";
 import { expenseHandlers } from "../../apps/web/src/server/expenses/handlers";
 import { periodHandlers } from "../../apps/web/src/server/reports/periods";
 import { sydneyToday } from "../../apps/web/src/server/company/gst";
 import { reportHandlers } from "../../apps/web/src/server/reports/handlers";
+import { ledgerHandlers } from "../../apps/web/src/server/reports/ledger";
+import { exportHandlers } from "../../apps/web/src/server/exports/handlers";
 import {
   withCommittedDatabase,
   type CommittedDatabase,
@@ -1990,6 +1993,21 @@ describe("chronological settlement safety and legacy report isolation", () => {
       });
       expect(close.status).toBe(409);
       expect((await close.json()).warnings[0].sourceId).toBe(f.invoice.id);
+      // The accountant's GST exports refuse the same incomplete draft.
+      for (const name of ["gst-summary", "gst-lines"]) {
+        const exported = await exportHandlers(() => db).run({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/exports/${name}?from=2026-07-01&to=2026-09-30`,
+          ),
+          context: { params: Promise.resolve({ name }) },
+        });
+        expect(exported.status, name).toBe(basis === "cash" ? 409 : 200);
+        if (basis === "cash")
+          expect((await exported.json()).warnings[0].sourceId).toBe(
+            f.invoice.id,
+          );
+      }
       expect(
         await db.gstPeriod.count({ where: { companyId: f.company.id } }),
       ).toBe(0);
@@ -2049,4 +2067,1516 @@ it("backfills GST source postings when deploying over legacy financial rows", as
   expect(
     rows.every((row) => row.originalOn.getTime() === row.effectiveOn.getTime()),
   ).toBe(true);
+});
+
+describe("supplier credits in reports (#140)", () => {
+  const credit = (actor: Actor, billId: string, taxCode = "TAXABLE_10") =>
+    supplierCreditHandlers(() => db).create({
+      actor,
+      request: req({
+        supplierReference: `CN-${randomUUID().slice(0, 8)}`,
+        issuedOn: "2026-07-20",
+        receivedOn: "2026-07-20",
+        lines: [
+          {
+            description: "Synthetic price adjustment",
+            taxCode,
+            exclusiveCents: "10000",
+            gstCents: taxCode === "TAXABLE_10" ? "1000" : "0",
+          },
+        ],
+      }),
+      context: context(billId),
+    });
+  const pay = (actor: Actor, billId: string, paidOn: string, cents: string) =>
+    supplierPaymentHandlers(() => db).create({
+      actor,
+      request: req({
+        paidOn,
+        amountCents: cents,
+        method: "bank_transfer",
+        allocations: [{ billId, amountCents: cents }],
+      }),
+      context: undefined,
+    });
+  const on = async (actor: Actor, day: string) => {
+    const handler = reportHandlers(() => db),
+      request = new Request(`${origin}/api/reports?from=${day}&to=${day}`);
+    return {
+      gst: await (
+        await handler.gst({ actor, request, context: undefined })
+      ).json(),
+      profit: await (
+        await handler.profitability({ actor, request, context: undefined })
+      ).json(),
+    };
+  };
+  const voidCredit = (actor: Actor, id: string) =>
+    supplierCreditHandlers(() => db).void({
+      actor,
+      request: req({ reason: "Synthetic duplicate" }),
+      context: context(id),
+    });
+
+  it("reports a cash-basis correction on a paid bill, and its void today", async () => {
+    const f = await fixture(true, "cash");
+    const paid = await pay(f.actor, f.supplier.id, "2026-07-18", "49500");
+    expect(paid.status, await paid.clone().text()).toBe(201);
+    expect((await reports(f.actor)).gst).toMatchObject({ oneB: "6000" });
+    // A GST-free credit raises the paid share's GST: round(49500 × 9000 /
+    // 89000) = 5006, so +506 on 20 July ($75 or less: no note needed).
+    const created = await credit(f.actor, f.supplier.id, "GST_FREE");
+    expect(created.status, await created.clone().text()).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    expect(
+      await db.supplierCreditGstAdjustment.findMany({
+        where: { creditId: id },
+        select: { event: true, creditableGstCents: true, adjustedOn: true },
+      }),
+    ).toEqual([
+      {
+        event: "recorded",
+        creditableGstCents: 506n,
+        adjustedOn: new Date("2026-07-20T00:00:00Z"),
+      },
+    ]);
+    expect((await reports(f.actor)).gst).toMatchObject({ oneB: "6506" });
+    // Cash basis: no payment may now be dated before the credit (#54 rule).
+    const early = await pay(f.actor, f.supplier.id, "2026-07-19", "1000");
+    expect(early.status).toBe(400);
+    expect(await early.json()).toMatchObject({
+      fields: { paidOn: expect.stringMatching(/supplier credit/) },
+    });
+    const voided = await voidCredit(f.actor, id);
+    expect(voided.status, await voided.clone().text()).toBe(200);
+    expect((await reports(f.actor)).gst).toMatchObject({ oneB: "6506" });
+    const today = await on(f.actor, sydneyToday());
+    expect(today.gst).toMatchObject({ oneB: "-506" });
+    // The job cost comes back on the void day too.
+    expect(today.profit.totals).toMatchObject({ cost: "10000" });
+  });
+
+  it("reverses a credit voided after its period was finalised in the open period", async () => {
+    const f = await fixture(true, "non_cash");
+    const created = await credit(f.actor, f.supplier.id);
+    expect(created.status, await created.clone().text()).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({
+        from: "2026-07-01",
+        to: "2026-09-30",
+        note: "Synthetic supplier credit void boundary",
+      }),
+      context: undefined,
+    });
+    expect(close.status, await close.clone().text()).toBe(201);
+    const finalised = (await reports(f.actor)).gst as Record<string, unknown>;
+    expect(finalised).toMatchObject({ oneB: "9500" });
+    expect((await voidCredit(f.actor, id)).status).toBe(200);
+    expect((await reports(f.actor)).gst).toMatchObject({
+      oneA: finalised.oneA,
+      oneB: "9500",
+    });
+    expect((await on(f.actor, sydneyToday())).gst).toMatchObject({
+      oneB: "1000",
+    });
+  });
+
+  it("never stores a credit that was voided before it was recorded", async () => {
+    const f = await fixture(true, "non_cash");
+    const created = await credit(f.actor, f.supplier.id);
+    const row = await db.supplierCredit.findUniqueOrThrow({
+      where: { id: ((await created.json()) as { id: string }).id },
+    });
+    await expect(
+      db.supplierCredit.create({
+        data: {
+          ...row,
+          id: randomUUID(),
+          supplierReference: null,
+          voidedAt: new Date(),
+          voidedBy: f.user.id,
+          voidReason: "Synthetic",
+        },
+      }),
+    ).rejects.toThrow(/recorded before it is voided/);
+  });
+
+  for (const basis of ["non_cash", "cash"] as const)
+    it(`lowers job cost and (${basis}) the purchases GST on the date received`, async () => {
+      const f = await fixture(true, basis);
+      const created = await credit(f.actor, f.supplier.id);
+      expect(created.status, await created.clone().text()).toBe(201);
+      const { id } = (await created.json()) as { id: string };
+      const after = await reports(f.actor);
+      expect(after.profit.totals).toMatchObject({
+        revenue: "250000",
+        cost: "135000",
+        profit: "115000",
+      });
+      // Unpaid on the cash basis: nothing was claimed, so nothing comes back.
+      expect(after.gst).toMatchObject({
+        oneB: basis === "cash" ? "1500" : "9500",
+      });
+      const voided = await supplierCreditHandlers(() => db).void({
+        actor: f.actor,
+        request: req({ reason: "Synthetic duplicate" }),
+        context: context(id),
+      });
+      expect(voided.status, await voided.clone().text()).toBe(200);
+      // Reversed on the void day (today), outside July–September.
+      const today = await reportHandlers(() => db).gst({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+        ),
+        context: undefined,
+      });
+      expect(await today.json()).toMatchObject({
+        oneB: basis === "cash" ? "0" : "1000",
+      });
+      expect((await reports(f.actor)).profit.totals).toMatchObject({
+        cost: "135000",
+      });
+    });
+
+  it("posts a credit dated in a finalised period to the open period", async () => {
+    const f = await fixture(true, "non_cash");
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({
+        from: "2026-07-01",
+        to: "2026-09-30",
+        note: "Synthetic supplier credit boundary",
+      }),
+      context: undefined,
+    });
+    expect(close.status, await close.clone().text()).toBe(201);
+    const finalised = (await reports(f.actor)).gst;
+    const created = await credit(f.actor, f.supplier.id);
+    expect(created.status, await created.clone().text()).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    const posting = await db.gstSourcePosting.findFirstOrThrow({
+      where: { companyId: f.company.id, sourceId: id },
+    });
+    expect(posting.originalOn.toISOString().slice(0, 10)).toBe("2026-07-20");
+    expect(posting.effectiveOn.toISOString().slice(0, 10)).toBe(sydneyToday());
+    expect((await reports(f.actor)).gst).toMatchObject({
+      oneA: (finalised as { oneA: string }).oneA,
+      oneB: (finalised as { oneB: string }).oneB,
+    });
+    const current = await reportHandlers(() => db).gst({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+      ),
+      context: undefined,
+    });
+    expect(await current.json()).toMatchObject({ oneB: "-1000" });
+  });
+});
+
+describe("on-account expenses paid later in reports (#141)", () => {
+  for (const basis of ["cash", "non_cash"] as const)
+    it(`attributes the payment's GST on the payment date (${basis})`, async () => {
+      const f = await fixture(true, basis);
+      const expenses = expenseHandlers(() => db);
+      const submitted = await expenses.create({
+        actor: f.actor,
+        request: req({
+          jobId: f.job.id,
+          category: "materials",
+          description: "Synthetic on-account purchase",
+          supplierName: "Synthetic Supplies",
+          purchasedOn: "2026-07-15",
+          priceEntry: "exclusive",
+          amountCents: "15000",
+          taxCode: "TAXABLE_10",
+          receiptDocumentId: await f.doc(),
+          settlement: "on_account",
+        }),
+        context: undefined,
+      });
+      expect(submitted.status, await submitted.clone().text()).toBe(201);
+      const { id } = (await submitted.json()) as { id: string };
+      const decided = await expenses.decide({
+        actor: f.actor,
+        request: req({ decision: "approve", evidenceVerified: true }),
+        context: context(id),
+      });
+      expect(decided.status, await decided.clone().text()).toBe(200);
+      const before = await reports(f.actor);
+      expect(before.profit.totals).toMatchObject({ cost: "160000" });
+      expect(before.gst).toMatchObject({
+        oneB: basis === "cash" ? "1500" : "12000",
+      });
+      const paid = await supplierPaymentHandlers(() => db).create({
+        actor: f.actor,
+        request: req({
+          paidOn: "2026-07-20",
+          amountCents: "11000",
+          method: "bank_transfer",
+          allocations: [{ expenseId: id, amountCents: "11000" }],
+        }),
+        context: undefined,
+      });
+      expect(paid.status, await paid.clone().text()).toBe(201);
+      const payment = (await paid.json()) as { id: string };
+      const after = await reports(f.actor);
+      // round(11000 × 1500 / 16500) = 1000 on the cash basis.
+      expect(after.gst).toMatchObject({
+        oneB: basis === "cash" ? "2500" : "12000",
+      });
+      expect(after.profit.totals).toMatchObject({
+        cost: "160000",
+        paidInclusive: (
+          BigInt(before.profit.totals.paidInclusive) + 11000n
+        ).toString(),
+      });
+      const voided = await supplierPaymentHandlers(() => db).void({
+        actor: f.actor,
+        request: req({ reason: "Synthetic bank error" }),
+        context: context(payment.id),
+      });
+      expect(voided.status, await voided.clone().text()).toBe(200);
+      expect((await reports(f.actor)).gst).toMatchObject({
+        oneB: basis === "cash" ? "2500" : "12000",
+      });
+      const today = await reportHandlers(() => db).gst({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+        ),
+        context: undefined,
+      });
+      expect(await today.json()).toMatchObject({
+        oneB: basis === "cash" ? "-1000" : "0",
+      });
+      const posting = await db.gstSourcePosting.findMany({
+        where: { companyId: f.company.id, sourceId: payment.id },
+      });
+      expect(posting.length).toBeGreaterThan(0);
+    });
+
+  it("posts a payment dated in a finalised period to the open period (cash)", async () => {
+    const f = await fixture(true, "cash");
+    const expenses = expenseHandlers(() => db);
+    const submitted = await expenses.create({
+      actor: f.actor,
+      request: req({
+        jobId: f.job.id,
+        category: "materials",
+        description: "Synthetic on-account purchase",
+        supplierName: "Synthetic Supplies",
+        purchasedOn: "2026-07-15",
+        priceEntry: "exclusive",
+        amountCents: "15000",
+        taxCode: "TAXABLE_10",
+        receiptDocumentId: await f.doc(),
+        settlement: "on_account",
+      }),
+      context: undefined,
+    });
+    const { id } = (await submitted.json()) as { id: string };
+    expect(
+      (
+        await expenses.decide({
+          actor: f.actor,
+          request: req({ decision: "approve", evidenceVerified: true }),
+          context: context(id),
+        })
+      ).status,
+    ).toBe(200);
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({ from: "2026-07-01", to: "2026-09-30", note: "Synthetic" }),
+      context: undefined,
+    });
+    expect(close.status, await close.clone().text()).toBe(201);
+    const finalised = (await reports(f.actor)).gst as { oneB: string };
+    const paid = await supplierPaymentHandlers(() => db).create({
+      actor: f.actor,
+      request: req({
+        paidOn: "2026-07-20",
+        amountCents: "16500",
+        method: "bank_transfer",
+        allocations: [{ expenseId: id, amountCents: "16500" }],
+      }),
+      context: undefined,
+    });
+    expect(paid.status, await paid.clone().text()).toBe(201);
+    const payment = (await paid.json()) as { id: string };
+    const posting = await db.gstSourcePosting.findFirstOrThrow({
+      where: { companyId: f.company.id, sourceId: payment.id },
+    });
+    expect(posting.effectiveOn.toISOString().slice(0, 10)).toBe(sydneyToday());
+    expect((await reports(f.actor)).gst).toMatchObject({
+      oneB: finalised.oneB,
+    });
+    const today = await reportHandlers(() => db).gst({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+      ),
+      context: undefined,
+    });
+    expect(await today.json()).toMatchObject({ oneB: "1500" });
+  });
+});
+
+// #157: bounded source reads must not change any report. Runs last, over
+// every company the tests above built (both GST bases, unregistered,
+// credits, voids, finalised periods, late postings, expense chains).
+describe("bounded report sources (#157)", () => {
+  const windows = (): { from: string; to: string }[] => {
+    const out: { from: string; to: string }[] = [];
+    for (const [from, to] of [
+      ["2025-07-01", "2025-09-30"],
+      ["2026-01-01", "2026-03-31"],
+      ["2026-04-01", "2026-06-30"],
+      ["2026-07-01", "2026-09-30"],
+      ["2026-10-01", "2026-12-31"],
+      ["2026-07-15", "2026-07-15"],
+      ["2026-07-16", "2026-07-31"],
+      ["2026-07-20", "2026-08-31"],
+      ["2026-08-01", "2099-12-31"],
+      ["2000-01-01", "2099-12-31"],
+    ] as const)
+      out.push({ from, to });
+    const today = sydneyToday();
+    out.push({ from: today, to: today }, { from: today, to: "2099-12-31" });
+    return out;
+  };
+  const stable = (value: unknown) =>
+    JSON.stringify(value, (_key, item: unknown) =>
+      typeof item === "bigint" ? item.toString() : item,
+    );
+
+  it("builds documents whose only recent activity is a void, a late posting or a correction", async () => {
+    for (const basis of ["non_cash", "cash"] as const) {
+      // Old invoice and bill voided today; an expense reversed today.
+      const a = await fixture(true, basis);
+      expect(
+        (
+          await invoiceHandlers(() => db).void({
+            actor: a.actor,
+            request: req({ reason: "Synthetic void today" }),
+            context: context(a.invoice.id),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await billHandlers(() => db).void({
+            actor: a.actor,
+            request: req({ reason: "Synthetic void today" }),
+            context: context(a.supplier.id),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await expenseHandlers(() => db).reverse({
+            actor: a.actor,
+            request: req({ note: "Synthetic reversal today" }),
+            context: context(a.expenseIds[0]!),
+          })
+        ).status,
+      ).toBe(201);
+      // Settlements dated in July and voided today.
+      const b = await fixture(true, basis);
+      const receipt = await receiptHandlers(() => db).create({
+        actor: b.actor,
+        request: req({
+          customerId: b.customer.id,
+          receivedOn: "2026-07-20",
+          amountCents: "100000",
+          method: "bank_transfer",
+          allocations: [{ invoiceId: b.invoice.id, amountCents: "100000" }],
+        }),
+        context: undefined,
+      });
+      expect(receipt.status, await receipt.clone().text()).toBe(201);
+      const payment = await supplierPaymentHandlers(() => db).create({
+        actor: b.actor,
+        request: req({
+          paidOn: "2026-07-20",
+          amountCents: "40000",
+          method: "bank_transfer",
+          allocations: [{ billId: b.supplier.id, amountCents: "40000" }],
+        }),
+        context: undefined,
+      });
+      expect(payment.status, await payment.clone().text()).toBe(201);
+      for (const [handler, response] of [
+        [receiptHandlers(() => db), receipt],
+        [supplierPaymentHandlers(() => db), payment],
+      ] as const)
+        expect(
+          (
+            await handler.void({
+              actor: b.actor,
+              request: req({ reason: "Synthetic void today" }),
+              context: context(((await response.json()) as { id: string }).id),
+            })
+          ).status,
+        ).toBe(200);
+      // A receipt entered after its quarter was finalised posts today.
+      const c = await fixture(true, basis);
+      expect(
+        (
+          await periodHandlers(() => db).close({
+            actor: c.actor,
+            request: req({
+              from: "2026-07-01",
+              to: "2026-09-30",
+              note: "Synthetic bounded-read boundary",
+            }),
+            context: undefined,
+          })
+        ).status,
+      ).toBe(201);
+      const late = await receiptHandlers(() => db).create({
+        actor: c.actor,
+        request: req({
+          customerId: c.customer.id,
+          receivedOn: "2026-07-25",
+          amountCents: "50000",
+          method: "bank_transfer",
+          allocations: [{ invoiceId: c.invoice.id, amountCents: "50000" }],
+        }),
+        context: undefined,
+      });
+      expect(late.status, await late.clone().text()).toBe(201);
+    }
+  });
+
+  it("every report from a bounded read equals the full read", async () => {
+    const { financialEvents } =
+      await import("../../apps/web/src/server/reports/events");
+    const { draftGstReport, profitabilityReport } =
+      await import("../../packages/domain/src/index");
+    const companies = await db.company.findMany({ select: { id: true } });
+    let compared = 0;
+    for (const { id } of companies) {
+      const full = await db.$transaction((tx) => financialEvents(tx, id), {
+        isolationLevel: "RepeatableRead",
+      });
+      for (const range of windows()) {
+        const bounded = await db.$transaction(
+          (tx) => financialEvents(tx, id, { since: range.from }),
+          { isolationLevel: "RepeatableRead" },
+        );
+        expect(
+          stable(draftGstReport(bounded.events, range)),
+          `${id} gst ${range.from}..${range.to}`,
+        ).toBe(stable(draftGstReport(full.events, range)));
+        expect(
+          stable(profitabilityReport(bounded.events, range)),
+          `${id} profit ${range.from}..${range.to}`,
+        ).toBe(stable(profitabilityReport(full.events, range)));
+        compared += 1;
+      }
+    }
+    expect(compared).toBeGreaterThan(100);
+  }, 300_000);
+
+  it("pages drill-down events without changing any total", async () => {
+    const f = await fixture(true, "non_cash");
+    const handler = reportHandlers(() => db);
+    const get = async (query: string) =>
+      (
+        await handler.profitability({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/reports?from=2026-07-01&to=2026-09-30${query}`,
+          ),
+          context: undefined,
+        })
+      ).json();
+    const all = await get("");
+    const first = await get("&eventsPageSize=1");
+    const second = await get("&eventsPageSize=1&eventsPage=2");
+    expect(all.eventsPage.total).toBeGreaterThan(1);
+    expect(first.events).toHaveLength(1);
+    expect(first.events[0]).toEqual(all.events[0]);
+    expect(second.events[0]).toEqual(all.events[1]);
+    expect(first.totals).toEqual(all.totals);
+    expect(first.eventsPage).toEqual({
+      page: 1,
+      pageSize: 1,
+      total: all.eventsPage.total,
+    });
+    const tooBig = await handler.profitability({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports?from=2026-07-01&to=2026-09-30&eventsPageSize=5000`,
+      ),
+      context: undefined,
+    });
+    expect(tooBig.status).toBe(400);
+  });
+
+  it("pages a finalised period's stored events too", async () => {
+    const f = await fixture(true, "non_cash");
+    const close = await periodHandlers(() => db).close({
+      actor: f.actor,
+      request: req({
+        from: "2026-07-01",
+        to: "2026-09-30",
+        note: "Synthetic paging check",
+      }),
+      context: undefined,
+    });
+    expect(close.status).toBe(201);
+    const get = async (query: string) =>
+      (
+        await reportHandlers(() => db).gst({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/reports?from=2026-07-01&to=2026-09-30${query}`,
+          ),
+          context: undefined,
+        })
+      ).json();
+    const all = await get("");
+    const second = await get("&eventsPageSize=1&eventsPage=2");
+    expect(all.finalization).toBeDefined();
+    expect(all.eventsPage.total).toBeGreaterThan(1);
+    expect(second.events).toEqual([all.events[1]]);
+    expect(second.eventsPage).toEqual({
+      page: 2,
+      pageSize: 1,
+      total: all.eventsPage.total,
+    });
+    expect(second.oneA).toBe(all.oneA);
+    expect(second.finalization).toEqual(all.finalization);
+  });
+
+  it("reads only documents active in the window", async () => {
+    const { financialEvents } =
+      await import("../../apps/web/src/server/reports/events");
+    const f = await fixture(true, "non_cash");
+    const full = await db.$transaction(
+      (tx) => financialEvents(tx, f.company.id),
+      { isolationLevel: "RepeatableRead" },
+    );
+    expect(full.loaded.invoices + full.loaded.bills).toBeGreaterThan(0);
+    // Nothing happens after 2099: nothing is read.
+    const future = await db.$transaction(
+      (tx) => financialEvents(tx, f.company.id, { since: "2099-01-01" }),
+      { isolationLevel: "RepeatableRead" },
+    );
+    expect(future.loaded).toEqual({
+      invoices: 0,
+      bills: 0,
+      expenses: 0,
+      timesheets: 0,
+    });
+    expect(future.events).toEqual([]);
+  });
+});
+
+describe("ageing, cash movement and accountant exports (#56)", () => {
+  const ledger = () => ledgerHandlers(() => db);
+  const getAgeing = async (actor: Actor, side: string, asAt: string) => {
+    const response = await ledger().ageing({
+      actor,
+      request: new Request(
+        `${origin}/api/reports/ageing?side=${side}&asAt=${asAt}`,
+      ),
+      context: undefined,
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+    return response.json();
+  };
+  /** One export; clears this user's export throttle first (tested below). */
+  const runExport = async (actor: Actor, name: string, query: string) => {
+    await db.$executeRaw`DELETE FROM auth_rate_limits WHERE key LIKE ${`jobflow:export:%:${actor.userId}`}`;
+    return exportHandlers(() => db).run({
+      actor,
+      request: new Request(`${origin}/api/exports/${name}?${query}`),
+      context: { params: Promise.resolve({ name }) },
+    });
+  };
+  /** Parse our own RFC 4180 output (quoted text, bare numbers). */
+  const parseCsv = (text: string) => {
+    const rows: string[][] = [];
+    let row: string[] = [],
+      cell = "",
+      quoted = false;
+    for (let i = 0; i < text.length; i += 1) {
+      const c = text[i]!;
+      if (quoted) {
+        if (c === '"' && text[i + 1] === '"') {
+          cell += '"';
+          i += 1;
+        } else if (c === '"') quoted = false;
+        else cell += c;
+      } else if (c === '"') quoted = true;
+      else if (c === ",") {
+        row.push(cell);
+        cell = "";
+      } else if (c === "\r" && text[i + 1] === "\n") {
+        row.push(cell);
+        rows.push(row);
+        row = [];
+        cell = "";
+        i += 1;
+      } else cell += c;
+    }
+    const [header, ...body] = rows;
+    return body.map((cells) =>
+      Object.fromEntries(header!.map((name, i) => [name, cells[i] ?? ""])),
+    );
+  };
+  const credited = async (actor: Actor, invoiceId: string, day: string) => {
+    const invoices = invoiceHandlers(() => db);
+    const created = await invoices.credit({
+      actor,
+      request: req({
+        lines: [
+          {
+            description: "Synthetic partial credit",
+            quantity: "1",
+            unitPriceCents: "50000",
+            taxCode: "TAXABLE_10",
+          },
+        ],
+      }),
+      context: context(invoiceId),
+    });
+    expect(created.status, await created.clone().text()).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    const issued = await invoices.issue({
+      actor,
+      request: req({ issueDate: day }),
+      context: context(id),
+    });
+    expect(issued.status, await issued.clone().text()).toBe(200);
+    return id;
+  };
+
+  it("ages debtors and creditors as at a day, as the records stood then", async () => {
+    const f = await fixture(true, "non_cash");
+    expect(
+      (await getAgeing(f.actor, "receivables", "2026-07-14")).rows,
+    ).toEqual([]);
+    const first = await getAgeing(f.actor, "receivables", "2026-07-15");
+    expect(first.rows).toMatchObject([
+      {
+        id: f.invoice.id,
+        partyName: "Synthetic Customer",
+        partyType: "customer",
+        dueOn: "2026-07-15",
+        daysOverdue: 0,
+        bucket: "current",
+        owed: "275000",
+      },
+    ]);
+    const receipt = await receiptHandlers(() => db).create({
+      actor: f.actor,
+      request: req({
+        customerId: f.customer.id,
+        receivedOn: "2026-08-01",
+        amountCents: "100000",
+        method: "bank_transfer",
+        allocations: [{ invoiceId: f.invoice.id, amountCents: "100000" }],
+      }),
+      context: undefined,
+    });
+    expect(receipt.status, await receipt.clone().text()).toBe(201);
+    await credited(f.actor, f.invoice.id, "2026-08-10");
+    const at = async (day: string) =>
+      (await getAgeing(f.actor, "receivables", day)).rows[0];
+    expect(await at("2026-07-31")).toMatchObject({
+      owed: "275000",
+      daysOverdue: 16,
+      bucket: "days1To30",
+    });
+    expect(await at("2026-08-01")).toMatchObject({ owed: "175000" });
+    expect(await at("2026-08-10")).toMatchObject({
+      owed: "120000",
+      bucket: "days1To30",
+    });
+    expect(await at("2026-10-20")).toMatchObject({
+      owed: "120000",
+      daysOverdue: 97,
+      bucket: "days91Plus",
+    });
+    // A void today never rewrites an earlier ageing.
+    const voided = await receiptHandlers(() => db).void({
+      actor: f.actor,
+      request: req({ reason: "Synthetic dishonoured transfer" }),
+      context: context(((await receipt.json()) as { id: string }).id),
+    });
+    expect(voided.status).toBe(200);
+    expect(await at("2026-08-15")).toMatchObject({ owed: "120000" });
+    const today = await getAgeing(f.actor, "receivables", sydneyToday());
+    expect(today.rows[0]).toMatchObject({ owed: "220000" });
+    expect(today.totals).toMatchObject({ total: "220000" });
+    expect(today.parties).toMatchObject([
+      { partyId: f.customer.id, total: "220000" },
+    ]);
+
+    // Creditors: the 99000 bill less a payment and a supplier credit.
+    const paid = await supplierPaymentHandlers(() => db).create({
+      actor: f.actor,
+      request: req({
+        paidOn: "2026-07-20",
+        amountCents: "40000",
+        method: "bank_transfer",
+        allocations: [{ billId: f.supplier.id, amountCents: "40000" }],
+      }),
+      context: undefined,
+    });
+    expect(paid.status, await paid.clone().text()).toBe(201);
+    const credit = await supplierCreditHandlers(() => db).create({
+      actor: f.actor,
+      request: req({
+        supplierReference: "CN-AGE-1",
+        issuedOn: "2026-07-21",
+        receivedOn: "2026-07-21",
+        lines: [
+          {
+            description: "Synthetic price adjustment",
+            taxCode: "TAXABLE_10",
+            exclusiveCents: "10000",
+            gstCents: "1000",
+          },
+        ],
+      }),
+      context: context(f.supplier.id),
+    });
+    expect(credit.status, await credit.clone().text()).toBe(201);
+    const payable = async (day: string) =>
+      (await getAgeing(f.actor, "payables", day)).rows[0];
+    expect(await payable("2026-07-19")).toMatchObject({ owed: "99000" });
+    expect(await payable("2026-07-20")).toMatchObject({ owed: "59000" });
+    expect(await payable("2026-07-21")).toMatchObject({
+      owed: "48000",
+      partyType: "contractor",
+      partyName: "Synthetic Contractor",
+    });
+    // Paging the rows keeps the totals.
+    const paged = await ledger().ageing({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports/ageing?side=payables&asAt=2026-07-21&pageSize=1&page=2`,
+      ),
+      context: undefined,
+    });
+    expect(await paged.json()).toMatchObject({
+      rows: [],
+      rowsPage: { page: 2, pageSize: 1, total: 1 },
+      totals: { total: "48000" },
+    });
+    for (const bad of [
+      "side=both&asAt=2026-07-21",
+      "side=payables&asAt=bad",
+      "side=payables&asAt=2026-07-21&pageSize=5000",
+    ])
+      expect(
+        (
+          await ledger().ageing({
+            actor: f.actor,
+            request: new Request(`${origin}/api/reports/ageing?${bad}`),
+            context: undefined,
+          })
+        ).status,
+      ).toBe(400);
+  });
+
+  it("ageing reconciles with recorded balances and a full read, for every company", async () => {
+    const { receivablesSource, payablesSource } =
+      await import("../../apps/web/src/server/reports/ledger");
+    const { ageingReport } = await import("../../packages/domain/src/index");
+    const companies = await db.company.findMany({ select: { id: true } });
+    const days = [
+      "2026-01-01",
+      "2026-07-15",
+      "2026-07-20",
+      "2026-08-01",
+      "2026-08-31",
+      "2026-09-30",
+      sydneyToday(),
+      "2099-12-31",
+    ];
+    let compared = 0;
+    for (const { id } of companies) {
+      for (const asAt of days)
+        for (const load of [receivablesSource, payablesSource]) {
+          const [bounded, full] = await db.$transaction(
+            async (tx) => [
+              await load(tx, id, asAt),
+              await load(tx, id, asAt, { bounded: false }),
+            ],
+            { isolationLevel: "RepeatableRead" },
+          );
+          const report = ageingReport(bounded.documents, asAt);
+          expect(report, `${id} ${load.name} ${asAt}`).toEqual(
+            ageingReport(full.documents, asAt),
+          );
+          // Narrowed reads load nothing that's fully settled.
+          expect(bounded.documents.length).toBe(report.rows.length);
+          compared += 1;
+        }
+      // As at the far future, ageing equals today's recorded balances.
+      const [receivable] = await db.$queryRaw<{ owed: bigint | null }[]>`
+        SELECT SUM(GREATEST(0, i.inclusive_cents
+          - COALESCE((SELECT SUM(CASE WHEN r.kind='refund' THEN -a.amount_cents ELSE a.amount_cents END)
+              FROM receipt_allocations a JOIN customer_receipts r ON r.id=a.receipt_id
+              WHERE a.invoice_id=i.id AND r.voided_at IS NULL),0)
+          - COALESCE((SELECT SUM(c.inclusive_cents) FROM invoices c
+              WHERE c.credits_id=i.id AND c.status='issued'),0)))::bigint AS owed
+        FROM invoices i WHERE i.company_id=${id}::uuid AND i.kind='invoice' AND i.status='issued'`;
+      const [payable] = await db.$queryRaw<{ owed: bigint | null }[]>`
+        SELECT SUM(GREATEST(0, b.inclusive_cents
+          - COALESCE((SELECT SUM(a.amount_cents) FROM supplier_payment_allocations a
+              JOIN supplier_payments p ON p.id=a.payment_id
+              WHERE a.bill_id=b.id AND p.voided_at IS NULL),0)
+          - COALESCE((SELECT SUM(c.inclusive_cents) FROM supplier_credits c
+              WHERE c.bill_id=b.id AND c.voided_at IS NULL),0)))::bigint AS owed
+        FROM supplier_bills b WHERE b.company_id=${id}::uuid AND b.voided_at IS NULL`;
+      const totals = await db.$transaction(
+        async (tx) => [
+          ageingReport(
+            (await receivablesSource(tx, id, "2099-12-31")).documents,
+            "2099-12-31",
+          ).totals.total,
+          ageingReport(
+            (await payablesSource(tx, id, "2099-12-31")).documents,
+            "2099-12-31",
+          ).totals.total,
+        ],
+        { isolationLevel: "RepeatableRead" },
+      );
+      expect(totals, id).toEqual([receivable?.owed ?? 0n, payable?.owed ?? 0n]);
+    }
+    expect(compared).toBeGreaterThan(100);
+  }, 300_000);
+
+  it("cash movement is receipts less payments, labelled not profit, for every company", async () => {
+    const { cashMovement } =
+      await import("../../apps/web/src/server/reports/ledger");
+    const { financialEvents } =
+      await import("../../apps/web/src/server/reports/events");
+    const { profitabilityReport } =
+      await import("../../packages/domain/src/index");
+    const companies = await db.company.findMany({ select: { id: true } });
+    for (const { id } of companies)
+      for (const range of [
+        { from: "2026-07-01", to: "2026-09-30" },
+        { from: "2026-07-20", to: sydneyToday() },
+        { from: "2000-01-01", to: "2099-12-31" },
+      ]) {
+        const [cash, full] = await db.$transaction(
+          async (tx) => [
+            await cashMovement(tx, id, range),
+            await financialEvents(tx, id),
+          ],
+          { isolationLevel: "RepeatableRead" },
+        );
+        const profit = profitabilityReport(full.events, range).totals;
+        expect(cash).toMatchObject({
+          label: "Cash movement — money in less money out, not profit",
+          moneyIn: profit.receivedInclusive,
+          moneyOut: profit.paidInclusive,
+          net: profit.receivedInclusive - profit.paidInclusive,
+        });
+        expect(cash.months.reduce((t, m) => t + m.net, 0n)).toBe(cash.net);
+      }
+    const f = await fixture(true, "cash");
+    const response = await ledger().cash({
+      actor: f.actor,
+      request: new Request(
+        `${origin}/api/reports/cash?from=2026-07-01&to=2026-07-31`,
+      ),
+      context: undefined,
+    });
+    // Two expenses paid at purchase: 16500 + 10000 out, nothing in yet.
+    expect(await response.json()).toMatchObject({
+      range: { from: "2026-07-01", to: "2026-07-31" },
+      moneyIn: "0",
+      moneyOut: "26500",
+      net: "-26500",
+      months: [{ month: "2026-07", moneyOut: "26500", net: "-26500" }],
+    });
+    expect(
+      (
+        await ledger().cash({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/reports/cash?from=2026-08-01&to=2026-07-31`,
+          ),
+          context: undefined,
+        })
+      ).status,
+    ).toBe(400);
+  });
+
+  it("exports machine-readable CSV that matches the reports, with formula cells neutralised", async () => {
+    const f = await fixture(true, "non_cash");
+    await db.customer.update({
+      where: { id: f.customer.id },
+      data: { name: '=HYPERLINK("http://example.test","Synthetic")' },
+    });
+    await credited(f.actor, f.invoice.id, "2026-08-10");
+    expect(
+      (
+        await billHandlers(() => db).void({
+          actor: f.actor,
+          request: req({ reason: "Synthetic duplicate bill" }),
+          context: context(f.supplier.id),
+        })
+      ).status,
+    ).toBe(200);
+    const range = "from=2026-07-01&to=2026-09-30";
+    const json = await (
+      await reportHandlers(() => db).gst({
+        actor: f.actor,
+        request: new Request(`${origin}/api/reports/gst?${range}`),
+        context: undefined,
+      })
+    ).json();
+    const before = await db.auditEvent.count({
+      where: { companyId: f.company.id, action: "report.exported" },
+    });
+    const numeric = /^-?\d+$/;
+    const texts: Record<string, string> = {};
+    for (const [name, query] of [
+      ["gst-summary", range],
+      ["gst-lines", range],
+      ["profitability", range],
+      ["cash", range],
+      ["ageing", "side=receivables&asAt=2026-08-31"],
+      ["ageing", "side=payables&asAt=2026-07-31"],
+    ] as const) {
+      const response = await runExport(f.actor, name, query);
+      expect(response.status, name).toBe(200);
+      expect(response.headers.get("content-type")).toBe(
+        "text/csv; charset=utf-8",
+      );
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("content-disposition")).toMatch(
+        /^attachment; filename="jobflow-[a-z0-9-]+\.csv"$/,
+      );
+      const text = await response.text();
+      texts[`${name}:${query}`] = text;
+      expect(text).not.toMatch(/[−$]/);
+      expect(text.endsWith("\r\n")).toBe(true);
+      for (const row of parseCsv(text))
+        for (const [column, value] of Object.entries(row))
+          if (
+            /_cents$|^days_overdue$|^margin_basis_points$|^revision$/.test(
+              column,
+            )
+          )
+            expect(value, `${name} ${column}`).toMatch(
+              value === "" ? /^$/ : numeric,
+            );
+    }
+    const [summary] = parseCsv(texts[`gst-summary:${range}`]!);
+    expect(summary).toMatchObject({
+      status: "draft",
+      revision: "",
+      g1_total_sales_inclusive_cents: json.g1,
+      label_1a_gst_on_sales_cents: json.oneA,
+      label_1b_gst_on_purchases_cents: json.oneB,
+      net_gst_cents: json.netGst,
+      label: "Draft BAS/GST summary — not lodged",
+    });
+    const lines = parseCsv(texts[`gst-lines:${range}`]!);
+    const total = (label: string) =>
+      lines
+        .filter((l) => l.bas_label === label)
+        .reduce((t, l) => t + BigInt(l.gst_cents!), 0n)
+        .toString();
+    expect([total("1A"), total("1B")]).toEqual([json.oneA, json.oneB]);
+    // The credit note and the voided bill export as negative ASCII cents.
+    expect(lines.some((l) => l.source_type === "credit_note")).toBe(true);
+    expect(lines.some((l) => l.gst_cents!.startsWith("-"))).toBe(true);
+    expect(lines.find((l) => l.source_type === "invoice")?.party_name).toBe(
+      '\'=HYPERLINK("http://example.test","Synthetic")',
+    );
+    const [receivable] = parseCsv(
+      texts["ageing:side=receivables&asAt=2026-08-31"]!,
+    );
+    expect(receivable).toMatchObject({
+      party_name: '\'=HYPERLINK("http://example.test","Synthetic")',
+      owed_inclusive_cents: "220000",
+      bucket: "days31To60",
+    });
+    const profit = parseCsv(texts[`profitability:${range}`]!);
+    expect(profit.map((r) => r.row_type)).toEqual([
+      "job",
+      "unallocated",
+      "total",
+    ]);
+    expect(
+      await db.auditEvent.count({
+        where: { companyId: f.company.id, action: "report.exported" },
+      }),
+    ).toBe(before + 6);
+    // Refused requests read and record nothing.
+    expect((await runExport(f.actor, "gst-lines", "from=bad")).status).toBe(
+      400,
+    );
+    expect((await runExport(f.actor, "ageing", range)).status).toBe(400);
+    expect((await runExport(f.actor, "payroll", range)).status).toBe(404);
+    expect(
+      await db.auditEvent.count({
+        where: { companyId: f.company.id, action: "report.exported" },
+      }),
+    ).toBe(before + 6);
+
+    // A finalised period exports its locked revision.
+    expect(
+      (
+        await periodHandlers(() => db).close({
+          actor: f.actor,
+          request: req({
+            from: "2026-07-01",
+            to: "2026-09-30",
+            note: "Synthetic export period",
+          }),
+          context: undefined,
+        })
+      ).status,
+    ).toBe(201);
+    const [locked] = parseCsv(
+      await (await runExport(f.actor, "gst-summary", range)).text(),
+    );
+    expect(locked).toMatchObject({
+      status: "finalised",
+      revision: "1",
+      net_gst_cents: json.netGst,
+    });
+    const lockedLines = parseCsv(
+      await (await runExport(f.actor, "gst-lines", range)).text(),
+    );
+    expect(lockedLines.map((l) => [l.event_id, l.gst_cents])).toEqual(
+      lines.map((l) => [l.event_id, l.gst_cents]),
+    );
+    expect(lockedLines.every((l) => l.period_status === "finalised")).toBe(
+      true,
+    );
+  });
+
+  it("labels every event's source, settlements included, for every company", async () => {
+    const { financialEvents } =
+      await import("../../apps/web/src/server/reports/events");
+    const { sourceLabels } =
+      await import("../../apps/web/src/server/reports/sources");
+    const companies = await db.company.findMany({ select: { id: true } });
+    const types = new Set<string>();
+    for (const { id } of companies) {
+      const [events, labels] = await db.$transaction(async (tx) => {
+        const source = await financialEvents(tx, id);
+        return [
+          source.events,
+          await sourceLabels(
+            tx,
+            id,
+            source.events.map((e) => e.sourceId),
+          ),
+        ] as const;
+      });
+      for (const event of events) {
+        const label = labels.get(event.sourceId);
+        expect(label, `${id} ${event.id}`).toBeDefined();
+        types.add(label!.type);
+      }
+    }
+    // Cash-basis GST and cash movement are settled by these.
+    for (const type of [
+      "customer_receipt",
+      "customer_refund",
+      "supplier_payment",
+      "invoice",
+      "credit_note",
+      "supplier_bill",
+      "supplier_credit",
+      "expense",
+      "timesheet",
+    ])
+      expect(types, type).toContain(type);
+    // Another company's settlement is never labelled.
+    const [a, b] = companies;
+    const receipt = await db.customerReceipt.findFirst({
+      where: { companyId: a!.id },
+      select: { id: true },
+    });
+    if (receipt)
+      expect(
+        (await db.$transaction((tx) => sourceLabels(tx, b!.id, [receipt.id])))
+          .size,
+      ).toBe(0);
+  }, 300_000);
+
+  it("refuses to export a draft GST summary with cash-basis GST left out", async () => {
+    const f = await fixture(true, "cash");
+    // A legacy over-settled history: its cash GST is omitted (warning).
+    for (const [kind, date] of [
+      ["receipt", "2026-08-01"],
+      ["refund", "2026-09-01"],
+      ["receipt", "2026-07-20"],
+    ] as const)
+      await db.$transaction(async (tx) => {
+        const receipt = await tx.customerReceipt.create({
+          data: {
+            companyId: f.company.id,
+            customerId: f.customer.id,
+            kind,
+            receivedOn: new Date(date),
+            amountCents: 275000n,
+            method: "card",
+            createdBy: f.user.id,
+            idempotencyKey: randomUUID(),
+            requestHash: "c".repeat(64),
+          },
+        });
+        await tx.receiptAllocation.create({
+          data: {
+            companyId: f.company.id,
+            receiptId: receipt.id,
+            invoiceId: f.invoice.id,
+            amountCents: 275000n,
+            gstAttributedCents: kind === "refund" ? -25000n : 25000n,
+          },
+        });
+      });
+    const range = "from=2026-07-01&to=2026-09-30";
+    for (const name of ["gst-summary", "gst-lines"]) {
+      const response = await runExport(f.actor, name, range);
+      expect(response.status, name).toBe(409);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.json()).toMatchObject({
+        error: expect.stringMatching(/left out/),
+        warnings: [{ sourceType: "invoice", sourceId: f.invoice.id }],
+      });
+    }
+    expect(
+      await db.auditEvent.findMany({
+        where: {
+          companyId: f.company.id,
+          action: { startsWith: "report.export" },
+        },
+        select: { action: true },
+      }),
+    ).toEqual([
+      { action: "report.export_refused" },
+      { action: "report.export_refused" },
+    ]);
+    // Profit is unaffected by omitted GST and still exports.
+    expect((await runExport(f.actor, "profitability", range)).status).toBe(200);
+  });
+
+  it("exports profitability for one job, exactly as the filtered report", async () => {
+    const f = await fixture(true, "non_cash");
+    const other = await db.job.create({
+      data: {
+        companyId: f.company.id,
+        customerId: f.customer.id,
+        number: 2,
+        reference: "JOB-0002",
+        title: "Synthetic Other",
+        status: "completed",
+        createdBy: f.user.id,
+      },
+    });
+    const range = "from=2026-07-01&to=2026-09-30";
+    const json = await (
+      await reportHandlers(() => db).profitability({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports/profitability?${range}&jobId=${f.job.id}`,
+        ),
+        context: undefined,
+      })
+    ).json();
+    const rows = parseCsv(
+      await (
+        await runExport(f.actor, "profitability", `${range}&jobId=${f.job.id}`)
+      ).text(),
+    );
+    const total = rows.find((r) => r.row_type === "total")!;
+    expect(total).toMatchObject({
+      revenue_exclusive_cents: json.totals.revenue,
+      job_cost_exclusive_cents: json.totals.cost,
+      gross_profit_cents: json.totals.profit,
+    });
+    expect(
+      rows.filter((r) => r.row_type === "job").map((r) => r.job_id),
+    ).toEqual([f.job.id]);
+    const empty = parseCsv(
+      await (
+        await runExport(f.actor, "profitability", `${range}&jobId=${other.id}`)
+      ).text(),
+    );
+    expect(empty.find((r) => r.row_type === "total")).toMatchObject({
+      revenue_exclusive_cents: "0",
+      job_cost_exclusive_cents: "0",
+    });
+    const foreign = await fixture(true, "non_cash");
+    expect(
+      (
+        await runExport(
+          f.actor,
+          "profitability",
+          `${range}&jobId=${foreign.job.id}`,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await runExport(f.actor, "profitability", `${range}&jobId=nope`)).status,
+    ).toBe(400);
+  });
+
+  it("throttles exports to 5 a minute per user and per IP", async () => {
+    const f = await fixture(false, "non_cash");
+    await db.$executeRaw`DELETE FROM auth_rate_limits WHERE key LIKE 'jobflow:export:%'`;
+    const auth = createAuth({
+      db,
+      secret: randomBytes(32).toString("hex"),
+      baseURL: origin,
+      production: false,
+    });
+    const run = createWithPolicy({
+      auth: () => auth,
+      db: () => db,
+      trustedOrigins: () => [origin],
+    })("export.run", exportHandlers(() => db).run);
+    const login = await auth.handler(
+      new Request(`${origin}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: {
+          origin,
+          "content-type": "application/json",
+          "x-forwarded-for": "198.51.100.77",
+        },
+        body: JSON.stringify({ email: f.user.email, password }),
+      }),
+    );
+    expect(login.status).toBe(200);
+    const cookie = login.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    const call = (ip: string) =>
+      run(
+        new Request(
+          `${origin}/api/exports/cash?from=2026-07-01&to=2026-09-30`,
+          { headers: { cookie, "x-forwarded-for": ip } },
+        ),
+        { params: Promise.resolve({ name: "cash" }) },
+      );
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i += 1)
+      statuses.push((await call(`203.0.113.${i + 1}`)).status);
+    expect(statuses).toEqual([200, 200, 200, 200, 200, 429]);
+    const refused = await call("203.0.113.99");
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("cache-control")).toBe("private, no-store");
+    // Throttled requests read nothing and record nothing.
+    expect(
+      await db.auditEvent.count({
+        where: { companyId: f.company.id, action: "report.exported" },
+      }),
+    ).toBe(5);
+  });
+
+  it("labels cash-basis GST lines with their receipt or payment", async () => {
+    const f = await fixture(true, "cash");
+    expect(
+      (
+        await receiptHandlers(() => db).create({
+          actor: f.actor,
+          request: req({
+            customerId: f.customer.id,
+            receivedOn: "2026-07-15",
+            amountCents: "100000",
+            method: "bank_transfer",
+            reference: "Synthetic remittance",
+            allocations: [{ invoiceId: f.invoice.id, amountCents: "100000" }],
+          }),
+          context: undefined,
+        })
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await supplierPaymentHandlers(() => db).create({
+          actor: f.actor,
+          request: req({
+            paidOn: "2026-07-15",
+            amountCents: "40000",
+            method: "card",
+            allocations: [{ billId: f.supplier.id, amountCents: "40000" }],
+          }),
+          context: undefined,
+        })
+      ).status,
+    ).toBe(201);
+    const lines = parseCsv(
+      await (
+        await runExport(f.actor, "gst-lines", "from=2026-07-01&to=2026-09-30")
+      ).text(),
+    );
+    const settled = lines.filter((l) =>
+      ["customer_receipt", "supplier_payment"].includes(l.source_type!),
+    );
+    expect(settled.find((l) => l.bas_label === "1A")).toMatchObject({
+      source_type: "customer_receipt",
+      source_reference: "Synthetic remittance",
+      party_name: expect.stringMatching(/\S/),
+    });
+    // Without a reference, the payment method identifies it.
+    expect(settled.find((l) => l.bas_label === "1B")).toMatchObject({
+      source_type: "supplier_payment",
+      source_reference: "card",
+      party_name: expect.stringMatching(/\S/),
+    });
+    expect(lines.filter((l) => l.source_type === "")).toEqual([]);
+  });
+
+  it("only owners and accountants reach ageing, cash and exports", async () => {
+    const f = await fixture(false, "non_cash");
+    const auth = createAuth({
+      db,
+      secret: randomBytes(32).toString("hex"),
+      baseURL: origin,
+      production: false,
+    });
+    const policy = createWithPolicy({
+      auth: () => auth,
+      db: () => db,
+      trustedOrigins: () => [origin],
+    });
+    const routes = [
+      [
+        policy("ledger_report.read", ledger().ageing),
+        `${origin}/api/reports/ageing?side=receivables&asAt=2026-08-31`,
+        undefined,
+      ],
+      [
+        policy("ledger_report.read", ledger().cash),
+        `${origin}/api/reports/cash?from=2026-07-01&to=2026-09-30`,
+        undefined,
+      ],
+      [
+        policy("export.run", exportHandlers(() => db).run),
+        `${origin}/api/exports/gst-lines?from=2026-07-01&to=2026-09-30`,
+        { params: Promise.resolve({ name: "gst-lines" }) },
+      ],
+    ] as const;
+    for (const [route, url, ctx] of routes)
+      expect((await route(new Request(url), ctx as never)).status).toBe(401);
+    for (const role of [
+      "owner",
+      "accountant",
+      "manager",
+      "employee",
+      "subcontractor",
+    ] as Role[]) {
+      const user = await createCredentialUser(db, {
+        email: `ledger-${randomUUID()}@example.test`,
+        name: "Synthetic Role",
+        password,
+      });
+      await db.membership.create({
+        data: {
+          companyId: f.company.id,
+          userId: user.id,
+          role,
+          createdBy: f.user.id,
+        },
+      });
+      const login = await auth.handler(
+        new Request(`${origin}/api/auth/sign-in/email`, {
+          method: "POST",
+          headers: {
+            origin,
+            "content-type": "application/json",
+            "x-forwarded-for": `198.51.100.${role.length + 20}`,
+          },
+          body: JSON.stringify({ email: user.email, password }),
+        }),
+      );
+      expect(login.status).toBe(200);
+      const headers = {
+        cookie: login.headers
+          .getSetCookie()
+          .map((c) => c.split(";")[0])
+          .join("; "),
+      };
+      for (const [route, url, ctx] of routes)
+        expect(
+          (await route(new Request(url, { headers }), ctx as never)).status,
+          `${role} ${url}`,
+        ).toBe(["owner", "accountant"].includes(role) ? 200 : 403);
+    }
+  }, 120_000);
+});
+
+describe("reversing a correction of a paid expense (#169)", () => {
+  it("reverses the correction's cash-basis claim too", async () => {
+    const f = await fixture(true, "cash");
+    const expenses = expenseHandlers(() => db);
+    const [originalId] = f.expenseIds; // $150 + $15 taxable, paid at purchase
+    const today = async () =>
+      (
+        await (
+          await reportHandlers(() => db).gst({
+            actor: f.actor,
+            request: new Request(
+              `${origin}/api/reports?from=${sydneyToday()}&to=${sydneyToday()}`,
+            ),
+            context: undefined,
+          })
+        ).json()
+      ).oneB as string;
+    const reverse = (id: string) =>
+      expenses.reverse({
+        actor: f.actor,
+        request: req({ note: "Synthetic correction" }),
+        context: context(id),
+      });
+    expect((await reverse(originalId!)).status).toBe(201);
+    const corrected = await expenses.create({
+      actor: f.actor,
+      request: req({
+        jobId: f.job.id,
+        category: "materials",
+        description: "Synthetic purchase (50% business use)",
+        purchasedOn: "2026-07-15",
+        priceEntry: "exclusive",
+        amountCents: "15000",
+        taxCode: "TAXABLE_10",
+        creditablePercent: "50",
+        receiptDocumentId: await f.doc(),
+        settlement: "paid_at_purchase",
+        paymentMethod: "card",
+        correctsExpenseId: originalId,
+      }),
+      context: undefined,
+    });
+    expect(corrected.status, await corrected.clone().text()).toBe(201);
+    const { id: correctionId } = (await corrected.json()) as { id: string };
+    expect(
+      (
+        await expenses.decide({
+          actor: f.actor,
+          request: req({ decision: "approve", evidenceVerified: true }),
+          context: context(correctionId),
+        })
+      ).status,
+    ).toBe(200);
+    // Reversal −1500 and correction +750, both dated today.
+    expect(await today()).toBe("-750");
+    expect((await reverse(correctionId)).status).toBe(201);
+    // The correction's 750 comes back off: the chain nets to the reversal.
+    expect(await today()).toBe("-1500");
+  });
 });

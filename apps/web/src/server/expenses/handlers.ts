@@ -167,9 +167,47 @@ function ownView(row: Expense) {
 }
 
 type OfficeRow = Expense & {
-  reversedBy: { id: string } | null;
+  reversedBy: { id: string; settlement: Expense["settlement"] } | null;
   corrections: { id: string; status: string }[];
+  supplierPaymentAllocations: { amountCents: bigint }[];
 };
+
+/**
+ * What is still owed to the supplier on an approved on-account expense
+ * (#141), or null when nothing is owed on account (paid at purchase,
+ * reversals, not yet approved, or cancelled by a supplier credit).
+ */
+function supplierBalance(row: OfficeRow) {
+  if (
+    row.status !== "approved" ||
+    row.settlement !== "on_account" ||
+    row.reversesId ||
+    row.reversedBy?.settlement === "on_account"
+  )
+    return null;
+  const paid = row.supplierPaymentAllocations.reduce(
+    (total, allocation) => total + allocation.amountCents,
+    0n,
+  );
+  const owing = row.inclusiveCents - paid;
+  return {
+    paidCents: paid.toString(),
+    outstandingCents: (owing < 0n ? 0n : owing).toString(),
+  };
+}
+
+/** Whether live supplier payments are allocated to an on-account expense. */
+async function livePayments(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  expenseId: string,
+): Promise<boolean> {
+  return (
+    (await tx.supplierPaymentExpenseAllocation.count({
+      where: { companyId, expenseId, payment: { voidedAt: null } },
+    })) > 0
+  );
+}
 
 /** Office view: adds who submitted/decided and the approval snapshot. */
 function officeView(row: OfficeRow) {
@@ -178,6 +216,7 @@ function officeView(row: OfficeRow) {
     submittedBy: row.submittedBy,
     decidedBy: row.decidedBy,
     reversedById: row.reversedBy?.id ?? null,
+    supplierBalance: supplierBalance(row),
     correctsId: row.correctsId,
     correctedById:
       row.corrections.find((c) => c.status !== "rejected")?.id ?? null,
@@ -196,8 +235,12 @@ function officeView(row: OfficeRow) {
 }
 
 const OFFICE_INCLUDE = {
-  reversedBy: { select: { id: true } },
+  reversedBy: { select: { id: true, settlement: true } },
   corrections: { select: { id: true, status: true } },
+  supplierPaymentAllocations: {
+    where: { payment: { voidedAt: null } },
+    select: { amountCents: true },
+  },
 } as const;
 
 type Draft = {
@@ -265,10 +308,14 @@ async function checkDraft(
         "receiptDocumentId",
         "That receipt is already attached to another expense",
       ];
-    if (document.supplierBill)
+    if (
+      document.supplierBill ||
+      document.supplierCredit ||
+      document.billSubmission
+    )
       return [
         "receiptDocumentId",
-        "That document is already attached to a supplier bill",
+        "That document is already attached to a supplier bill or credit",
       ];
   }
   if (draft.settlement === "paid_at_purchase") {
@@ -332,7 +379,7 @@ async function correctionOf(
     throw new Refusal(
       fail(400, "Only the office can correct an expense", field),
     );
-  await lockRow(tx, "expenses", originalId);
+  await lockRow(tx, "expenses", originalId, actor.companyId);
   const original = requireSameCompany(
     actor,
     await tx.expense.findUnique({
@@ -365,6 +412,17 @@ async function correctionOf(
         field,
       ),
     );
+  if (
+    original.settlement === "on_account" &&
+    (await livePayments(tx, actor.companyId, original.id))
+  )
+    throw new Refusal(
+      fail(
+        409,
+        "Supplier payments are allocated to this expense; void them first",
+        field,
+      ),
+    );
   if (checked.inclusiveCents !== original.inclusiveCents)
     throw new Refusal(
       fail(
@@ -393,17 +451,21 @@ async function lockEligibility(
   jobId: string | null,
 ) {
   const job = jobId ? uuidOrNull(jobId) : null;
-  if (job) await lockRow(tx, "jobs", job);
+  if (job) await lockRow(tx, "jobs", job, actor.companyId);
   if (can(actor.role, "expense.read_all")) return;
   const employee = await tx.employee.findFirst({
     where: { companyId: actor.companyId, userId: actor.userId },
     select: { id: true },
   });
-  if (employee) await lockRow(tx, "employees", employee.id);
+  if (employee) await lockRow(tx, "employees", employee.id, actor.companyId);
 }
 
-async function lockedExpense(tx: Prisma.TransactionClient, id: string) {
-  await lockRow(tx, "expenses", id);
+async function lockedExpense(
+  tx: Prisma.TransactionClient,
+  id: string,
+  companyId: string,
+) {
+  await lockRow(tx, "expenses", id, companyId);
   return tx.expense.findUniqueOrThrow({
     where: { id },
     include: OFFICE_INCLUDE,
@@ -588,7 +650,7 @@ export function expenseHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
-          const before = await lockedExpense(tx, owned.id);
+          const before = await lockedExpense(tx, owned.id, actor.companyId);
           if (before.status !== "submitted")
             throw new Refusal(
               fail(
@@ -701,7 +763,7 @@ export function expenseHandlers(db: () => PrismaClient) {
     const { decision, note, evidenceVerified = false } = parsed.data;
     return inTransaction(async () => {
       const row = await withAudit(db(), async (tx, audit) => {
-        const before = await lockedExpense(tx, owned.id);
+        const before = await lockedExpense(tx, owned.id, actor.companyId);
         if (before.status !== "submitted")
           throw new Refusal(
             fail(409, `This expense is already ${before.status}`),
@@ -746,6 +808,20 @@ export function expenseHandlers(db: () => PrismaClient) {
             after: { status: updated.status },
           });
           return updated;
+        }
+        // A correction changes the GST that payments to its on-account
+        // original attribute (#141). Hold the original's row (the lock
+        // supplier payments take) and refuse while payments are allocated,
+        // so a cash-basis claim already made never goes stale.
+        if (before.correctsId) {
+          await lockRow(tx, "expenses", before.correctsId, actor.companyId);
+          if (await livePayments(tx, actor.companyId, before.correctsId))
+            throw new Refusal(
+              fail(
+                409,
+                "Supplier payments are allocated to the original expense; void them first",
+              ),
+            );
         }
         const company = await companyGstStatusOn(
           tx,
@@ -823,7 +899,7 @@ export function expenseHandlers(db: () => PrismaClient) {
     try {
       return await inTransaction(async () => {
         const row = await withAudit(db(), async (tx, audit) => {
-          const original = await lockedExpense(tx, owned.id);
+          const original = await lockedExpense(tx, owned.id, actor.companyId);
           if (original.status !== "approved" || original.reversesId)
             throw new Refusal(
               fail(409, "Only an approved expense can be reversed"),
@@ -847,6 +923,33 @@ export function expenseHandlers(db: () => PrismaClient) {
               fail(
                 400,
                 "Only an expense on account gets a supplier credit",
+                "settlement",
+              ),
+            );
+          // A supplier credit cancels what's owed; money already paid on
+          // account can't be credited away (#141). The expense row lock is
+          // the one supplier payments take, so the two can't race.
+          // A cost-only reversal changes the GST payments attribute: refused
+          // too while payments are allocated (void them, reverse, re-pay).
+          // Reversing a correction changes its on-account original's GST
+          // too: lock that original (correction, then original, as decide
+          // does) and check its payments.
+          if (original.correctsId)
+            await lockRow(tx, "expenses", original.correctsId, actor.companyId);
+          const root = original.correctsId
+            ? await tx.expense.findUnique({
+                where: { id: original.correctsId },
+                select: { id: true, settlement: true },
+              })
+            : original;
+          if (
+            root?.settlement === "on_account" &&
+            (await livePayments(tx, actor.companyId, root.id))
+          )
+            throw new Refusal(
+              fail(
+                409,
+                "Supplier payments are allocated to this expense; void them first",
                 "settlement",
               ),
             );

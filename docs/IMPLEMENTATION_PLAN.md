@@ -51,7 +51,13 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
   - #45 screens: quote list (status, total incl GST, internal margin), draft builder (quote or variation, server-only totals with a stale flag, per-line internal estimated cost), send dialog with the send date, read-only sent/decided view with recorded acceptance/decline and Revise, and a link to the job once accepted; page titles now wrap above their actions on narrow screens
 - [ ] Supplier bills with creditable GST and payment allocations
   - #46 schema + API: bills from suppliers or contractors, keeping the supplier's line GST as issued (R3), linked to an accepted offer (releases the commitment once) and job; creditable GST only with verified evidence on a registered date, limited to a recorded business share; job cost (ex GST + non-creditable GST) snapshotted once; idempotent supplier payments (key + fingerprint, one transaction, locked bills, no overpayment, cash-basis 1B attribution); immutable except one-way voids. Follow-ups: #139 portal bills, #140 supplier credits, #141 on-account expenses, #142 evidence reclassification
+  - #140 supplier credits (adjustment notes) against bills. A credit lowers what's owing, the job cost and the claimable GST at the bill's creditable share. For the purchaser that's an increasing adjustment.
+    - A credit can never exceed what's owing, including under concurrency, and a supplier note is recorded once per bill.
+    - Cash-basis GST is re-based on the net bill, with corrections dated on or after the payments they re-split and the note's arrival. A correction that raises the claim needs a verified note when the adjustment is over $75.
+    - Credits are immutable, with a one-way void.
+    - API: `POST /api/bills/:id/credits`, `GET /api/supplier-credits/:id`, `POST /api/supplier-credits/:id/void`.
   - #51 screens: Payments keeps obligations (supplier bills, with paid and owing) separate from settlements (supplier payments and customer receipts/refunds); bill entry with creditable-GST evidence and business-use share; payment and receipt entry allocate across owing bills or invoices (amount = sum of allocations, one idempotency key per attempt); detail pages with void-with-reason; the invoice list now returns received and outstanding balances for issued invoices
+  - #141 supplier payments settle approved on-account expenses with the same rules as bills: idempotent, no overpayment, cash-basis input tax credit and void corrections, one supplier per payment. A supplier-credit reversal and a payment can't both apply, whichever comes first.
 - [x] Tax invoices: mixed tax lines, ex/incl entry, validation before issue, numbering, credits, voids — #47
 - [ ] Invoice builder UI and PDF ("Tax Invoice" vs "Invoice")
   - #48 PDF: deterministic pdf-lib rendering of the frozen issue snapshot (standard fonts only — no HTML, scripts, fonts, images or URLs fetched), stored privately once at issue in append-only `invoice_pdfs` (lazily if storage was down), 5-minute signed links via `POST /api/invoices/:id/pdf`; golden files for registered, not-registered and adjustment notes. Builder UI remains #49
@@ -71,9 +77,9 @@ reviewed PR with passing CI (type-check, lint, tests, security checks).
 - [ ] Mobile-responsive UX and accessibility audit
 - [ ] Threat-model/permission audit
 - [ ] Record retention and data export
-- [ ] Database and storage backup/restore test
-- [ ] Staging deployment (Docker, HTTPS) and smoke test with synthetic data
-- [ ] Deployment, rollback and user documentation
+- [x] Database and storage backup/restore test — #63: AES-256-GCM encrypted backups of the database (streamed `pg_dump`) and every document, manifest checksums, empty-target restore, 30 daily + 12 monthly retention, nightly systemd timer with off-site copy, and a recorded restore drill ([runbook](ops/backups.md), [drills](ops/restore-drills/))
+- [ ] Staging deployment (Docker, HTTPS) and smoke test with synthetic data — config, image build and CI checks in #64 ([docs/ops/staging.md](ops/staging.md)); the first deploy is an owner step
+- [ ] Deployment, rollback and user documentation — runbook ([ops/deployment.md](ops/deployment.md)), user guides ([user/](user/)) and [CHANGELOG](../CHANGELOG.md) in #66; commands still to be verified on the first staging deploy
 - [ ] Accountant review of GST outputs before real use
 
 ## Acceptance

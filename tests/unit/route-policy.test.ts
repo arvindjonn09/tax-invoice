@@ -11,6 +11,8 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "api/invitations/accept/route.ts":
     "One-use invitation token authorizes acceptance; explicit origin/body/rate guards, existing-account identity check and transactionally scoped role grant",
   "api/health/route.ts": "liveness probe; returns no data",
+  "api/health/ready/route.ts":
+    "readiness probe; returns only ready/not ready, no configuration",
   "api/files/[token]/route.ts":
     "signed 5-minute download token minted by /api/documents/[id]/link after authz; HMAC-verified, company-bound, served as a sandboxed attachment",
   "api/auth/[...all]/route.ts":

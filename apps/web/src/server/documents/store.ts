@@ -3,6 +3,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -18,6 +19,8 @@ export interface ObjectStore {
   get(key: string): Promise<Uint8Array | null>;
   /** Remove an object (compensation when its database row couldn't be saved). */
   delete(key: string): Promise<void>;
+  /** Every stored key (backups, #63). */
+  keys(): AsyncIterable<string>;
 }
 
 /** For tests and local runs without MinIO. Never used when S3 is configured. */
@@ -31,6 +34,9 @@ export class MemoryStore implements ObjectStore {
   }
   async delete(key: string) {
     this.objects.delete(key);
+  }
+  async *keys() {
+    yield* [...this.objects.keys()];
   }
 }
 
@@ -121,6 +127,23 @@ export class S3Store implements ObjectStore {
     await this.client.send(
       new DeleteObjectCommand({ Bucket: this.settings.bucket, Key: key }),
     );
+  }
+
+  async *keys() {
+    await this.bucket();
+    let ContinuationToken: string | undefined;
+    do {
+      const page = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.settings.bucket,
+          ...(ContinuationToken ? { ContinuationToken } : {}),
+        }),
+      );
+      for (const item of page.Contents ?? []) if (item.Key) yield item.Key;
+      ContinuationToken = page.IsTruncated
+        ? page.NextContinuationToken
+        : undefined;
+    } while (ContinuationToken);
   }
 }
 

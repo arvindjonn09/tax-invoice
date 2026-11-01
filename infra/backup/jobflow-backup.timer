@@ -1,0 +1,11 @@
+# Runs the encrypted backup nightly at 02:15 Sydney time (#63).
+[Unit]
+Description=Nightly JobFlow encrypted backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 Australia/Sydney
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
