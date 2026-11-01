@@ -13,6 +13,7 @@ import {
 import type { ObjectStore } from "../documents/store";
 import { clientIp, throttle } from "../http/throttle";
 import { uuidOrNull } from "../http/fields";
+import { log, safeError } from "../log";
 import {
   PDF_RENDERER_VERSION,
   invoiceDocument,
@@ -113,6 +114,30 @@ export async function ensureInvoicePdf(
     }
     throw error;
   }
+}
+
+/**
+ * The issue hook that stores the PDF after the response is sent (#158): the
+ * route passes Next's after() as `schedule`. Rendering and upload took 11s
+ * cold; a failure is logged and the PDF is rendered from the same frozen
+ * snapshot on first download instead.
+ */
+export function storePdfAfterResponse(
+  deps: PdfDeps,
+  schedule: (task: () => Promise<unknown>) => void,
+) {
+  return async (
+    actor: Pick<Actor, "companyId" | "userId">,
+    invoiceId: string,
+  ) =>
+    schedule(() =>
+      ensureInvoicePdf(deps, actor, invoiceId).catch((error: unknown) =>
+        log("warn", "invoice.pdf_deferred", {
+          invoiceId,
+          error: safeError(error),
+        }),
+      ),
+    );
 }
 
 export function invoicePdfHandlers(deps: PdfDeps) {

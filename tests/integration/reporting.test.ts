@@ -1,3 +1,4 @@
+import { dashboardHandler } from "../../apps/web/src/server/dashboard/handlers";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -308,7 +309,32 @@ describe("database reports reconcile GST and profit together", () => {
   ] as const)
     it(`registered=${registered}, basis=${basis}`, async () => {
       const f = await fixture(registered, basis);
+      const readDashboard = async () => {
+        const response = await dashboardHandler(() => db)({
+          actor: f.actor,
+          request: new Request(
+            `${origin}/api/dashboard?from=2026-07-01&to=2026-09-30`,
+          ),
+          context: undefined,
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        return response.json();
+      };
+      const dashboardBefore = await readDashboard();
       const before = await reports(f.actor);
+      expect(dashboardBefore.totals).toEqual(before.profit.totals);
+      expect(dashboardBefore.gst).toMatchObject({
+        oneA: before.gst.oneA,
+        oneB: before.gst.oneB,
+        netGst: before.gst.netGst,
+      });
+      expect(dashboardBefore.ledger.receivables.total).toBe(
+        registered ? "275000" : "250000",
+      );
+      expect(dashboardBefore.ledger.payables.total).toBe(
+        registered ? "99000" : "90000",
+      );
       expect(before.profit.committedCost).toBe("0");
       expect(before.profit.positions[0]).toMatchObject({
         currentAgreedRevenueExclusive: "250000",
@@ -354,6 +380,19 @@ describe("database reports reconcile GST and profit together", () => {
       });
       expect(paid.status).toBe(201);
       const after = await reports(f.actor);
+      const dashboardAfter = await readDashboard();
+      expect(dashboardAfter.totals).toEqual(after.profit.totals);
+      expect(dashboardAfter.gst).toMatchObject({
+        oneA: after.gst.oneA,
+        oneB: after.gst.oneB,
+        netGst: after.gst.netGst,
+      });
+      expect(dashboardAfter.ledger.receivables.total).toBe(
+        registered ? "175000" : "150000",
+      );
+      expect(dashboardAfter.ledger.payables.total).toBe(
+        registered ? "59000" : "50000",
+      );
       expect(after.profit.totals).toMatchObject({
         profit: "105000",
         receivedInclusive: "100000",
@@ -1067,10 +1106,15 @@ describe("database reports reconcile GST and profit together", () => {
       trustedOrigins: () => [origin],
     });
     const handlers = reportHandlers(() => db);
+    const dashboard = policy(
+      "job.profit.read",
+      dashboardHandler(() => db),
+    );
     const profit = policy("job.profit.read", handlers.profitability),
       gst = policy("gst_report.read", handlers.gst);
     const url = `${origin}/api/reports?from=2026-07-01&to=2026-09-30`;
     expect((await profit(new Request(url), undefined)).status).toBe(401);
+    expect((await dashboard(new Request(url), undefined)).status).toBe(401);
     for (const role of [
       "owner",
       "accountant",
@@ -1112,6 +1156,49 @@ describe("database reports reconcile GST and profit together", () => {
       expect(
         (await profit(new Request(url, { headers }), undefined)).status,
       ).toBe(["owner", "accountant", "manager"].includes(role) ? 200 : 403);
+      const dashResponse = await dashboard(
+        new Request(url, { headers }),
+        undefined,
+      );
+      expect(dashResponse.status).toBe(
+        ["owner", "accountant", "manager"].includes(role) ? 200 : 403,
+      );
+      if (role === "manager")
+        expect(await dashResponse.json()).toMatchObject({
+          gst: null,
+          ledger: null,
+        });
+      if (role === "owner") {
+        expect(
+          (
+            await dashboard(
+              new Request(url + `&jobId=${foreign.job.id}`, { headers }),
+              undefined,
+            )
+          ).status,
+        ).toBe(404);
+        expect(
+          (
+            await dashboard(
+              new Request(url + `&customerId=${foreign.customer.id}`, {
+                headers,
+              }),
+              undefined,
+            )
+          ).status,
+        ).toBe(404);
+        expect(
+          (
+            await dashboard(
+              new Request(
+                `${origin}/api/dashboard?from=2026-09-30&to=2026-07-01`,
+                { headers },
+              ),
+              undefined,
+            )
+          ).status,
+        ).toBe(400);
+      }
       expect((await gst(new Request(url, { headers }), undefined)).status).toBe(
         ["owner", "accountant"].includes(role) ? 200 : 403,
       );
@@ -3162,6 +3249,45 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
     expect(lockedLines.every((l) => l.period_status === "finalised")).toBe(
       true,
     );
+    // Screens (#58): drill-down events carry their sources' labels, for
+    // live and finalised reports alike, and finalised events are paged too.
+    for (const url of [
+      `${origin}/api/reports/gst?${range}&eventsPageSize=2`,
+      `${origin}/api/reports/profitability?${range}&eventsPageSize=2`,
+    ]) {
+      const handler = url.includes("/gst")
+        ? reportHandlers(() => db).gst
+        : reportHandlers(() => db).profitability;
+      const body = await (
+        await handler({
+          actor: f.actor,
+          request: new Request(url),
+          context: undefined,
+        })
+      ).json();
+      expect(body.events).toHaveLength(2);
+      expect(body.eventsPage).toMatchObject({ page: 1, pageSize: 2 });
+      expect(body.eventsPage.total).toBeGreaterThan(2);
+      for (const event of body.events)
+        expect(body.eventSources[event.sourceId]).toMatchObject({
+          type: expect.stringMatching(
+            /^(invoice|credit_note|supplier_bill|expense|timesheet)$/,
+          ),
+        });
+      expect(Object.keys(body.eventSources).length).toBeLessThanOrEqual(2);
+    }
+    const lockedJson = await (
+      await reportHandlers(() => db).gst({
+        actor: f.actor,
+        request: new Request(`${origin}/api/reports/gst?${range}`),
+        context: undefined,
+      })
+    ).json();
+    expect(lockedJson.finalization.revision).toBe(1);
+    expect(lockedJson.eventSources[f.invoice.id]).toMatchObject({
+      type: "invoice",
+      party: '=HYPERLINK("http://example.test","Synthetic")',
+    });
   });
 
   it("labels every event's source, settlements included, for every company", async () => {
@@ -3441,6 +3567,47 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
     expect(lines.filter((l) => l.source_type === "")).toEqual([]);
   });
 
+  it("exports profitability for one job, as the filtered report shows it", async () => {
+    const f = await fixture(true, "non_cash");
+    const range = "from=2026-07-01&to=2026-09-30";
+    const report = await (
+      await reportHandlers(() => db).profitability({
+        actor: f.actor,
+        request: new Request(
+          `${origin}/api/reports?${range}&jobId=${f.job.id}`,
+        ),
+        context: undefined,
+      })
+    ).json();
+    const rows = parseCsv(
+      await (
+        await runExport(f.actor, "profitability", `${range}&jobId=${f.job.id}`)
+      ).text(),
+    );
+    expect(
+      rows.filter((r) => r.row_type === "job").map((r) => r.job_id),
+    ).toEqual([f.job.id]);
+    expect(rows.find((r) => r.row_type === "total")).toMatchObject({
+      revenue_exclusive_cents: report.totals.revenue,
+      job_cost_exclusive_cents: report.totals.cost,
+      gross_profit_cents: report.totals.profit,
+    });
+    // Another company's job, or a malformed id, reads nothing.
+    const other = await fixture(true, "non_cash");
+    expect(
+      (
+        await runExport(
+          f.actor,
+          "profitability",
+          `${range}&jobId=${other.job.id}`,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await runExport(f.actor, "profitability", `${range}&jobId=nope`)).status,
+    ).toBe(400);
+  });
+
   it("only owners and accountants reach ageing, cash and exports", async () => {
     const f = await fixture(false, "non_cash");
     const auth = createAuth({
@@ -3578,5 +3745,39 @@ describe("reversing a correction of a paid expense (#169)", () => {
     expect((await reverse(correctionId)).status).toBe(201);
     // The correction's 750 comes back off: the chain nets to the reversal.
     expect(await today()).toBe("-1500");
+  });
+});
+
+it("dashboard job/customer filters apply to balances as well as profit (#57)", async () => {
+  const f = await fixture(true, "non_cash");
+  const other = await db.customer.create({
+    data: {
+      companyId: f.company.id,
+      name: "Synthetic unrelated customer",
+      createdBy: f.user.id,
+    },
+  });
+  const response = await dashboardHandler(() => db)({
+    actor: f.actor,
+    request: new Request(
+      `${origin}/api/dashboard?from=2026-07-01&to=2026-09-30&customerId=${other.id}`,
+    ),
+    context: undefined,
+  });
+  expect(await response.json()).toMatchObject({
+    totals: { revenue: "0", profit: "0" },
+    ledger: { receivables: { total: "0" }, payables: { total: "0" } },
+    recentJobs: [],
+  });
+  const job = await dashboardHandler(() => db)({
+    actor: f.actor,
+    request: new Request(
+      `${origin}/api/dashboard?from=2026-07-01&to=2026-09-30&jobId=${f.job.id}`,
+    ),
+    context: undefined,
+  });
+  expect(await job.json()).toMatchObject({
+    totals: { revenue: "250000", profit: "105000" },
+    ledger: { receivables: { total: "275000" }, payables: { total: "99000" } },
   });
 });
