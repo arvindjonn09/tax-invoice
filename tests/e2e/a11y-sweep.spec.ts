@@ -77,7 +77,7 @@ async function write<T>(page: Page, url: string, data: unknown): Promise<T> {
  * supplier payment, expense, employee and contractor (with an offer to the
  * shared subcontractor login).
  */
-async function seedDetails(page: Page) {
+async function seedDetails(page: Page, linkSubcontractor: boolean) {
   const suffix = randomUUID().slice(0, 8);
   const customer = await write<{ id: string }>(page, "/api/customers", {
     name: `Synthetic a11y customer ${suffix}`,
@@ -150,36 +150,52 @@ async function seedDetails(page: Page) {
   const employee = await write<{ id: string }>(page, "/api/employees", {
     name: `Synthetic a11y employee ${suffix}`,
   });
-  // The shared subcontractor login's contractor record, created once.
-  const users = (await (
-    await page.request.get(
-      `/api/users?q=${encodeURIComponent(requireAccounts().emails.subcontractor)}`,
-    )
-  ).json()) as { members: { userId: string; role: string }[] };
-  const userId = users.members.find((m) => m.role === "subcontractor")!.userId;
-  // Other specs create it in parallel; a lost race re-reads it.
-  let contractor: { id: string } | undefined;
-  for (let attempt = 0; attempt < 3 && !contractor; attempt++) {
-    const directory = (await (
+  // Owner screens use an unlinked contractor. The subcontractor's offer
+  // needs one linked to the shared subcontractor login; other specs expect
+  // that login unlinked, so the link is only made for the subcontractor
+  // sweep and removed afterwards (see `cleanup`).
+  let cleanup = async () => {};
+  let contractor: { id: string };
+  if (linkSubcontractor) {
+    const users = (await (
       await page.request.get(
-        "/api/contractors?status=all&q=Synthetic%20portal&pageSize=100",
+        `/api/users?q=${encodeURIComponent(requireAccounts().emails.subcontractor)}`,
       )
+    ).json()) as { members: { userId: string; role: string }[] };
+    const userId = users.members.find(
+      (m) => m.role === "subcontractor",
+    )!.userId;
+    const directory = (await (
+      await page.request.get("/api/contractors?status=all&pageSize=100")
     ).json()) as { contractors: { id: string; userId: string | null }[] };
-    contractor = directory.contractors.find((c) => c.userId === userId);
-    if (contractor) break;
-    const created = await page.request.post("/api/contractors", {
-      headers: { origin: new URL(page.url()).origin },
-      // Named as portal.spec.ts searches for it, so either spec finds it.
-      data: { name: `Synthetic portal contractor ${suffix}`, userId },
+    const existing = directory.contractors.find((c) => c.userId === userId);
+    if (existing) contractor = existing;
+    else {
+      contractor = await write<{ id: string }>(page, "/api/contractors", {
+        name: `Synthetic a11y contractor ${suffix}`,
+        userId,
+      });
+      cleanup = async () => {
+        const unlinked = await page.request.fetch(
+          `/api/contractors/${contractor.id}`,
+          {
+            method: "PATCH",
+            headers: { origin: new URL(page.url()).origin },
+            data: { userId: null },
+          },
+        );
+        expect(unlinked.ok(), "unlink the shared subcontractor").toBe(true);
+      };
+    }
+  } else
+    contractor = await write<{ id: string }>(page, "/api/contractors", {
+      name: `Synthetic a11y contractor ${suffix}`,
     });
-    if (created.ok()) contractor = (await created.json()) as { id: string };
-  }
-  expect(contractor, "shared subcontractor's contractor").toBeDefined();
   const offer = await write<{ id: string }>(
     page,
     `/api/jobs/${job.id}/offers`,
     {
-      contractorId: contractor!.id,
+      contractorId: contractor.id,
       scope: "Synthetic a11y scope",
       rateType: "fixed",
       rateExclusiveCents: "30000",
@@ -197,72 +213,92 @@ async function seedDetails(page: Page) {
       `/payments/supplier/${payment.id}`,
       `/expenses/${expense.id}`,
       `/employees/${employee.id}`,
-      `/contractors/${contractor!.id}`,
+      `/contractors/${contractor.id}`,
     ],
     subcontractor: [`/offers/${offer.id}`],
+    cleanup,
   };
 }
 
 for (const role of Object.keys(SCREENS) as E2eRole[])
-  test(`${role}: every screen passes axe and reflows`, async ({ page }) => {
+  test(`${role}: every screen passes axe and reflows`, async ({
+    page,
+    browser,
+  }) => {
     let details: string[] = [];
-    if (role === "owner" || role === "subcontractor") {
+    let cleanup = async () => {};
+    if (role === "owner") {
       await signIn(page, "owner");
-      details = (await seedDetails(page))[role];
-      if (role !== "owner") await page.context().clearCookies();
+      details = (await seedDetails(page, false)).owner;
+    } else if (role === "subcontractor") {
+      // Seed as the owner in a separate session, kept for the cleanup.
+      const owner = await (await browser.newContext()).newPage();
+      await signIn(owner, "owner");
+      const seeded = await seedDetails(owner, true);
+      details = seeded.subcontractor;
+      cleanup = async () => {
+        await seeded.cleanup();
+        await owner.context().close();
+      };
     }
-    if (role !== "owner") await signIn(page, role);
-    const problems: string[] = [];
-    for (const path of [...SCREENS[role], ...details]) {
-      const response = await page.goto(path);
-      expect(response?.status(), path).toBe(200);
-      await settled(page, path);
-      await expect(
-        page.getByRole("link", { name: /skip to (main )?content/i }),
-        path,
-      ).toHaveCount(1);
-      await expect(page.locator("main"), path).toHaveCount(1);
-      for (const theme of ["light", "dark"] as const) {
-        await page.getByLabel("Appearance").selectOption(theme);
-        for (const width of WIDTHS) {
-          await page.setViewportSize({ width, height: 900 });
-          const overflow = await page.evaluate(
-            () => document.documentElement.scrollWidth - window.innerWidth,
-          );
-          if (overflow > 0)
-            problems.push(
-              `${path} ${theme} ${width}px: ${overflow}px overflow`,
-            );
-          const { violations } = await new AxeBuilder({ page })
-            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
-            .analyze();
-          for (const v of violations)
-            problems.push(
-              `${path} ${theme} ${width}px: ${v.id} (${v.nodes.length}) ${v.nodes[0]?.target.join(" ")}`,
-            );
-        }
-      }
-      await page.setViewportSize({ width: 1280, height: 900 });
-      await page.getByLabel("Appearance").selectOption("light");
+    try {
+      await sweep(page, role, details);
+    } finally {
+      await cleanup();
     }
-    // Keyboard: the first Tab reaches the skip link, which moves focus past
-    // the navigation into the main content.
-    await page.goto("/home");
-    await settled(page, "/home");
-    await page.keyboard.press("Tab");
+  });
+
+async function sweep(page: Page, role: E2eRole, details: string[]) {
+  if (role !== "owner") await signIn(page, role);
+  const problems: string[] = [];
+  for (const path of [...SCREENS[role], ...details]) {
+    const response = await page.goto(path);
+    expect(response?.status(), path).toBe(200);
+    await settled(page, path);
     await expect(
       page.getByRole("link", { name: /skip to (main )?content/i }),
-    ).toBeFocused();
-    await page.keyboard.press("Enter");
-    expect(
-      await page.evaluate(
-        () =>
-          Boolean(document.activeElement?.closest("main")) ||
-          location.hash.length > 1,
-      ),
-    ).toBe(true);
-    expect(problems).toEqual([]);
-  });
+      path,
+    ).toHaveCount(1);
+    await expect(page.locator("main"), path).toHaveCount(1);
+    for (const theme of ["light", "dark"] as const) {
+      await page.getByLabel("Appearance").selectOption(theme);
+      for (const width of WIDTHS) {
+        await page.setViewportSize({ width, height: 900 });
+        const overflow = await page.evaluate(
+          () => document.documentElement.scrollWidth - window.innerWidth,
+        );
+        if (overflow > 0)
+          problems.push(`${path} ${theme} ${width}px: ${overflow}px overflow`);
+        const { violations } = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+          .analyze();
+        for (const v of violations)
+          problems.push(
+            `${path} ${theme} ${width}px: ${v.id} (${v.nodes.length}) ${v.nodes[0]?.target.join(" ")}`,
+          );
+      }
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByLabel("Appearance").selectOption("light");
+  }
+  // Keyboard: the first Tab reaches the skip link, which moves focus past
+  // the navigation into the main content.
+  await page.goto("/home");
+  await settled(page, "/home");
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("link", { name: /skip to (main )?content/i }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  expect(
+    await page.evaluate(
+      () =>
+        Boolean(document.activeElement?.closest("main")) ||
+        location.hash.length > 1,
+    ),
+  ).toBe(true);
+  expect(problems).toEqual([]);
+}
 
 // Standalone pages outside the app shell: no navigation, so no skip link
 // or appearance control; still one h1, one main, axe-clean and reflowing.
