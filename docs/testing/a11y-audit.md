@@ -2,7 +2,7 @@
 
 `tests/e2e/a11y-sweep.spec.ts` opens every screen each role can reach, at **360, 768 and 1440 px** in **light and dark**:
 - **Owner:** 24 directory and create screens, including every Reports tab and all three Payments views, plus 10 detail screens opened on synthetic records the test creates: customer, job, quote, issued invoice, receipt, bill, supplier payment, expense, employee and contractor.
-- **Accountant, manager, employee and subcontractor:** each one's own screens. The subcontractor also gets an offer detail screen.
+- **Accountant, manager, employee and subcontractor:** each one's own screens. The subcontractor's offer detail is audited by `portal.spec.ts`, which owns the shared subcontractor login; sharing that login here would race when tests run in parallel.
 - **Standalone pages:** sign-in and account.
 
 On every screen it checks:

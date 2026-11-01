@@ -77,7 +77,7 @@ async function write<T>(page: Page, url: string, data: unknown): Promise<T> {
  * supplier payment, expense, employee and contractor (with an offer to the
  * shared subcontractor login).
  */
-async function seedDetails(page: Page, linkSubcontractor: boolean) {
+async function seedDetails(page: Page) {
   const suffix = randomUUID().slice(0, 8);
   const customer = await write<{ id: string }>(page, "/api/customers", {
     name: `Synthetic a11y customer ${suffix}`,
@@ -150,58 +150,19 @@ async function seedDetails(page: Page, linkSubcontractor: boolean) {
   const employee = await write<{ id: string }>(page, "/api/employees", {
     name: `Synthetic a11y employee ${suffix}`,
   });
-  // Owner screens use an unlinked contractor. The subcontractor's offer
-  // needs one linked to the shared subcontractor login; other specs expect
-  // that login unlinked, so the link is only made for the subcontractor
-  // sweep and removed afterwards (see `cleanup`).
-  let cleanup = async () => {};
-  let contractor: { id: string };
-  if (linkSubcontractor) {
-    const users = (await (
-      await page.request.get(
-        `/api/users?q=${encodeURIComponent(requireAccounts().emails.subcontractor)}`,
-      )
-    ).json()) as { members: { userId: string; role: string }[] };
-    const userId = users.members.find(
-      (m) => m.role === "subcontractor",
-    )!.userId;
-    const directory = (await (
-      await page.request.get("/api/contractors?status=all&pageSize=100")
-    ).json()) as { contractors: { id: string; userId: string | null }[] };
-    const existing = directory.contractors.find((c) => c.userId === userId);
-    if (existing) contractor = existing;
-    else {
-      contractor = await write<{ id: string }>(page, "/api/contractors", {
-        name: `Synthetic a11y contractor ${suffix}`,
-        userId,
-      });
-      cleanup = async () => {
-        const unlinked = await page.request.fetch(
-          `/api/contractors/${contractor.id}`,
-          {
-            method: "PATCH",
-            headers: { origin: new URL(page.url()).origin },
-            data: { userId: null },
-          },
-        );
-        expect(unlinked.ok(), "unlink the shared subcontractor").toBe(true);
-      };
-    }
-  } else
-    contractor = await write<{ id: string }>(page, "/api/contractors", {
-      name: `Synthetic a11y contractor ${suffix}`,
-    });
-  const offer = await write<{ id: string }>(
-    page,
-    `/api/jobs/${job.id}/offers`,
-    {
-      contractorId: contractor.id,
-      scope: "Synthetic a11y scope",
-      rateType: "fixed",
-      rateExclusiveCents: "30000",
-      taxCode: "OUT_OF_SCOPE",
-    },
-  );
+  // An unlinked contractor: the shared subcontractor login belongs to the
+  // contractor and portal specs, which may run in parallel with this one.
+  const contractor = await write<{ id: string }>(page, "/api/contractors", {
+    name: `Synthetic a11y contractor ${suffix}`,
+  });
+  // An offer so the job and contractor screens show one.
+  await write<{ id: string }>(page, `/api/jobs/${job.id}/offers`, {
+    contractorId: contractor.id,
+    scope: "Synthetic a11y scope",
+    rateType: "fixed",
+    rateExclusiveCents: "30000",
+    taxCode: "OUT_OF_SCOPE",
+  });
   return {
     owner: [
       `/customers/${customer.id}`,
@@ -215,37 +176,21 @@ async function seedDetails(page: Page, linkSubcontractor: boolean) {
       `/employees/${employee.id}`,
       `/contractors/${contractor.id}`,
     ],
-    subcontractor: [`/offers/${offer.id}`],
-    cleanup,
   };
 }
 
 for (const role of Object.keys(SCREENS) as E2eRole[])
-  test(`${role}: every screen passes axe and reflows`, async ({
-    page,
-    browser,
-  }) => {
+  test(`${role}: every screen passes axe and reflows`, async ({ page }) => {
+    // Detail screens are seeded and audited for the owner. The
+    // subcontractor's offer detail is audited by portal.spec.ts with its
+    // own linked login (sharing it here would race in parallel workers).
     let details: string[] = [];
-    let cleanup = async () => {};
     if (role === "owner") {
       await signIn(page, "owner");
-      details = (await seedDetails(page, false)).owner;
-    } else if (role === "subcontractor") {
-      // Seed as the owner in a separate session, kept for the cleanup.
-      const owner = await (await browser.newContext()).newPage();
-      await signIn(owner, "owner");
-      const seeded = await seedDetails(owner, true);
-      details = seeded.subcontractor;
-      cleanup = async () => {
-        await seeded.cleanup();
-        await owner.context().close();
-      };
+      const seeded = await seedDetails(page);
+      details = seeded.owner;
     }
-    try {
-      await sweep(page, role, details);
-    } finally {
-      await cleanup();
-    }
+    await sweep(page, role, details);
   });
 
 async function sweep(page: Page, role: E2eRole, details: string[]) {
