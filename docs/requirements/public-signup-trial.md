@@ -17,8 +17,9 @@ the trial.
 - **Invited member:** someone an owner invites (#27) as manager, accountant, employee or subcontractor. They join an
   existing company and never get a trial of their own.
 - **Existing user:** a person who already has a JobFlow account (invited or seeded) and now wants their own company.
-- **Operator:** the person running the deployment (the project owner). Extends trials manually. This is not an in-app
-  role in this epic.
+- **Platform operator:** the app owner (Shivom), who runs the deployment. Reviews extension requests and extends
+  trials. This is a platform-level role, separate from every company role. A company `owner` is never an operator
+  through their membership.
 - **Abuser:** a bot or person who mass-creates accounts, enumerates emails, or restarts trials.
 
 ## Decisions already made (owner, not reopened)
@@ -30,6 +31,27 @@ the trial.
 3. Payslips and payroll stay out of scope. Company details are reused on invoices, quotes, credit notes and PDFs.
 4. Milestone: **M6 Public launch**.
 
+Owner answers to the first draft's open questions (2 November 2026):
+
+5. **Existing companies (was OQ1):** companies that exist before launch become `unrestricted`. They have no trial and
+   never become read-only (S13).
+6. **Terms and privacy (was OQ2):** versioned placeholder pages ship now. Production launch is **gated** until the
+   owner supplies reviewed text (E5, S2).
+7. **Extension requests (was OQ3):** both channels are used.
+   - A support email address is shown in the expired banner and in reminder emails.
+   - An owner-only in-app "Request extension" action notifies the platform operator, who approves or declines it in a
+     minimal operator area (S14, S11).
+   - The CLI extension stays as a fallback.
+8. **Sender (was OQ4):** emails come from `jobflow@shivomsangha.com`, and the owner adds SPF, DKIM and DMARC records in
+   Cloudflare DNS. The same address is the default support and reply-to address. Both are configurable by environment
+   variable.
+9. **Defaults adopted (were OQ5–OQ9):**
+   - Cloudflare Turnstile is used on sign-up, forgot-password and resend.
+   - Each user can create one company through self-service.
+   - A duplicate ABN across companies is allowed silently.
+   - Passwords are screened against breach lists.
+   - Owners see trial changes in their audit history and in the company export.
+
 ## Changes to existing decisions
 
 - **ADR 0003 says "No public sign-up".** This epic reverses that. The architect must amend ADR 0003, or write a new
@@ -37,6 +59,9 @@ the trial.
   unimplemented. This epic implements it.
 - **#27 invitations** say that no email is sent. That stays true for invitations in this epic. Sending invitations by
   email is listed under Later.
+- **Roles:** AGENTS.md defines five company roles. This epic adds a separate **platform-operator** role (S11). It isn't
+  a company role, and it gives no access to company data. AGENTS.md and the authorisation docs must mention it once the
+  ADR (E2) is accepted.
 - **Rate limiting** keys on `x-forwarded-for` (ADR 0003). Behind Cloudflare, the client IP must come from a header the
   client can't spoof. This is an infra prerequisite (see E3).
 
@@ -111,8 +136,9 @@ As a prospective owner, I want to create an account with my name, email and pass
    - Email: syntactically valid and ≤ 320 characters. It's trimmed and lower-cased before storing and comparing.
    - Password: 12–128 characters (ADR 0003). Confirmation must match. There are no composition rules.
    - Terms and privacy: acceptance is required.
-3. **Recommended addition:** reject passwords that appear in a known-breached list. The owner decides whether to
-   include this (OQ8).
+3. **Breached passwords (decided):** passwords that appear in a known-breached list are rejected with a clear message.
+   The full password or its full hash is never sent to a third party. The architect chooses between a bundled list and
+   a k-anonymity range lookup. If a lookup service is unavailable, sign-up isn't blocked, and the outage is logged.
 4. **No account enumeration:**
    - Given the email already belongs to any account (verified, unverified, invited, deactivated or demo), when I sign
      up, then I see exactly the same response as a new sign-up.
@@ -123,14 +149,15 @@ As a prospective owner, I want to create an account with my name, email and pass
 5. Given two concurrent sign-ups with the same email, then exactly one account exists and both responses are the
    generic one.
 6. **Terms record:** the accepted terms version, privacy version and acceptance instant are recorded against the user.
+   Until the owner supplies reviewed text, the pages show clearly versioned placeholders (for example
+   `placeholder-2026-11`). Production launch is gated on reviewed versions (E5).
 7. **Production guard:** in production, sign-up for `@example.test` or any reserved TLD (`.test`, `.example`,
    `.invalid`, `.localhost`) is refused with a generic validation error. No email is sent.
 8. **Abuse protection:**
    - Sign-up is throttled per client IP. The recommended starting value is 5 per hour, kept in shared database
      storage like the existing limits. Excess requests return 429 with a retry hint.
-   - **Recommended:** a Cloudflare Turnstile (or equivalent) challenge on sign-up, forgot-password and resend,
-     verified on the server. A failed or missing token returns a generic error and creates nothing. The owner decides
-     (OQ5).
+   - **Decided:** a Cloudflare Turnstile challenge on sign-up, forgot-password and resend, verified on the server. A
+     failed or missing token returns a generic error and creates nothing. Outside production, a test key may be used.
 9. **Email content:**
    - Emails sent to an address that isn't verified yet contain no attacker-controlled free text. No user-entered name
      or company name appears in them, so they can't be used to relay spam.
@@ -182,7 +209,7 @@ operator.
    - a "your password was changed" notice is sent to the address;
    - I'm asked to sign in.
 4. Given an invalid, expired or used link, then the password is unchanged and I can request a new one.
-5. **Throttling:** 3 requests per account per hour and 10 per IP per hour, plus Turnstile if OQ5 is accepted. Throttled
+5. **Throttling:** 3 requests per account per hour and 10 per IP per hour, plus Turnstile. Throttled
    requests still return the generic message. They don't send an email and they're counted for monitoring.
 6. A reset never grants company access by itself. Deactivated memberships stay deactivated (#27).
 7. Changing the password while signed in, and changing the email address, are out of scope (Later).
@@ -214,8 +241,7 @@ owner, and my trial starts.
    If any part fails, nothing is created.
 4. Idempotency: a double-click, retry or two tabs produce exactly one company. The second request returns the same
    company.
-5. **Self-service limit:** a user may create at most **one** company through self-service. **Assumption**, pending
-   OQ6. A further attempt shows "Contact us to set up another company" and creates nothing.
+5. **Self-service limit (decided):** a user may create at most **one** company through self-service. A further attempt shows "Contact us to set up another company" and creates nothing.
 6. The server rejects a client-supplied `companyId`, `isDemo`, trial date or role.
 7. After step 1, my session's active company becomes the new company, and I continue to the optional steps (S6) or
    choose "Skip for now".
@@ -226,7 +252,8 @@ owner, and my trial starts.
      missing optional details until they're complete or I dismiss it.
 9. Onboarding states "Invited to join a company? Use the invitation link from your owner instead", so that invitees
    don't create a trial company by mistake.
-10. Duplicate ABN across companies is allowed and doesn't reveal that another company uses it (OQ7).
+10. **Duplicate ABN (decided):** a duplicate ABN across companies is allowed silently. Nothing reveals that another
+    company uses it. Flagging duplicates to the operator is Later.
 
 ### S6. Onboarding: contact details, about and logo (Should, P1)
 
@@ -290,6 +317,11 @@ As an owner, I want to always see how long my trial has left, so that I'm not su
    - **warning:** "N days remaining · Trial expires on 1 Dec 2026", prominent
    - **critical:** "Last day of your trial · Read-only from 12:00 am tomorrow (Sydney time)"
    - **expired:** "Trial ended 1 Dec 2026 · Read-only"
+
+   In the warning, critical and expired states:
+   - the banner shows the support email address (the configured support address, which defaults to
+     `jobflow@shivomsangha.com`);
+   - owners also see a "Request extension" action (S14).
 2. Employees and subcontractors see no countdown. In the expired state they see "This company's account is read-only.
    Contact your owner." No trial dates are shown to them.
 3. The state isn't conveyed by colour alone. The indicator is a labelled landmark or status that screen readers
@@ -320,6 +352,7 @@ records stay available for the 5-year retention period.
      invoice or credit note. These are renderings of existing records, needed for record-keeping.
    - **Deactivate a membership, revoke a pending invitation, and the session revocation that follows.** These remove
      access, and an owner must be able to cut off a departing employee at any time.
+   - **Request a trial extension (owner only, S14).** Read-only is exactly when an owner needs it.
 3. **Refused while read-only**, with the reason for each:
    - **Any create, update, issue, send, approve, accept, record, void, credit, upload or finalise action.** This is the
      owner's decision.
@@ -343,8 +376,13 @@ As an owner, I want reminders before my trial ends, so that I can arrange an ext
 1. **Reminder emails:**
    - Given a trial company, then each active owner with a verified email gets an email at N = 7, N = 3 and N = 1, and
      on the first read-only day ("trial ended").
-   - Each email shows the expiry date in Sydney time, explains what read-only means, and gives the extension contact
-     (OQ3).
+   - Each email:
+     - shows the expiry date in Sydney time;
+     - explains what read-only means;
+     - gives both extension channels: the support email address, and a link to the in-app "Request extension" action
+       (S14).
+   - Emails are sent from `jobflow@shivomsangha.com`, which is also the reply-to address by default. Both can be
+     configured (E1).
 2. **Sending rules:**
    - Each threshold is sent at most once per company and trial end date. Retries and multiple instances never send
      duplicates.
@@ -357,28 +395,52 @@ As an owner, I want reminders before my trial ends, so that I can arrange an ext
 5. Demo companies and accounts with unverified emails never receive trial emails.
 6. Delivery needs a scheduled job runner. Whether one exists is an architecture dependency (E4).
 
-### S11. Operator extends a trial (Must, P0)
+### S11. Platform operator area and direct extension (Must, P0)
 
-As the operator, I want to extend a company's trial with a recorded reason, so that I can help real customers before
-billing exists.
+As the platform operator, I want a minimal, separately authorised operator area, with a CLI fallback, so that I can
+handle extension requests and extend trials with a recorded reason before billing exists.
 
-1. **Running an extension:**
-   - Given operator access (in the MVP, a documented server-side command; there's no web UI), when I run an extension
-     for a company with a new last trial day and a reason, then the trial's read-only instant is updated.
-   - The reason is 1–500 characters.
-2. **Validation:**
+1. **Access:**
+   - The operator area (for example `/operator`) is reachable only by accounts that hold the **platform-operator**
+     role.
+   - That role is platform-level. It's not a company role, and no company UI or API can grant it.
+   - It's granted only through server-side configuration or a server-side command (AQ2).
+   - Deny by default: a non-operator, or a signed-out user, gets 404 for every operator page and API. No operator link
+     appears for them.
+   - An operator must have a verified email. MFA is strongly recommended (AQ1).
+   - Operator requests use the same CSRF, origin and `private, no-store` rules as the rest of the app.
+2. **Least privilege:** the operator area shows only what extension work needs:
+   - company name;
+   - company creation date;
+   - trial state and last trial day;
+   - the requesting owner's name and email;
+   - the extension request and its history.
+
+   It never shows a company's customers, jobs, invoices, prices or files. Being an operator doesn't grant access to
+   any company's app pages.
+3. **What the operator can do:**
+   - decide extension requests (S14);
+   - extend a trial directly, without a request;
+   - switch a company between `trial` and `unrestricted` (S13).
+
+   Each action needs a reason of 1–500 characters.
+4. **Validation for a direct extension:**
    - The new last trial day must be later than the current one, and no earlier than today's Sydney date.
    - It can be at most 365 days from today. **Assumption.**
    - Shortening a trial is refused.
-3. **Audit:**
-   - Every extension writes an append-only audit event in the company's audit trail. It holds the previous and new
-     dates, the reason, the operator identity, a timestamp and a request ID.
+5. **Audit:**
+   - Every operator action writes an append-only audit event in the company's audit trail. It holds the previous and
+     new values, the reason, the operator identity, a timestamp and a request ID.
    - Company owners see it in audit history as "Trial extended by JobFlow operator".
    - **Architecture note:** `audit_events.created_by` currently requires a company membership. The architect must
      decide how to represent a non-member operator actor (E2).
-4. Running the command against a demo company, an unknown company ID or an invalid date fails with a clear error and
-   changes nothing.
-5. The command refuses to run without explicit operator credentials. It can't be reached over HTTP.
+6. **CLI fallback:**
+   - A documented server-side command does the same direct extension and access-state change, with the same
+     validation and audit.
+   - It can't be reached over HTTP and refuses to run without explicit operator credentials.
+   - It's the recovery path if the operator area or email is unavailable.
+7. An extension by any path takes effect immediately (S9 AC6) and closes any pending request (S14 AC8).
+8. Acting on a demo company, an unknown company ID or an invalid date fails with a clear error and changes nothing.
 
 ### S12. Invited and existing users (Should, P1)
 
@@ -399,29 +461,87 @@ don't lose access or start a trial by accident.
 5. Given a never-member account created by sign-up later receives an invitation, then accepting it while signed in
    works as in #27, and the user doesn't need to create a company.
 
-### S13. Companies that existed before this epic (Must, P0, blocked by OQ1)
+### S13. Companies that existed before this epic (Must, P0)
 
 As the operator, I want existing companies handled explicitly when trials ship, so that pilot customers aren't locked
 out unexpectedly.
 
-1. A migration gives every existing company an explicit access state:
-   - demo companies are exempt;
-   - non-demo companies get the state chosen in OQ1. The recommendation is `unrestricted`: no trial and no indicator,
-     set by the operator and audited.
-2. An operator can move an `unrestricted` company onto a trial, or back, through the S11 command with a reason. Every
-   change is audited.
-3. No existing company becomes read-only as a side effect of the migration. A migration test proves this.
+1. **Migration:** a migration gives every existing company an explicit access state. This is the owner's decision.
+   - Demo companies are exempt.
+   - Every non-demo company becomes `unrestricted`. It has no trial, no indicator and no reminder emails, and never
+     becomes read-only.
+   - The migration writes one audit event per company that records the change.
+2. Companies created through sign-up after launch start as `trial` (S5).
+3. An operator can move a company from `unrestricted` to `trial`, or back, through S11 with a reason. Every change is
+   audited.
+4. No existing company becomes read-only as a side effect of the migration. A migration test proves this.
+
+### S14. Owner requests a trial extension (Must, P0)
+
+As a company owner, I want to request an extension from inside the app, so that I can keep working without hunting
+for a contact.
+
+1. **Who can request:**
+   - A "Request extension" action is available to active `owner` members of a `trial` company in any trial state,
+     including expired and read-only. It's prominent in the warning, critical and expired states.
+   - Other roles, demo companies and `unrestricted` companies don't see it.
+   - The server refuses requests from them (403, or 404 when the company is out of scope).
+2. **Submitting:**
+   - Given I'm an owner, when I submit a request with an optional message, then a request is recorded with status
+     `pending`. The message is plain text of up to 1000 characters.
+   - The request holds the company, the requesting owner, the request time and the current last trial day.
+   - A company audit event is written.
+   - I see "Request sent. We'll email you when it's decided", and the support email address as the other channel.
+3. **One pending request per company:**
+   - Given a pending request exists, then any owner sees its status and time instead of the form.
+   - A second submission, including concurrent ones, never creates another request.
+4. **Throttling:**
+   - At most 3 requests per company in any 7 days.
+   - After a decline, a new request is allowed only after 24 hours.
+   - The shared per-user and per-IP limits also apply.
+   - When throttled, the owner sees when they can try again, and is pointed to the support email.
+   - These limits are an **Assumption**.
+5. **Operator notification:**
+   - On submission, the platform operator gets an email at a configured operator address, set by environment
+     variable.
+   - The email contains the company name, request ID, last trial day, the requesting owner's name and email, the
+     escaped message and a link to the operator view.
+   - It contains no company business data.
+6. **The operator view** (S11 AC2) lists pending requests oldest first, and recent decisions.
+7. **Deciding:**
+   - **Approve:**
+     - The operator chooses an extension of 1–365 days and can add an optional note.
+     - The new last trial day is the later of the current last trial day and yesterday's Sydney date, plus the chosen
+       days.
+     - The trial update, the request decision and the audit event commit in one transaction.
+   - **Decline:** a reason of 1–500 characters is required, and the trial is unchanged.
+   - A request is decided once. A concurrent second decision gets a conflict and changes nothing.
+8. **Closing requests:** if an operator extends the trial directly (S11) while a request is pending, the request is
+   closed as approved, linked to that extension. Switching the company to `unrestricted` also closes it.
+9. **Outcome notification:**
+   - The requesting owner and every other active owner with a verified email are told the outcome by email and in the
+     app.
+   - The in-app notice shows on their next page load until dismissed, and the request status stays visible on the
+     trial settings page.
+   - An approval shows the new last trial day. A decline shows the operator's reason.
+10. The request record and its decision are kept with the company's records. Owners see them in audit history, and
+    they appear in the company export (#62).
 
 ## Enabling work (not user stories; separate issues)
 
 - **E1. Spike:** transactional email provider (research-dev). It must cover:
   - Australian or GDPR-grade data handling, cost and deliverability;
-  - SPF, DKIM and DMARC for the sending domain;
+  - sending from `jobflow@shivomsangha.com` on the main domain, with the owner adding SPF, DKIM and DMARC in
+    Cloudflare DNS;
+  - environment-configured sender, reply-to and support addresses (each defaulting to `jobflow@shivomsangha.com`) and
+    an operator notification address;
   - bounce and complaint handling, and keeping the API key in a secret store.
 - **E2. ADR (architect):**
   - amend ADR 0003 for public sign-up, verification and reset;
   - define the company access state model (trial, unrestricted, read-only derived from time);
   - choose the operator actor representation in the audit trail;
+  - define the platform-operator role, how it's granted (AQ2), the operator area's authorisation boundary, and MFA
+    (AQ1);
   - add a central mutation guard;
   - record the user-level security log for sign-up, verification and reset, which have no company.
 - **E3. Infra (devops):**
@@ -430,9 +550,13 @@ out unexpectedly.
   - cache bypass for dynamic routes;
   - HSTS;
   - `BETTER_AUTH_URL` set to the public origin;
-  - Turnstile keys if OQ5 is accepted.
+  - Turnstile site and secret keys.
 - **E4. Scheduler** for trial emails (architect and devops). It must be idempotent across instances.
-- **E5.** Terms of Service and Privacy Policy pages, with content from the owner (OQ2).
+- **E5. Terms of Service and Privacy Policy pages:**
+  - Versioned placeholder pages are built now.
+  - **Production launch gate:** public sign-up must not be enabled in production until the owner supplies reviewed
+    text, published under a non-placeholder version.
+  - A release check fails if the production configuration still points at a placeholder version.
 
 ## Edge cases and validation rules
 
@@ -442,7 +566,7 @@ out unexpectedly.
   accepted if the email provider supports them (E1). Otherwise they're rejected with a clear message.
 - **Names:** Unicode allowed. They're escaped everywhere: HTML, PDF and email.
 - **Duplicates:** the same email for two accounts is impossible. A duplicate company from a double-submit is
-  impossible (idempotency). A duplicate ABN across companies is allowed (OQ7).
+  impossible (idempotency). A duplicate ABN across companies is allowed (decided).
 - **Concurrency:**
   - simultaneous sign-ups;
   - verification link clicked twice (the second click shows "already verified" and nothing changes);
@@ -467,6 +591,11 @@ out unexpectedly.
   - Sessions are revoked on password reset.
   - There are no open redirects.
   - The Turnstile secret is server-only.
+  - The operator area is a separate authorisation boundary:
+    - access needs the platform-operator role, and non-operators get 404;
+    - it gives no access to company business data;
+    - MFA is strongly recommended (AQ1);
+    - it's covered by negative tests for every company role.
   - Security review by security-engineer is required before launch, covering T01, T07, T08, T09, T10 and T11, plus a
     new threat-model entry for public sign-up abuse and email abuse.
 - **Privacy:**
@@ -483,8 +612,10 @@ out unexpectedly.
     at 320 px width.
   - Turnstile must offer an accessible fallback.
 - **Audit:**
-  - Company audit events cover company creation, profile and logo changes, GST registration, trial start, extension
-    and access-state change.
+  - Company audit events cover:
+    - company creation, profile and logo changes, and GST registration;
+    - trial start, extension and access-state change;
+    - extension requests and their decisions.
   - User-level security events cover sign-up, verification, reset requested and completed, and throttling. They go in
     a log without PII values (E2).
 - **Testing:**
@@ -495,14 +626,14 @@ out unexpectedly.
 
 ## Scope
 
-**In:** S1–S13 and E1–E5.
+**In:** S1–S14 and E1–E5.
 
 **Out:**
 - paid billing, subscriptions and payment collection;
 - payslips, payroll, PAYG, STP and super;
 - social or SSO login;
 - MFA (still assessed under #61);
-- a web UI for operators;
+- operator features beyond S11 and S14;
 - automatic trial extension;
 - deleting a company or account.
 
@@ -513,7 +644,7 @@ out unexpectedly.
 - purging unverified accounts;
 - blocking disposable email domains;
 - billing that replaces manual extension;
-- an operator dashboard;
+- a fuller operator dashboard (search, metrics, account support);
 - detecting duplicate ABNs and restarted trials;
 - configurable trial length.
 
@@ -522,32 +653,29 @@ out unexpectedly.
 1. The verification link lasts 24 h and the reset link 1 h.
 2. The logo is PNG or JPEG, ≤ 2 MB, ≤ 4000×4000 px.
 3. The phone format rule is the one in S6 AC1.
-4. Each user can self-create one company.
-5. An operator extension can be at most 365 days.
-6. Invitations created before expiry can still be accepted while read-only.
-7. Design previews aren't public in production.
-8. "About the company" appears on quotes only, not on tax invoices.
-9. The trial is a fixed 30 days.
+4. An operator extension can be at most 365 days.
+5. Invitations created before expiry can still be accepted while read-only.
+6. Design previews aren't public in production.
+7. "About the company" appears on quotes only, not on tax invoices.
+8. The trial is a fixed 30 days.
+9. Extension requests are limited to 3 per company per 7 days, with a 24-hour wait after a decline.
 
 ## Open questions
 
+The owner resolved OQ1–OQ9 from the first draft (see "Decisions already made"). Two questions remain, both for the
+architect.
+
 | # | Question | Blocking? |
 |---|---|---|
-| OQ1 | What happens to companies that exist before launch (pilot or staging)? Recommendation: `unrestricted`, not a new trial. | **Blocking for S13.** It decides whether the migration can lock anyone out |
-| OQ2 | Who supplies the Terms of Service and Privacy Policy text and version? JobFlow handles customers' personal information. | **Blocking for public launch** (S2 AC1 needs a document to accept). Build can proceed with placeholder versions outside production |
-| OQ3 | Which contact channel do expired customers use to request an extension (support email or form)? It appears in the banner and emails. | **Blocking for S8 expired copy and S10** |
-| OQ4 | What sender address and domain should be used (for example `no-reply@jobflow.shivomsangha.com`)? Can the owner add SPF, DKIM and DMARC DNS records in Cloudflare? | **Blocking for S3, S4 and S10** (with E1) |
-| OQ5 | Should Cloudflare Turnstile be used on sign-up, forgot-password and resend? Recommendation: yes. | Not blocking. Rate limits alone are acceptable initially |
-| OQ6 | Self-service company limit per user: 1 (recommended, prevents trial restarts) or more? | Not blocking. The default is 1 |
-| OQ7 | Should a duplicate ABN across companies be blocked, warned about, or silently allowed? Recommendation: allow, and leave flagging to the operator for Later. Blocking would let a squatter lock out the real business. | Not blocking |
-| OQ8 | Should breached-password screening be added (needs an external lookup or a bundled list)? | Not blocking |
-| OQ9 | Should owners also be able to see the trial state in the company export or settings history? | Not blocking |
+| AQ1 | **Operator MFA:** should multi-factor authentication (TOTP or passkey) be required for platform-operator accounts? Recommendation: required before the operator area is enabled in production. Until then, the CLI fallback is the only production path. | **Blocking for enabling S11's and S14's operator area in production.** Not blocking for build or staging |
+| AQ2 | **Granting the operator role:** how is it granted and revoked? For example, an environment allowlist of verified user IDs, or a platform table changed only by a server-side command. Each change must be audited. | Not blocking for requirements. It's decided in the E2 ADR, before S11 starts |
 
 ## Recommended order and hand-off
 
-1. In parallel: **E1** (research-dev spike), **E2** (architect ADR) and **E3** (devops), with the owner answering OQ1–OQ4.
+1. In parallel: **E1** (research-dev spike), **E2** (architect ADR, including AQ1 and AQ2) and **E3** (devops). E5
+   placeholders can start at any time.
 2. **S1, S2, S3, S4** need E1, E2 and E3.
-3. **S5**, then **S8, S9, S11, S13**: the trial core, all Must.
+3. **S5**, then **S8, S9, S11, S13, S14**: the trial core, all Must.
 4. **S6, S7, S10, S12**.
 
 No domain-expert regulatory input is needed, apart from confirming that S7's snapshot fields still satisfy the
