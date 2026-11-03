@@ -21,3 +21,6 @@ infra/staging/env/*.env
 
 # Accountant review pack output (#67), regenerated on demand
 accountant-pack/
+
+# Owner admin console credentials (#252); never commit.
+.env-admin
