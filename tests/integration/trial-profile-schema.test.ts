@@ -497,6 +497,31 @@ describe("trial extension requests", () => {
         data: { extensionDays: 400 },
       }),
     ).rejects.toThrow();
+    // Closed without any reason (a NULL CHECK result must not pass).
+    for (const newLastDay of [null, day("2026-12-15")])
+      await expect(
+        client.trialExtensionRequest.update({
+          where: { id: pending.id },
+          data: {
+            status: "closed",
+            decidedAt: new Date(),
+            decidedBy: other.id,
+            newLastDay,
+          },
+        }),
+      ).rejects.toThrow(/trial_extension_requests_decision/);
+    // An unknown closed reason.
+    await expect(
+      client.trialExtensionRequest.update({
+        where: { id: pending.id },
+        data: {
+          status: "closed",
+          decidedAt: new Date(),
+          decidedBy: other.id,
+          closedReason: "other",
+        },
+      }),
+    ).rejects.toThrow(/trial_extension_requests_decision/);
   });
 
   it("is decided once and then never changes or disappears", async () => {
