@@ -191,6 +191,18 @@
     padding: 32px;
   }
 }
+@keyframes landing-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+.landing-rise {
+  animation: landing-rise 700ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+.landing-rise-delay {
+  animation-delay: 150ms;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
