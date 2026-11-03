@@ -42,7 +42,9 @@ test("landing page explains JobFlow and links to sign-in", async ({ page }) => {
   await expect(page.locator("footer")).toContainText(
     "JobFlow does not lodge with the ATO",
   );
-  await expect(page.getByText(/coming soon/).first()).toBeVisible();
+  await expect(
+    page.getByText(/free 30-day trial\s+starts when public sign-up opens/),
+  ).toBeVisible();
 
   const signIn = page
     .getByRole("banner")
@@ -130,6 +132,66 @@ for (const theme of ["light", "dark"] as const) {
       await page.getByLabel("Appearance", { exact: true }).selectOption(theme);
       await expect(page.locator("html")).toHaveClass(new RegExp(theme));
       await scrollThrough(page);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+      const accessibility = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+        .analyze();
+      expect(accessibility.violations).toEqual([]);
+    });
+  }
+}
+
+test("visitors without an account can find Sign up everywhere", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const header = page.getByRole("banner");
+  await expect(header.getByRole("link", { name: "Sign up" })).toHaveAttribute(
+    "href",
+    "/signup",
+  );
+  await expect(
+    page.locator("#hero-title ~ div").getByRole("link", { name: "Sign up" }),
+  ).toHaveAttribute("href", "/signup");
+  await expect(
+    page
+      .locator("section[aria-labelledby=cta]")
+      .getByRole("link", { name: "Sign up" }),
+  ).toHaveAttribute("href", "/signup");
+
+  await page.goto("/login");
+  await page.getByRole("main").getByRole("link", { name: "Sign up" }).click();
+  await expect(page).toHaveURL(/\/signup$/);
+  await expect(page).toHaveTitle("Sign up · JobFlow");
+  await expect(
+    page.getByRole("heading", {
+      level: 1,
+      name: "Create your JobFlow account",
+    }),
+  ).toBeVisible();
+  // Honest placeholder: no form pretends to create an account yet.
+  await expect(page.locator("form")).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Request early access" }),
+  ).toHaveAttribute("href", /^mailto:admin@shivomsangha\.com\?/);
+  await page.getByRole("main").getByRole("link", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+});
+
+for (const theme of ["light", "dark"] as const) {
+  for (const width of [360, 1280]) {
+    test(`sign-up page is accessible and reflows: ${theme} ${width}px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/signup");
+      await page.getByLabel("Appearance", { exact: true }).selectOption(theme);
+      await expect(page.locator("html")).toHaveClass(new RegExp(theme));
+      await page.waitForTimeout(900);
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= window.innerWidth,
