@@ -68,7 +68,11 @@ digests (invitations, #27), the `document_delete_retries` outbox (#170), tsx CLI
   - consumes the token;
   - enqueues the "password changed" email.
 - **Verified sessions.** `resolveActor()` gains the status `unverified`, checked before memberships. The exception is
-  demo accounts (`@example.test`) outside production.
+  demo and test identities on reserved TLDs (`.test`, `.example`, `.invalid`, `.localhost`) outside production: they
+  can't receive email, and production sign-up refuses those domains.
+  - **Invited users are not auto-verified.** Invitation links are copied and shared by the owner (ADR 0003), not
+    emailed, so accepting one doesn't prove control of the address. Existing members verify on their next sign-in
+    with the emailed link, which works now that Zoho SMTP is live (D7). Revisit if invitations start being emailed.
   - Pages redirect to `/verify-email/pending`.
   - APIs return 403 `email_unverified`.
   - Accounts that existed before M6 and are unverified must verify (S3 AC6). This forces a **deploy-order rule**:
@@ -144,8 +148,10 @@ Enforcement has two layers, and the database layer is authoritative.
    - `withPolicy` maps the error to 403 `company_read_only`, the same way `isLockedPeriodError` maps 409 today.
    - **Exemptions.**
      - `withAudit(db, work, { readOnlyExemption })` runs `set_config('jobflow.read_only_exemption', key, true)`.
-     - The trigger accepts only keys in the SQL list `jobflow_read_only_exemptions()`, which mirrors the TypeScript
-       union `ReadOnlyExemption`. A parity test checks the two lists match.
+     - The trigger accepts only keys in the SQL map `jobflow_read_only_exemptions()`, which mirrors the TypeScript
+       `READ_ONLY_ALLOWED` table **key → allowed audit actions**. It checks the audit row's `action` against the
+       actions allowed for the declared key, not just that the key exists, so a transaction declaring `export` can't
+       also commit `invoice.issued`. A parity test checks the two maps match.
      - Raw audit inserts (document cleanup) use the same helper.
 
 | Exemption key | Allowed action (S9 AC2, S12 AC2) |
@@ -213,8 +219,13 @@ Enforcement has two layers, and the database layer is authoritative.
     a pending request, writes the audit event and enqueues emails in one transaction.
   - The CLI calls the same service with `--as <operatorUserId>`, which must pass the same two-key check. The production
     MFA rule doesn't apply to the CLI, because shell access is the stronger credential.
-- **Recommended extra, owner's choice.** Put `/operator*` and `/api/operator/*` behind a Cloudflare Access policy for
-  the operator's email.
+- **Cloudflare Access (owner decision, 3 Nov 2026): required.** `/operator*`, `/api/operator/*` and
+  `/api/auth/two-factor/*` sit behind a Cloudflare Access policy for the operator's email. #213 includes it in its
+  acceptance criteria.
+- **Enrolment code.** An operator without TOTP has a password-only session, so whoever holds the password could enrol
+  their own authenticator first. Enrolment therefore needs a one-time code from the host:
+  `pnpm operator enrol-code --user <id>` (10 minutes, single use, only the digest stored in `account_tokens` with a new
+  purpose `operator_enrolment`). Better Auth's `/two-factor/enable` is refused without a valid code.
 
 ### D6. Audit actors and the user-level security log
 
@@ -269,8 +280,12 @@ Enforcement has two layers, and the database layer is authoritative.
     dispatcher must treat throttling errors (SMTP 4xx/554 rate replies) as retryable and alert when limits are hit.
     Move to a transactional provider if volume outgrows the mailbox limits.
   - Bounces and complaints add the address digest to `email_suppressions`, and suppressed addresses aren't sent to.
+    The digest is HMAC-SHA-256 keyed by HKDF(`EMAIL_OUTBOX_KEY`, info `address-digest-v1`), separate from the payload
+    key. Rotating `EMAIL_OUTBOX_KEY` invalidates existing digests: suppressions are dropped on rotation (or re-added
+    from the bounce mailbox).
 - **Addresses.** Sender, reply-to and support default to `admin@shivomsangha.com` through `EMAIL_FROM`,
-  `EMAIL_REPLY_TO` and `SUPPORT_EMAIL`. `OPERATOR_NOTIFY_EMAIL` is the operator's address and has no default.
+  `EMAIL_REPLY_TO` and `SUPPORT_EMAIL`. `OPERATOR_NOTIFY_EMAIL` is the operator's address and has no default
+  (to be confirmed by the owner: `admin@shivomsangha.com` or `jobflow@shivomsangha.com`).
   `EMAIL_FROM` must equal `SMTP_USER` (or an alias verified in Zoho), or Zoho rejects the message.
 - **Content.** Templates are plain text plus minimal escaped HTML.
   - Emails to unverified addresses contain no user-entered text (S2 AC9).
