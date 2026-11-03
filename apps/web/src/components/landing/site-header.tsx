@@ -4,7 +4,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { buttonVariants } from "@/components/ui/button";
 
 export const EARLY_ACCESS =
-  "mailto:jobflow@shivomsangha.com?subject=JobFlow%20early%20access&body=Business%20name%3A%0AABN%20(optional)%3A%0AYour%20name%3A%0APhone%3A%0AWhat%20work%20do%20you%20do%3F%3A";
+  "mailto:admin@shivomsangha.com?subject=JobFlow%20early%20access&body=Business%20name%3A%0AABN%20(optional)%3A%0AYour%20name%3A%0APhone%3A%0AWhat%20work%20do%20you%20do%3F%3A";
 
 export function SiteHeader({
   sections = [],

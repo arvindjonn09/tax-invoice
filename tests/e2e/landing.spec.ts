@@ -177,7 +177,7 @@ test("visitors without an account can find Sign up everywhere", async ({
   await expect(page.locator("form")).toHaveCount(0);
   await expect(
     page.getByRole("link", { name: "Request early access" }),
-  ).toHaveAttribute("href", /^mailto:jobflow@shivomsangha\.com\?/);
+  ).toHaveAttribute("href", /^mailto:admin@shivomsangha\.com\?/);
   await page.getByRole("main").getByRole("link", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/login$/);
 });

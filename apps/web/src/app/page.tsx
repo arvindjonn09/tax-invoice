@@ -156,7 +156,7 @@ const faqs = [
   },
   {
     q: "How do I get started?",
-    a: "Public sign-up with a free 30-day trial is coming soon. Email jobflow@shivomsangha.com for early access.",
+    a: "Public sign-up with a free 30-day trial is coming soon. Email admin@shivomsangha.com for early access.",
   },
 ];
 
