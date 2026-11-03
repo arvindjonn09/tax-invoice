@@ -39,6 +39,12 @@ model User {
   image         String?       @db.VarChar(2048)
   sessions      AuthSession[]
   accounts      AuthAccount[]
+  // Public sign-up (#210).
+  accountTokens      AccountToken[]
+  termsAcceptances   TermsAcceptance[]
+  emails             EmailOutbox[]
+  platformEvents     PlatformAuditEvent[]
+  selfServiceCompany Company?             @relation("SelfServiceCompany")
 
   @@index([createdBy])
   @@map("users")
@@ -125,6 +131,18 @@ model Company {
   invoicePrefix         String                   @default("INV-") @map("invoice_prefix") @db.VarChar(10)
   jobPrefix             String                   @default("JOB-") @map("job_prefix") @db.VarChar(10)
   basPeriod             BasReportingPeriod       @default(quarterly) @map("bas_period")
+  /// ADR 0004 D2: trial companies come only from self-service onboarding (#210).
+  accessMode            CompanyAccessMode        @default(unrestricted) @map("access_mode")
+  trialStartedAt        DateTime?                @map("trial_started_at") @db.Timestamptz(3)
+  /// Last full day of the trial in Australia/Sydney.
+  trialLastDay          DateTime?                @map("trial_last_day") @db.Date
+  /// Derived by the companies_read_only_from trigger; never written by the app.
+  readOnlyFrom          DateTime?                @map("read_only_from") @db.Timestamptz(3)
+  trialExtensionCount   Int                      @default(0) @map("trial_extension_count")
+  selfServiceOwnerId    String?                  @unique @map("self_service_owner_id") @db.Uuid
+  selfServiceRequestKey String?                  @map("self_service_request_key") @db.VarChar(100)
+  selfServiceOwner      User?                    @relation("SelfServiceCompany", fields: [selfServiceOwnerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  emails                EmailOutbox[]
   createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
   createdBy             String                   @map("created_by") @db.Uuid
@@ -155,6 +173,7 @@ model Company {
   gstSourcePostings     GstSourcePosting[]
   creditCashAdjustments CreditCashAdjustment[]
 
+  @@index([accessMode, readOnlyFrom])
   @@map("companies")
 }
 
@@ -267,14 +286,16 @@ model Membership {
 model AuditEvent {
   id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId  String     @map("company_id") @db.Uuid
-  createdBy  String     @map("created_by") @db.Uuid
-  action     String     @db.VarChar(100)
-  targetType String     @map("target_type") @db.VarChar(100)
-  targetId   String     @map("target_id") @db.VarChar(200)
-  metadata   Json       @default("{}")
-  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  company    Company    @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  creator    Membership @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  /// Null for system and operator events (audit_events_actor CHECK).
+  createdBy  String?        @map("created_by") @db.Uuid
+  actorKind  AuditActorKind @default(member) @map("actor_kind")
+  action     String         @db.VarChar(100)
+  targetType String         @map("target_type") @db.VarChar(100)
+  targetId   String         @map("target_id") @db.VarChar(200)
+  metadata   Json           @default("{}")
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  company    Company        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator    Membership?    @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([companyId, createdAt, id])
   @@index([companyId, targetType, targetId])
@@ -1714,4 +1735,125 @@ model SupplierBillEvidence {
   @@unique([companyId, billId])
   @@unique([companyId, documentId])
   @@map("supplier_bill_evidence")
+}
+
+// ---- Public sign-up, email and trial (#210, ADR 0004) ----
+
+enum CompanyAccessMode {
+  unrestricted
+  trial
+
+  @@map("company_access_mode")
+}
+
+enum AccountTokenPurpose {
+  email_verification
+  password_reset
+
+  @@map("account_token_purpose")
+}
+
+enum AuditActorKind {
+  member
+  operator
+  system
+
+  @@map("audit_actor_kind")
+}
+
+enum PlatformActorKind {
+  anonymous
+  user
+  operator
+  system
+
+  @@map("platform_actor_kind")
+}
+
+enum EmailStatus {
+  pending
+  sending
+  sent
+  failed
+  cancelled
+
+  @@map("email_status")
+}
+
+/// Single-use email verification and password reset tokens; only the SHA-256 digest is stored.
+model AccountToken {
+  id           String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String              @map("user_id") @db.Uuid
+  purpose      AccountTokenPurpose
+  tokenHash    String              @unique @map("token_hash") @db.Char(64)
+  expiresAt    DateTime            @map("expires_at") @db.Timestamptz(3)
+  consumedAt   DateTime?           @map("consumed_at") @db.Timestamptz(3)
+  supersededAt DateTime?           @map("superseded_at") @db.Timestamptz(3)
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  user         User                @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId, purpose, createdAt])
+  @@map("account_tokens")
+}
+
+/// Append-only record of which Terms and Privacy versions a user accepted.
+model TermsAcceptance {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  termsVersion   String   @map("terms_version") @db.VarChar(40)
+  privacyVersion String   @map("privacy_version") @db.VarChar(40)
+  acceptedAt     DateTime @default(now()) @map("accepted_at") @db.Timestamptz(3)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user           User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("terms_acceptances")
+}
+
+/// Transactional email outbox; the payload is encrypted and cleared once sent.
+model EmailOutbox {
+  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind              String      @db.VarChar(50)
+  dedupeKey         String      @unique @map("dedupe_key") @db.VarChar(200)
+  userId            String?     @map("user_id") @db.Uuid
+  companyId         String?     @map("company_id") @db.Uuid
+  payloadCiphertext Bytes?      @map("payload_ciphertext")
+  status            EmailStatus @default(pending)
+  attempts          Int         @default(0)
+  nextAttemptAt     DateTime    @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  sentAt            DateTime?   @map("sent_at") @db.Timestamptz(3)
+  providerMessageId String?     @map("provider_message_id") @db.VarChar(200)
+  /// An error class only, never message text or an address.
+  lastError         String?     @map("last_error") @db.VarChar(100)
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  user              User?       @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  company           Company?    @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([status, nextAttemptAt])
+  @@map("email_outbox")
+}
+
+model EmailSuppression {
+  /// HMAC-SHA-256 of the lower-cased address.
+  addressHash String   @id @map("address_hash") @db.Char(64)
+  reason      String   @db.VarChar(20)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("email_suppressions")
+}
+
+/// Append-only audit for events with no company (sign-up, verification, reset).
+model PlatformAuditEvent {
+  id        String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorKind PlatformActorKind @map("actor_kind")
+  userId    String?           @map("user_id") @db.Uuid
+  action    String            @db.VarChar(100)
+  metadata  Json              @default("{}")
+  requestId String?           @map("request_id") @db.VarChar(100)
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  user      User?             @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@map("platform_audit_events")
 }
