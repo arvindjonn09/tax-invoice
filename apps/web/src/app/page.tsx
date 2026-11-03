@@ -335,7 +335,7 @@ export default function Home() {
       >
         Skip to content
       </a>
-      <header className="sticky top-0 z-10 border-b border-border/40 bg-background">
+      <header className="z-10 border-b border-border/40 bg-background lg:sticky lg:top-0">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-3 md:px-6">
           <Link href="/" className="flex items-center gap-2 text-lg font-bold">
             <span
@@ -351,7 +351,7 @@ export default function Home() {
               {nav.map((item) => (
                 <li key={item.href}>
                   <a
-                    className="hover:text-link hover:underline"
+                    className="inline-flex min-h-11 items-center hover:text-link hover:underline"
                     href={item.href}
                   >
                     {item.label}

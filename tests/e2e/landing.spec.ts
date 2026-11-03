@@ -80,6 +80,44 @@ test("reduced motion shows every section in its final state", async ({
       Number(await step.evaluate((el) => getComputedStyle(el).opacity)),
     ).toBe(1);
   }
+  for (const path of await page.locator("[data-draw]").all()) {
+    expect(
+      await path.evaluate((el) => getComputedStyle(el).strokeDashoffset),
+    ).toMatch(/^0(px)?$/);
+  }
+  await page.locator("footer").scrollIntoViewIfNeeded();
+  for (const heading of await page.getByRole("heading", { level: 2 }).all()) {
+    expect(
+      Number(
+        await heading.evaluate(
+          (el) => getComputedStyle(el.closest("div") ?? el).opacity,
+        ),
+      ),
+    ).toBe(1);
+  }
+});
+
+test("sticky header never hides focus or anchor targets at 360px", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/");
+  const header = page.getByRole("banner");
+  const headerBottom = async () =>
+    Math.max(
+      0,
+      (await header.evaluate((el) => el.getBoundingClientRect().bottom)) ?? 0,
+    );
+  await page.getByRole("link", { name: /See how it works/ }).click();
+  const howTop = await page
+    .locator("#how")
+    .evaluate((el) => el.getBoundingClientRect().top);
+  expect(howTop).toBeGreaterThanOrEqual(await headerBottom());
+  await page.locator("footer").scrollIntoViewIfNeeded();
+  const summary = page.getByText("Does it run payroll?");
+  await summary.focus();
+  const top = await summary.evaluate((el) => el.getBoundingClientRect().top);
+  expect(top).toBeGreaterThanOrEqual(await headerBottom());
 });
 
 for (const theme of ["light", "dark"] as const) {

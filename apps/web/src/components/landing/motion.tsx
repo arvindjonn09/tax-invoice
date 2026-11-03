@@ -21,7 +21,9 @@ export function LandingMotion({ children }: { children: ReactNode }) {
 /** Thin decorative bar showing how far down the page the reader is. */
 export function ScrollProgress() {
   const { scrollYProgress } = useScroll();
-  const scaleX = useSpring(scrollYProgress, { stiffness: 120, damping: 30 });
+  const spring = useSpring(scrollYProgress, { stiffness: 120, damping: 30 });
+  // MotionConfig doesn't reach useSpring, so skip the spring ourselves.
+  const scaleX = useReducedMotion() ? scrollYProgress : spring;
   return (
     <motion.div
       aria-hidden="true"
@@ -49,7 +51,7 @@ export function Reveal({
     if (element.getBoundingClientRect().top < window.innerHeight) return;
     element.style.opacity = "0";
     element.style.transform = "translateY(24px)";
-    return inView(
+    const stop = inView(
       element,
       () => {
         void animate(
@@ -60,6 +62,11 @@ export function Reveal({
       },
       { amount: 0.15 },
     );
+    return () => {
+      stop();
+      element.style.opacity = "";
+      element.style.transform = "";
+    };
   }, [delay, reduce]);
   return (
     <div ref={ref} className={className}>
@@ -68,7 +75,7 @@ export function Reveal({
   );
 }
 
-/** Card that lifts slightly on hover or keyboard focus within. */
+/** Card that lifts slightly on hover (decorative; cards hold no controls). */
 export function LiftCard({
   children,
   className,
@@ -80,7 +87,6 @@ export function LiftCard({
     <motion.article
       className={className}
       whileHover={{ y: -4 }}
-      whileFocus={{ y: -4 }}
       transition={{ duration: 0.18, ease: EASE }}
     >
       {children}
