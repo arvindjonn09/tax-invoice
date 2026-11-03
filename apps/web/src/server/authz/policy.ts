@@ -8,7 +8,7 @@ import {
 } from "@jobflow/authz";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import type { Auth } from "../auth/config";
-import { resolveActor } from "../auth/actor";
+import { type CompanyAccess, resolveActor } from "../auth/actor";
 import {
   HttpError,
   MAX_JSON_BYTES,
@@ -51,18 +51,33 @@ export type PolicyDependencies = {
   trustedOrigins: () => readonly string[];
 };
 
+/**
+ * Resolve the request's actor and require `permission`, or throw AuthzError.
+ * Also returns the company's trial access, from the same lookup (#221).
+ */
+export async function authorizeRequest(
+  deps: PolicyDependencies,
+  headers: Headers,
+  permission: Permission,
+): Promise<{ actor: Actor; access: CompanyAccess }> {
+  const resolution = await resolveActor(deps.auth(), deps.db(), headers);
+  if (resolution.status === "signed-out") throw unauthenticated();
+  // Signed in but no active company: nothing in any company is reachable.
+  if (resolution.status !== "active") throw forbidden();
+  const { userId, companyId, role, access } = resolution.actor;
+  return {
+    actor: requirePermission({ userId, companyId, role }, permission),
+    access,
+  };
+}
+
 /** Resolve the request's actor and require `permission`, or throw AuthzError. */
 export async function authorize(
   deps: PolicyDependencies,
   headers: Headers,
   permission: Permission,
 ): Promise<Actor> {
-  const resolution = await resolveActor(deps.auth(), deps.db(), headers);
-  if (resolution.status === "signed-out") throw unauthenticated();
-  // Signed in but no active company: nothing in any company is reachable.
-  if (resolution.status !== "active") throw forbidden();
-  const { userId, companyId, role } = resolution.actor;
-  return requirePermission({ userId, companyId, role }, permission);
+  return (await authorizeRequest(deps, headers, permission)).actor;
 }
 
 const PRIVATE = { "cache-control": "private, no-store" };
@@ -77,6 +92,11 @@ export function privateJson(body: unknown, init: ResponseInit = {}): Response {
 
 export type PolicyHandler<Context> = (input: {
   actor: Actor;
+  /**
+   * The company's trial access for this request (#221). Always set by
+   * withPolicy; optional so handlers can be called directly in tests.
+   */
+  access?: CompanyAccess;
   request: Request;
   context: Context;
 }) => Promise<Response>;
@@ -100,8 +120,12 @@ export function createWithPolicy(deps: PolicyDependencies) {
       try {
         requireTrustedOrigin(request, deps.trustedOrigins());
         requireBodyWithin(request, maxBodyBytes);
-        const actor = await authorize(deps, request.headers, permission);
-        return await handler({ actor, request, context });
+        const { actor, access } = await authorizeRequest(
+          deps,
+          request.headers,
+          permission,
+        );
+        return await handler({ actor, access, request, context });
       } catch (error) {
         if (error instanceof AuthzError || error instanceof HttpError) {
           return privateJson(

@@ -41,6 +41,9 @@ describe("API route permission matrix", () => {
     /^\/api\/expenses$/,
     /^\/api\/expenses\/\[id\]$/,
     /^\/api\/company$/,
+    // Workers learn only whether the company is read-only (#221, S8 AC2);
+    // the dates and countdown need trial.read.
+    /^\/api\/company\/trial$/,
   ];
   for (const role of ["employee", "subcontractor"] as const)
     it(`${role} reaches only worker-facing routes`, () => {
