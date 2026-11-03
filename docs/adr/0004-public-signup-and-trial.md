@@ -301,13 +301,19 @@ Enforcement has two layers, and the database layer is authoritative.
     the suppression list is fed manually (or by a later IMAP reader). `POST /api/webhooks/email` (`withWebhook`)
     ships only with a provider that signs callbacks. A hard bounce or complaint adds the address HMAC to
     `email_suppressions`, and suppressed addresses aren't sent to.
+  - **Pacing.** Zoho's external sending limit is dynamic, 50–500 emails per rolling hour depending on sender
+    reputation, and bulk sending isn't supported. Exceeding it blocks sending for up to an hour. So the dispatcher
+    sends at most `EMAIL_MAX_PER_HOUR` (default 40) and sends account emails (verification, reset, password
+    changed, account exists) before trial reminders and notices. A reminder that misses its hour simply waits for
+    the next sweep. See `docs/research/email-provider.md`.
 - **Addresses.** Sender, reply-to and support default to `admin@shivomsangha.com` through `EMAIL_FROM`,
-  `EMAIL_REPLY_TO` and `SUPPORT_EMAIL`. `EMAIL_FROM` must equal `SMTP_USER` (or an alias verified in Zoho), or Zoho
+  `EMAIL_REPLY_TO` and `SUPPORT_EMAIL`. The **address** in `EMAIL_FROM` (which may have a display
+  name, as in `"JobFlow <admin@shivomsangha.com>"`) must equal `SMTP_USER` or an alias verified in Zoho, or Zoho
   rejects the message. `OPERATOR_NOTIFY_EMAIL` was recorded as `jobflow@shivomsangha.com` (#241); the app host
   currently uses `admin@shivomsangha.com`, so the owner confirms which before S14 ships.
 - **Address HMAC.** Suppressions and per-recipient throttles key on an HMAC-SHA-256 of the lower-cased address. Its
-  key is derived from `EMAIL_OUTBOX_KEY` by HKDF with the info label `jobflow/address-hmac/v1`, separate from the
-  payload key. Rotating `EMAIL_OUTBOX_KEY` drops the suppression list.
+  key is derived from `EMAIL_OUTBOX_KEY` by HKDF-SHA-256 with salt `jobflow-email` and info `address-digest-v1`
+  (as implemented in #248), separate from the payload key. Rotating `EMAIL_OUTBOX_KEY` drops the suppression list.
 - **Content.** Templates are plain text plus minimal escaped HTML.
   - Emails to unverified addresses contain no user-entered text (S2 AC9).
   - System emails are JobFlow-branded, not company-branded.
@@ -372,11 +378,12 @@ Enforcement has two layers, and the database layer is authoritative.
 - Operators can't see company data. Support cases that need data still go through the owner (export) or the database
   under the existing restricted-operator rules.
 - New external dependencies:
-  - the email provider (E1);
-  - Turnstile `siteverify`;
-  - the Pwned Passwords range API, which fails open.
+  - the email provider: Zoho SMTP, which is **SMTP over implicit TLS to `smtppro.zoho.com.au:465`**, not HTTPS;
+  - Turnstile `siteverify` (HTTPS);
+  - the Pwned Passwords range API (HTTPS), which fails open.
 
-  Egress from the web container must allow these three.
+  Egress from the web and maintenance containers must allow these three. The host firewall must allow outbound TCP
+  465, which some cloud hosts block by default.
 - **Owner decisions, 3 November 2026:** AQ1 TOTP is required; Cloudflare Access for the operator area is required;
   operator notifications go to `jobflow@shivomsangha.com` (to reconfirm against the app host's `admin@`); email is
   sent through **Zoho Mail SMTP as `admin@shivomsangha.com`** (D7), which settles the E1 provider choice (#239's

@@ -1,14 +1,104 @@
 # Spike: transactional email provider (E1, #206)
 
-Date: 3 November 2026. Author: Claude B (research-dev). Status: **recommendation for the owner to accept**.
+Date: 3 November 2026, revised the same day. Author: Claude B (research-dev). Status: **decided by the owner: Zoho
+Mail SMTP**. The provider comparison below stays as the fallback analysis (ADR 0004 D7).
 
 JobFlow M6 needs transactional email only: verification, password reset, "account exists", trial reminders,
-extension decisions and operator notices. Volume is small: at pilot scale under 1,000 emails a month, and 100,000 a
-month would mean several thousand active companies. There's no marketing email. The sender is
-`jobflow@shivomsangha.com`. Requirements: [E1 in public-signup-trial.md](../requirements/public-signup-trial.md);
+extension decisions and operator notices. Volume is small: under 1,000 emails a month at pilot scale, and no
+marketing email. Requirements: [E1 in public-signup-trial.md](../requirements/public-signup-trial.md);
 design: [ADR 0004 D7](../adr/0004-public-signup-and-trial.md).
 
-## Recommendation
+## Decision: Zoho Mail SMTP (owner, 3 November 2026)
+
+The domain already uses Zoho's Australian data centre: MX `mx.zoho.com.au`, SPF `include:zohomail.com.au` and DKIM
+selector `zmail` are published. Email goes from `admin@shivomsangha.com` through `smtppro.zoho.com.au:465`
+(implicit TLS, certificate verification on), using a Zoho **app-specific password** stored only in the host's
+secret file. #248 implements `SmtpTransport`.
+
+### Sending limits
+
+Zoho's published limits (rates and limits page, checked 3 November 2026):
+
+- **External sending is 50–500 emails per hour.** The limit is dynamic and depends on sender reputation, recipient
+  engagement and contact quality. Internal sending (same organisation) is 1,000 an hour. **Bulk and burst sending
+  isn't supported.**
+- The window is a **rolling hour**. Zoho's page also mentions a daily quota in its error text, and a footnote says
+  daily limits use rolling 24-hour periods. It publishes no per-plan daily figure; for that it points to
+  `support@zohomail.com`.
+- Recipients per message: 150 for paid accounts (to, cc and bcc together).
+- **Going over** blocks sending for up to an hour ("You have reached your email sending limit" / "Daily sending
+  quota exceeded"). Receiving and reading keep working.
+
+What this means for JobFlow:
+
+1. **Pace the dispatcher.** It sends at most `EMAIL_MAX_PER_HOUR` (default **40**, below Zoho's lowest dynamic
+   figure). Rows beyond that stay `pending` for the next sweep.
+2. **Account email first.** Verification, reset, password-changed and account-exists emails go ahead of trial
+   reminders and notices. A user waiting on a link is never stuck behind a reminder batch. Reminders are already
+   idempotent per threshold, so a late one just goes out at the next sweep.
+3. **A throttling reply is retryable.** SMTP 4xx, and 554 replies that mention a limit, are rescheduled with backoff,
+   never marked `failed`, and logged as `email.rate_limited` (no address) so the operator can see it. This matches
+   ADR D7.
+4. **One recipient per message.** JobFlow never batches recipients, so the 150-recipient cap doesn't apply.
+5. **When to move:** if `email.rate_limited` shows up on more than an occasional day, or active trials exceed about
+   300, move to a transactional provider. Amazon SES in Sydney (below) is the fallback, and the `EmailTransport` port
+   makes that a configuration change plus the SNS webhook.
+
+### Bounces and complaints
+
+Zoho SMTP has no signed bounce or complaint webhook. A bounce arrives as a delivery-failure email in the `admin@`
+mailbox.
+
+- **For now this is manual.** When an NDR shows a hard bounce (5.1.x "user unknown", 5.7.x refused), the operator
+  suppresses that address on the host. The `email_suppressions.reason` CHECK in #247 already allows `manual`. #215
+  should add `pnpm email suppress --address <a> --reason bounce|complaint|manual` (host CLI, audited in
+  `platform_audit_events`, storing the HMAC only) and an `unsuppress`.
+- **Later:** an IMAP reader on `admin@` can parse NDRs (RFC 3464 `message/delivery-status`) and suppress
+  automatically. It isn't needed at pilot volume.
+- `POST /api/webhooks/email` (`withWebhook`) **doesn't ship with Zoho**. It ships only with a provider that signs
+  callbacks.
+
+### DNS
+
+SPF and DKIM already exist. **DMARC is missing.** The owner adds one record in Cloudflare (DNS only):
+
+| Type | Name | Value |
+|---|---|---|
+| TXT | `_dmarc.shivomsangha.com` | `"v=DMARC1; p=none; rua=mailto:admin@shivomsangha.com; adkim=r; aspf=r; fo=1"` |
+
+Read the aggregate reports for 2–4 weeks, then move to `p=quarantine` once every legitimate sender passes. Before
+adding anything, check that the root has **one** SPF record (`v=spf1 include:zohomail.com.au ~all`) and no other
+`_dmarc` record.
+
+### Internationalised addresses (SMTPUTF8)
+
+Zoho doesn't document SMTPUTF8 support for SMTP submission. Keep the conservative rule from T13: refuse a non-ASCII
+local part with a field message, and store an IDN domain as Punycode. That's correct for every provider considered,
+SES included (SES documents that it has no SMTPUTF8 support).
+
+### Egress
+
+The web and maintenance containers need outbound **TCP 465** to `smtppro.zoho.com.au`. Some cloud hosts block
+outbound SMTP ports by default, so check the host firewall and provider policy (T12, #216).
+
+### Owner actions
+
+1. Add the DMARC record above.
+2. Create a Zoho **app-specific password** for `admin@` and put it in the host's `infra/staging/env/web.env`
+   (`SMTP_PASSWORD`, mode 600). Never put it in an issue or commit.
+3. Confirm `OPERATOR_NOTIFY_EMAIL`: `admin@` or `jobflow@shivomsangha.com`. If it's `jobflow@`, make it an alias
+   that receives mail in Zoho.
+4. Optional: ask `support@zohomail.com` for this plan's daily per-user sending figure, and record it here.
+
+---
+
+## Fallback analysis: if Zoho's limits are outgrown
+
+The original comparison follows. It recommended Amazon SES in Sydney before the owner chose Zoho, and it still stands
+as the next step if volume outgrows a mailbox. Its DNS records name `jobflow@`; with SES they'd be issued for the
+domain, and the sender could stay `admin@`.
+
+## Fallback recommendation
 
 **Amazon SES in Sydney (`ap-southeast-2`)**, pay-as-you-go ("à la carte") pricing, with one configuration set per
 environment, bounce and complaint events delivered through Amazon SNS, and a send-only IAM key per environment.
@@ -199,7 +289,7 @@ export function sesTransport(config: {
   production access), so no client-side rate limiter is needed at this volume.
 - `MemoryTransport` and `ConsoleTransport` stay as ADR 0004 describes. Tests never call SES.
 
-## Owner actions
+## Owner actions (SES fallback only)
 
 1. **AWS account and budget.** Use the AWS account that holds the document buckets (or create one). Work in
    `ap-southeast-2`. Add an **AWS Budget** alert at a low amount (for example $5 a month), so a sending fault is
@@ -221,7 +311,7 @@ export function sesTransport(config: {
 7. **Billing.** Pay-as-you-go: about $0.10 per 1,000 emails, roughly cents a month at pilot volume. New AWS accounts
    also get free-tier credits.
 
-## What this changes in the plan
+## What SES would change in the plan (fallback only)
 
 - **ADR 0004 D7:** the "real adapter" becomes the SES adapter. The external dependencies list gains
   `email.ap-southeast-2.amazonaws.com` and `sns.ap-southeast-2.amazonaws.com`, and the config gains
@@ -231,6 +321,10 @@ export function sesTransport(config: {
 - **T13–T15 and invitations:** the ASCII local-part and Punycode rule in the shared email schema.
 
 ## Sources
+
+- [Zoho Mail limits and policies](https://www.zoho.com/mail/help/adminconsole/rates-and-limits.html):
+  50–500 external emails an hour (dynamic), rolling window, no bulk sending, 150 recipients per message (paid),
+  blocked for up to an hour when exceeded.
 
 Checked on 3 November 2026:
 
