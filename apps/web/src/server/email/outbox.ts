@@ -74,10 +74,28 @@ function errorClass(error: unknown): string {
   return (parts.join(":") || "Error").slice(0, 100);
 }
 
+/** Claim ONE due row, leasing it until `now + STALE_SENDING_MS`. */
+async function claimOne(db: PrismaClient, now: Date): Promise<string | null> {
+  const rows = await db.$queryRaw<{ id: string }[]>`
+    UPDATE email_outbox SET status = 'sending', next_attempt_at = ${new Date(now.getTime() + STALE_SENDING_MS)}
+    WHERE id = (
+      SELECT id FROM email_outbox
+      WHERE (status = 'pending' AND next_attempt_at <= ${now})
+         OR (status = 'sending' AND next_attempt_at <= ${now})
+      ORDER BY next_attempt_at, id
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id`;
+  return rows[0]?.id ?? null;
+}
+
 /**
- * Send due emails. Rows are claimed with FOR UPDATE SKIP LOCKED, so several
- * dispatchers (after() callbacks, the jobs:run sweep, other instances) never
- * send the same row twice. Payloads are nulled as soon as a row is sent.
+ * Send due emails. Each row is claimed and leased on its own with FOR UPDATE
+ * SKIP LOCKED just before it is sent, so a lease (10 min) always outlasts
+ * one SMTP send (at most ~60 s of timeouts) and a slow batch can't let
+ * another dispatcher reclaim rows this one hasn't reached yet. Payloads are
+ * nulled as soon as a row is sent.
  */
 export async function dispatchOutbox(
   db: PrismaClient,
@@ -88,20 +106,11 @@ export async function dispatchOutbox(
     now = () => new Date(),
   }: { limit?: number; now?: () => Date } = {},
 ): Promise<{ sent: number; failed: number }> {
-  const claimed = await db.$queryRaw<{ id: string }[]>`
-    UPDATE email_outbox SET status = 'sending', next_attempt_at = ${new Date(now().getTime() + STALE_SENDING_MS)}
-    WHERE id IN (
-      SELECT id FROM email_outbox
-      WHERE (status = 'pending' AND next_attempt_at <= ${now()})
-         OR (status = 'sending' AND next_attempt_at <= ${now()})
-      ORDER BY next_attempt_at, id
-      LIMIT ${limit}
-      FOR UPDATE SKIP LOCKED
-    )
-    RETURNING id`;
   let sent = 0;
   let failed = 0;
-  for (const { id } of claimed) {
+  for (let index = 0; index < limit; index += 1) {
+    const id = await claimOne(db, now());
+    if (!id) break;
     const row = await db.emailOutbox.findUnique({
       where: { id },
       select: { kind: true, attempts: true, payloadCiphertext: true },
