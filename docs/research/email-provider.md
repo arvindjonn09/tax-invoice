@@ -103,7 +103,9 @@ below mark where they go.
 
 1. **SES configuration set** per environment: `jobflow-staging` and `jobflow-production`. Each has an **SNS event
    destination** for `BOUNCE`, `COMPLAINT` and `REJECT` (optionally `DELIVERY` for metrics).
-2. **SNS topic** per environment, with an **HTTPS subscription** to `https://<host>/api/webhooks/email`.
+2. **SNS topic** per environment, with an **HTTPS subscription** to `https://<host>/api/webhooks/email`. Set the
+   topic attribute **`SignatureVersion` to `2`** (SHA-256). SNS topics default to version 1 (SHA-1), which the handler
+   refuses, so genuine notifications would be rejected without this setting.
 3. **Subscription confirmation is done by hand.** The handler stores nothing and never fetches the `SubscribeURL`.
    The owner confirms the subscription in the SNS console, so a forged message can't make the server fetch an
    arbitrary URL.
@@ -210,8 +212,8 @@ export function sesTransport(config: {
    first, with bounces and complaints suppressed automatically, and recipients only those who sign up or are
    invited.
 6. **Per environment** (staging first):
-   - a configuration set and an SNS topic with an HTTPS subscription to `/api/webhooks/email`, confirmed in the
-     console;
+   - a configuration set and an SNS topic with `SignatureVersion` set to `2` and an HTTPS subscription to
+     `/api/webhooks/email`, confirmed in the console;
    - a send-only IAM user with the policy above;
    - its keys put in the host's secret file.
 
@@ -236,6 +238,8 @@ Checked on 3 November 2026:
   IP; attachments; VDM.
 - [Amazon SES v2 `Destination`, AWS SDK reference](https://docs.aws.amazon.com/sdk-for-ruby/v3/api/Aws/SESV2/Types/Destination.html):
   "Amazon SES does not support the SMTPUTF8 extension".
+- [SNS message signature version](https://docs.aws.amazon.com/sns/latest/dg/sns-verify-signature-of-message-configure-message-signature.html):
+  topics default to `SignatureVersion` 1; set it to 2 explicitly.
 - [Amazon SES events to Amazon SNS](https://docs.aws.amazon.com/ses/latest/dg/event-publishing-retrieving-sns-contents.html)
   and [SES bounce and complaint notifications](https://aws.amazon.com/blogs/messaging-and-targeting/amazon-ses-set-up-notifications-for-bounces-and-complaints).
 - [Postmark pricing](https://postmarkapp.com/pricing.txt): plans, overage, dedicated IP and retention.
