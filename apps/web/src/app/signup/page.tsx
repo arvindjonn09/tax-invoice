@@ -62,8 +62,8 @@ export default function SignupPage() {
             Request early access
           </a>
           <p className="mt-3 text-sm text-muted-foreground">
-            Opens an email to admin@shivomsangha.com with a few details to
-            fill in.
+            Opens an email to admin@shivomsangha.com with a few details to fill
+            in.
           </p>
           <hr className="my-6 border-border/40" />
           <p>
