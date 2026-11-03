@@ -312,27 +312,36 @@ export function signUp(deps: AccountDependencies) {
         select: { id: true, email: true },
       });
       const hour = Math.floor(Date.now() / 3_600_000);
-      await db
-        .$transaction(async (tx) => {
-          await enqueueEmail(tx, deps.emailSecret(), {
-            kind: "account_exists",
-            // At most one "already exists" email per account per hour.
-            dedupeKey: `account_exists:${owner.id}:${hour}`,
-            userId: owner.id,
-            message: accountExistsEmail(owner.email, deps.appUrl()),
-          });
-          await tx.platformAuditEvent.create({
-            data: {
-              actorKind: "anonymous",
+      // Silent per-recipient cap (1/h via the dedupe key, 3/day here), so
+      // many IPs can't flood one inbox; the response is the same either way.
+      const capped = await over(
+        db,
+        `signup:existing:day:${owner.id}`,
+        86_400,
+        3,
+      );
+      if (!capped)
+        await db
+          .$transaction(async (tx) => {
+            await enqueueEmail(tx, deps.emailSecret(), {
+              kind: "account_exists",
+              // At most one "already exists" email per account per hour.
+              dedupeKey: `account_exists:${owner.id}:${hour}`,
               userId: owner.id,
-              action: "account.sign_up_existing",
-            },
+              message: accountExistsEmail(owner.email, deps.appUrl()),
+            });
+            await tx.platformAuditEvent.create({
+              data: {
+                actorKind: "anonymous",
+                userId: owner.id,
+                action: "account.sign_up_existing",
+              },
+            });
+          })
+          // A concurrent request already queued this hour's email.
+          .catch((error: unknown) => {
+            if (!isUniqueViolation(error)) throw error;
           });
-        })
-        // A concurrent request already queued this hour's email.
-        .catch((error: unknown) => {
-          if (!isUniqueViolation(error)) throw error;
-        });
     }
     deps.dispatch();
     return checkEmail();

@@ -142,6 +142,33 @@ describe("sign-up", () => {
     expect(kinds).toEqual(["verify_email", "account_exists"]);
   });
 
+  it("caps 'account exists' email to one recipient without changing the response", async () => {
+    await signUp(deps)(
+      post("/api/account/sign-up", form("flooded@example.com")),
+    );
+    const user = await client.user.findUniqueOrThrow({
+      where: { email: "flooded@example.com" },
+    });
+    // Different hours would each be allowed by the dedupe key; force them.
+    const realNow = Date.now;
+    try {
+      for (let hour = 0; hour < 5; hour += 1) {
+        Date.now = () => realNow() + hour * 3_600_000;
+        const response = await signUp(deps)(
+          post("/api/account/sign-up", form("flooded@example.com")),
+        );
+        expect(response.status).toBe(202);
+      }
+    } finally {
+      Date.now = realNow;
+    }
+    expect(
+      await client.emailOutbox.count({
+        where: { userId: user.id, kind: "account_exists" },
+      }),
+    ).toBe(3);
+  });
+
   it("creates exactly one account for concurrent sign-ups", async () => {
     const responses = await Promise.all(
       [1, 2, 3].map(() =>
