@@ -261,11 +261,18 @@ function drawable(font: PDFFont, text: string): string {
 }
 
 /** Greedy word wrap to `width`; long words are broken by character. */
-function wrap(font: PDFFont, size: number, text: string, width: number) {
+function wrapText(
+  font: PDFFont,
+  size: number,
+  text: string,
+  width: number,
+  check: () => void,
+) {
   const lines: string[] = [];
   for (const paragraph of text.split("\n")) {
     let line = "";
     for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      check();
       const candidate = line ? `${line} ${word}` : word;
       if (font.widthOfTextAtSize(candidate, size) <= width) {
         line = candidate;
@@ -275,12 +282,20 @@ function wrap(font: PDFFont, size: number, text: string, width: number) {
       line = "";
       let rest = word;
       while (font.widthOfTextAtSize(rest, size) > width) {
-        let cut = rest.length;
-        while (
-          cut > 1 &&
-          font.widthOfTextAtSize(rest.slice(0, cut), size) > width
-        )
-          cut--;
+        check();
+        // Binary search avoids measuring every shrinking prefix of a long
+        // unbroken word. Always consume at least one character.
+        let low = 1,
+          high = rest.length,
+          cut = 1;
+        while (low <= high) {
+          check();
+          const middle = Math.floor((low + high) / 2);
+          if (font.widthOfTextAtSize(rest.slice(0, middle), size) <= width) {
+            cut = middle;
+            low = middle + 1;
+          } else high = middle - 1;
+        }
         lines.push(rest.slice(0, cut));
         rest = rest.slice(cut);
       }
@@ -291,9 +306,89 @@ function wrap(font: PDFFont, size: number, text: string, width: number) {
   return lines;
 }
 
+export class PdfLimitError extends Error {
+  constructor() {
+    super(
+      "PDF rendering budget exceeded. Try again later or shorten the document.",
+    );
+  }
+}
+type RenderBudgets = {
+  rows: number;
+  characters: number;
+  cellCharacters: number;
+  pages: number;
+  bytes: number;
+  timeMs: number;
+};
+export const PDF_LIMITS: Readonly<RenderBudgets & { concurrency: number }> =
+  Object.freeze({
+    rows: 200,
+    characters: 250_000,
+    cellCharacters: 20_000,
+    pages: 256,
+    bytes: 8_000_000,
+    timeMs: 5_000,
+    concurrency: 2,
+  });
+let activeRenders = 0;
+/** Deterministic input/page/output budgets bound allocations; clock checks
+ * cooperate with the text-only renderer. No HTML/script/asset engine runs. */
 export async function renderInvoicePdf(
   model: InvoiceDocumentModel,
+  budget: Partial<Omit<typeof PDF_LIMITS, "concurrency">> = {},
+  now: () => number = () => performance.now(),
 ): Promise<Uint8Array> {
+  const limits = { ...PDF_LIMITS };
+  for (const key of Object.keys(budget) as (keyof typeof budget)[]) {
+    const value = budget[key]!;
+    if (!Number.isSafeInteger(value) || value < 0) throw new PdfLimitError();
+    limits[key] = Math.min(limits[key], value);
+  }
+  if (
+    activeRenders >= PDF_LIMITS.concurrency ||
+    model.rows.length > limits.rows
+  )
+    throw new PdfLimitError();
+  const started = now();
+  const check = () => {
+    if (now() - started > limits.timeMs) throw new PdfLimitError();
+  };
+  let characters = 0;
+  const inspect = (value: unknown): void => {
+    check();
+    if (typeof value === "string") {
+      characters += value.length;
+      if (
+        value.length > limits.cellCharacters ||
+        characters > limits.characters
+      )
+        throw new PdfLimitError();
+    } else if (Array.isArray(value)) value.forEach(inspect);
+    else if (value && typeof value === "object")
+      Object.values(value).forEach(inspect);
+  };
+  inspect(model);
+  activeRenders++;
+  try {
+    const bytes = await renderBounded(model, check, limits.pages);
+    check();
+    if (bytes.byteLength > limits.bytes) throw new PdfLimitError();
+    return bytes;
+  } finally {
+    activeRenders--;
+  }
+}
+
+async function renderBounded(
+  model: InvoiceDocumentModel,
+  check: () => void,
+  maxPages: number,
+): Promise<Uint8Array> {
+  const wrap = (font: PDFFont, size: number, value: string, width: number) =>
+    wrapText(font, size, value, width, check);
+  if (maxPages < 1) throw new PdfLimitError();
+  check();
   const pdf = await PDFDocument.create({ updateMetadata: false });
   // Fixed metadata so the same snapshot always produces the same bytes.
   const date = new Date(`${model.metadata.date}T00:00:00Z`);
@@ -319,6 +414,7 @@ export async function renderInvoicePdf(
       maxWidth?: number;
     } = {},
   ) => {
+    check();
     const font = options.font ?? regular;
     const size = options.size ?? 9;
     const safe = drawable(font, value);
@@ -337,6 +433,8 @@ export async function renderInvoicePdf(
     });
   };
   const newPage = () => {
+    check();
+    if (pdf.getPageCount() >= maxPages) throw new PdfLimitError();
     page = pdf.addPage(A4);
     y = A4[1] - MARGIN;
     text(`${model.title} (continued)`, MARGIN, { font: bold, size: 11 });

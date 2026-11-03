@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { createDatabaseClient } from "../../packages/database/src/index";
 import { randomBytes, randomUUID } from "node:crypto";
 import { auditChanges } from "../../packages/database/src/audit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -266,5 +269,155 @@ describe("unattached document cleanup (#137)", () => {
         (d) => d.id,
       ),
     ).not.toContain(doc.id);
+  });
+});
+
+describe("durable object deletion and maintenance privilege (#170)", () => {
+  it("retries a failed storage delete after the document row has gone", async () => {
+    const doc = await upload(daysAgo(30));
+    let fail = true;
+    const flaky = new Proxy(store, {
+      get(target, key) {
+        if (key === "delete")
+          return async (objectKey: string) => {
+            if (fail && objectKey === doc.objectKey)
+              throw new Error("Synthetic unavailable");
+            return target.delete(objectKey);
+          };
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const first = await cleanUnattachedDocuments(db, flaky, { now: NOW });
+    expect(first.deleted.map((d) => d.id)).toContain(doc.id);
+    expect(first.objectsLeft).toBeGreaterThan(0);
+    expect(await db.document.findUnique({ where: { id: doc.id } })).toBeNull();
+    expect(
+      await db.documentDeleteRetry.findUnique({ where: { id: doc.id } }),
+    ).toMatchObject({ companyId, objectKey: doc.objectKey, attemptCount: 1 });
+    fail = false;
+    await cleanUnattachedDocuments(db, flaky, { now: NOW });
+    expect(
+      await db.documentDeleteRetry.findUnique({ where: { id: doc.id } }),
+    ).toBeNull();
+    expect(await store.get(doc.objectKey)).toBeNull();
+  });
+  it("rotates entries that keep failing so the rest of the backlog progresses", async () => {
+    const stuck = `documents/${companyId}/synthetic-stuck-${Date.now()}`;
+    const ok = `documents/${companyId}/synthetic-ok-${Date.now()}`;
+    await store.put(ok, Buffer.from("synthetic"));
+    const old = new Date("2000-01-01T00:00:00Z");
+    for (const [objectKey, offset] of [
+      [stuck, 0],
+      [ok, 1000],
+    ] as const)
+      await db.documentDeleteRetry.create({
+        data: {
+          id: randomUUID(),
+          companyId,
+          objectKey,
+          createdAt: new Date(old.getTime() + offset),
+        },
+      });
+    const denying = new Proxy(store, {
+      get(target, key) {
+        if (key === "delete")
+          return async (objectKey: string) => {
+            if (objectKey === stuck) throw new Error("Synthetic denied");
+            return target.delete(objectKey);
+          };
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    // One entry per run: the oldest fails first, then moves behind the
+    // never-tried entry, which the next run deletes.
+    const first = new Date(NOW.getTime() + 60_000);
+    await cleanUnattachedDocuments(db, denying, { now: first, limit: 1 });
+    expect(
+      await db.documentDeleteRetry.findFirst({ where: { objectKey: stuck } }),
+    ).toMatchObject({ attemptCount: 1, lastAttemptAt: first });
+    await cleanUnattachedDocuments(db, denying, {
+      now: new Date(NOW.getTime() + 120_000),
+      limit: 1,
+    });
+    expect(
+      await db.documentDeleteRetry.findFirst({ where: { objectKey: ok } }),
+    ).toBeNull();
+    expect(await store.get(ok)).toBeNull();
+    await db.documentDeleteRetry.deleteMany({ where: { objectKey: stuck } });
+  });
+  it("runs cleanup as a separate maintenance login while the web role cannot delete/read private outbox", async () => {
+    const { Client } = createRequire(
+      new URL("../../packages/database/package.json", import.meta.url),
+    )("pg") as {
+      Client: new (args: { connectionString: string }) => {
+        connect(): Promise<void>;
+        end(): Promise<void>;
+        query(sql: string): Promise<unknown>;
+      };
+    };
+    const admin = new Client({ connectionString: database.url });
+    await admin.connect();
+    const name = `cleanup_${randomUUID().replaceAll("-", "")}`,
+      password = randomBytes(24).toString("hex");
+    let created = false;
+    try {
+      for (const file of ["runtime-role.sql", "maintenance-role.sql"])
+        await admin.query(
+          await readFile(
+            new URL(
+              `../../packages/database/prisma/roles/${file}`,
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        );
+      for (const sql of [
+        "DELETE FROM documents",
+        "SELECT * FROM document_delete_retries",
+        "SELECT jobflow_lock_document_for_cleanup(NULL,NULL)",
+      ]) {
+        await admin.query("BEGIN");
+        try {
+          await admin.query("SET LOCAL ROLE jobflow_app");
+          await expect(admin.query(sql)).rejects.toMatchObject({
+            code: "42501",
+          });
+        } finally {
+          await admin.query("ROLLBACK");
+        }
+      }
+      await admin.query(
+        `CREATE ROLE ${name} LOGIN INHERIT IN ROLE jobflow_maintenance PASSWORD '${password}'`,
+      );
+      created = true;
+      const url = new URL(database.url);
+      url.username = name;
+      url.password = password;
+      const limited = createDatabaseClient(url.toString());
+      const doc = await upload(daysAgo(30));
+      try {
+        const result = await cleanUnattachedDocuments(limited, store, {
+          now: NOW,
+        });
+        expect(result.deleted.map((d) => d.id)).toContain(doc.id);
+        expect(result.failed).toBe(0);
+        await expect(
+          limited.$queryRaw`SELECT * FROM employee_rate_history`,
+        ).rejects.toThrow();
+        await expect(
+          limited.$executeRaw`UPDATE documents SET file_name=file_name`,
+        ).rejects.toThrow();
+        await expect(
+          limited.$executeRaw`UPDATE audit_events SET action=action`,
+        ).rejects.toThrow();
+      } finally {
+        await limited.$disconnect();
+      }
+    } finally {
+      if (created) await admin.query(`DROP ROLE ${name}`);
+      await admin.end();
+    }
   });
 });

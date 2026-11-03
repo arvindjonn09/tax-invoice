@@ -13,7 +13,9 @@ import {
 import type { ObjectStore } from "../documents/store";
 import { clientIp, throttle } from "../http/throttle";
 import { uuidOrNull } from "../http/fields";
+import { log, safeError } from "../log";
 import {
+  PdfLimitError,
   PDF_RENDERER_VERSION,
   invoiceDocument,
   pdfInput,
@@ -115,6 +117,30 @@ export async function ensureInvoicePdf(
   }
 }
 
+/**
+ * The issue hook that stores the PDF after the response is sent (#158): the
+ * route passes Next's after() as `schedule`. Rendering and upload took 11s
+ * cold; a failure is logged and the PDF is rendered from the same frozen
+ * snapshot on first download instead.
+ */
+export function storePdfAfterResponse(
+  deps: PdfDeps,
+  schedule: (task: () => Promise<unknown>) => void,
+) {
+  return async (
+    actor: Pick<Actor, "companyId" | "userId">,
+    invoiceId: string,
+  ) =>
+    schedule(() =>
+      ensureInvoicePdf(deps, actor, invoiceId).catch((error: unknown) =>
+        log("warn", "invoice.pdf_deferred", {
+          invoiceId,
+          error: safeError(error),
+        }),
+      ),
+    );
+}
+
 export function invoicePdfHandlers(deps: PdfDeps) {
   /**
    * A 5-minute private download link to the stored PDF (stored now if this
@@ -147,6 +173,14 @@ export function invoicePdfHandlers(deps: PdfDeps) {
         return privateJson(
           { error: "Issue the invoice first; drafts have no PDF" },
           { status: 409 },
+        );
+      if (error instanceof PdfLimitError)
+        return privateJson(
+          {
+            error:
+              "PDF generation is temporarily unavailable. Try again later.",
+          },
+          { status: 503, headers: { "retry-after": "5" } },
         );
       if (error instanceof StorageUnavailable)
         return privateJson(

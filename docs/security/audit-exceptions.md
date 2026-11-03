@@ -1,6 +1,14 @@
 # Dependency audit exceptions
 
-## GHSA-vfj7-8cjw-p6xm — temporary development lint-tooling exception
+**No exceptions are active.** `pnpm.auditConfig.ignoreGhsas` has been removed, and both `pnpm audit --audit-level high` and `pnpm audit:prod` run without exceptions.
+
+## Closed 2 November 2026 — GHSA-vfj7-8cjw-p6xm removed
+
+braces still has no fixed release: 3.0.3 is the latest, and every Next ESLint plugin release up to 16.5.0-canary.36 still pins fast-glob 3.3.1. Its only path into the lockfile was `eslint-config-next → @next/eslint-plugin-next → fast-glob → micromatch → braces`. The plugin calls fast-glob in one place: `globSync(rootDir, { onlyDirectories: true })`, to find the Next.js root from `settings.next.rootDir`. A pnpm override (`"@next/eslint-plugin-next>fast-glob": "link:./tooling/fast-glob-shim"`) now replaces fast-glob for that plugin only, with a local shim built on Node's `fs.globSync`. The shim refuses any other call. tinyglobby was rejected because it expands a plain directory pattern recursively. `tests/unit/fast-glob-shim.test.ts` checks that the shim matches fast-glob's results, that the override is wired in, and that braces is absent from the lockfile. The CI deadline gate has been removed. Drop the override once a Next ESLint plugin release stops depending on fast-glob/braces.
+
+## History
+
+### GHSA-vfj7-8cjw-p6xm — temporary development lint-tooling exception (closed)
 
 - Advisory: https://github.com/advisories/GHSA-vfj7-8cjw-p6xm
 - Package: braces@3.0.3 (high severity, stack exhaustion with deeply nested patterns).
@@ -13,7 +21,7 @@
 - Production: no exceptions. `pnpm audit:prod` audits the exact unchanged production lockfile in an isolated workspace copy with every manifest auditConfig removed, and forwards failure status.
 - Removal: upgrade/remediate when supported, remove ignoreGhsas and the deadline gate, and verify both full and production audits pass. No production exception is authorized.
 
-## #10 re-review — 22 October 2026
+### #10 re-review — 22 October 2026
 
 The npm registry still lists braces 3.0.3 and the official GitHub advisory lists
 affected versions <=3.0.3 with no patch. Current Next ESLint tooling remains 16.4.2

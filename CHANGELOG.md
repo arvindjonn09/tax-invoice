@@ -6,10 +6,20 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- A bill's tax invoice that arrives later moves its claimable GST from job cost to GST credits on the day it's held, without editing the bill (#142).
+- Accessibility sweep: every screen for every role passes axe (WCAG 2.2 AA) and reflows at 360, 768 and 1440 px in both themes, with a keyboard skip-link check (#60).
+- Pre-production security audit with a generated route permission matrix kept in step with the code by CI; the static design samples are not served in production (#61).
 - Subcontractors send their own tax invoices for accepted work; the office verifies them and approves them into supplier bills (#139).
 - Deployment and rollback runbook, and user guides for invoices, payments and GST (#66).
 - Debtor and creditor ageing as at any day, cash movement (not profit), and accountant CSV exports for GST, profit, ageing and cash, for owners and accountants only (#56).
 - Report reads load only the documents active in the range, and drill-down events are paged (#157).
+- Reports screens: job profit, draft GST with its composition, who owes what and cash movement, with date filters, drill-down to the source records and CSV export (#58).
+- The real financial dashboard: filtered profit and cash, outstanding balances, draft GST and direct links to overdue invoices (#57).
+- The critical acceptance test runs end to end for a not-registered company and three GST-registered variants, reconciling the dashboard, reports and database (#59).
+
+### Security
+
+- The development-tooling audit exception for braces (GHSA-vfj7-8cjw-p6xm) is gone: braces is no longer installed, and the full and production audits both run with no exceptions (#202).
 
 ## M5 Production pilot (in progress)
 
@@ -86,3 +96,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 | Date | Environment | Commit | Backup before | Checks                                                       |
 | ---- | ----------- | ------ | ------------- | ------------------------------------------------------------ |
 | —    | staging     | —      | —             | First deploy waits for the owner to provision staging (#64). |
+
+- Security (#166): reserve GST posting writes to hardened source triggers and remove mutation grants from append-only financial records; period-lock and runtime-role regressions added.
+- Bound PDF rendering input, pages, output, concurrency and cooperative layout time; preserve text-only rendering and typed CSV protections (#70).
+- Production hardening (#168, in progress): pin external container images to verified digests and share readiness results for two seconds across concurrent probes.

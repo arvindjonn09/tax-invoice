@@ -1,0 +1,11 @@
+[Unit]
+Description=JobFlow private document maintenance
+After=docker.service network-online.target
+Requires=docker.service
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/opt/jobflow
+ExecStart=/usr/bin/docker compose -f /opt/jobflow/infra/staging/compose.yml --env-file /opt/jobflow/infra/staging/env/compose.env --profile maintenance run --rm maintenance
+NoNewPrivileges=yes
+PrivateTmp=yes

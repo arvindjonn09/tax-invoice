@@ -44,6 +44,28 @@ async function main() {
   await client.connect();
   try {
     await client.query(sql);
+    await client.query(
+      await readFile(
+        new URL(
+          "../../packages/database/prisma/roles/maintenance-role.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    const maintenancePassword = process.env.MAINTENANCE_DATABASE_PASSWORD;
+    if (maintenancePassword) {
+      if (maintenancePassword.length < 24)
+        throw new UsageError(
+          "MAINTENANCE_DATABASE_PASSWORD must be 24+ characters",
+        );
+      const { rows } = await client.query(
+        "SELECT format('ALTER ROLE jobflow_maintenance LOGIN PASSWORD %L',$1::text) AS sql",
+        [maintenancePassword],
+      );
+      await client.query(rows[0].sql);
+    }
+
     // The web app's LOGIN role, a member of jobflow_app. The password comes
     // from the deploy environment and is quoted by PostgreSQL (%L), never
     // interpolated here.

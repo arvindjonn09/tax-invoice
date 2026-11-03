@@ -39,11 +39,18 @@ describe("staging Compose (#64)", () => {
     expect(service("migrate")).toMatch(/env_file: env\/migrate\.env/);
   });
 
-  it("pins every image to a version", () => {
+  it("pins every external image and both Dockerfile bases by digest (#168)", () => {
     for (const [, image] of compose.matchAll(/image: (\S+)/g)) {
-      expect(image).toMatch(/:[\w.-]+$/);
-      expect(image).not.toMatch(/:latest$/);
+      if (image!.startsWith("jobflow-")) continue; // locally built release image
+      expect(image).toMatch(/:[\w.-]+@sha256:[a-f0-9]{64}$/);
     }
+    expect(dockerfile).toMatch(
+      /^# syntax=docker\/dockerfile:1@sha256:[a-f0-9]{64}$/m,
+    );
+    expect(dockerfile).toMatch(
+      /^ARG NODE_IMAGE=node:24-bookworm-slim@sha256:[a-f0-9]{64}$/m,
+    );
+    expect(dockerfile.match(/^FROM \$\{NODE_IMAGE\}/gm)).toHaveLength(2);
   });
 });
 
@@ -55,6 +62,7 @@ describe("staging env examples (#64)", () => {
     expect(examples.sort()).toEqual([
       "backup.env.example",
       "compose.env.example",
+      "maintenance.env.example",
       "migrate.env.example",
       "nginx.env.example",
       "postgres.env.example",
@@ -212,5 +220,23 @@ describe("Dockerfile (#64)", () => {
     expect(ignore).toMatch(/^\.env$/m);
     expect(ignore).toMatch(/^\*\*\/\.env\.\*$/m);
     expect(ignore).toMatch(/^infra\/staging\/env\/\*\.env$/m);
+  });
+});
+
+describe("private document maintenance (#170)", () => {
+  it("uses the released tool image with its own credentials and no backup keys", () => {
+    const block = service("maintenance");
+    expect(block).toMatch(/image: jobflow-backup:staging/);
+    expect(block).toMatch(/profiles: \[maintenance\]/);
+    expect(block).toMatch(/env_file: env\/maintenance.env/);
+    expect(block).toMatch(/read_only: true/);
+    expect(block).toMatch(/cap_drop: \[ALL\]/);
+    expect(block).not.toMatch(/backup-key|ports:/);
+    expect(read("infra/staging/env/maintenance.env.example")).toMatch(
+      /MAINTENANCE_DATABASE_URL=postgresql:\/\/jobflow_maintenance:/,
+    );
+    expect(
+      read("infra/staging/systemd/jobflow-document-cleanup.service"),
+    ).toMatch(/--profile maintenance run --rm maintenance/);
   });
 });

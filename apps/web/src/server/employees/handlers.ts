@@ -207,7 +207,7 @@ export function employeeHandlers(db: () => PrismaClient) {
     if (problem) return linkError(problem);
     try {
       const row = await withAudit(db(), async (tx, audit) => {
-        await lockRow(tx, "employees", employeeId);
+        await lockRow(tx, "employees", employeeId, actor.companyId);
         const before = await tx.employee.findUniqueOrThrow({
           where: { id: employeeId },
         });
