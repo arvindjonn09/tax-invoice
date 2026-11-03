@@ -1,6 +1,7 @@
 # ADR 0004: Public sign-up, company trial access and the platform operator
 
-Status: proposed for M6 (E2). Date: 2 November 2026. Amends [ADR 0003](0003-authentication.md):
+Status: proposed for M6 (E2). Date: 2 November 2026; revised 3 November 2026 after the #238 review and the
+owner's decisions on AQ1, Cloudflare Access and the operator notification address. Amends [ADR 0003](0003-authentication.md):
 replaces its "No public sign-up" decision and its "password-reset email remains unimplemented" consequence.
 Requirements: [public-signup-trial.md](../requirements/public-signup-trial.md) (S1–S14, E1–E5).
 Contracts: [architecture/public-signup-trial.md](../architecture/public-signup-trial.md).
@@ -57,6 +58,9 @@ digests (invitations, #27), the `document_delete_retries` outbox (#170), tsx CLI
   - The sign-up handler hashes the password and writes an outbox email in **both** cases, new email and existing
     email. That keeps the timing alike. An existing account is never changed (S2 AC4).
   - A unique-violation race resolves to the "account exists" path (S2 AC5).
+  - **Per-recipient limit on the existing-email path.** At most 1 "account exists" email per hour and 3 per day for
+    each address (keyed by its HMAC). Beyond that, nothing is sent and the response is still the identical 202. This
+    stops anyone using sign-up to flood a stranger's inbox from many IPs.
   - `SIGNUP_ENABLED` (default `true` outside production) is a kill switch.
 - **Breached passwords.** The check is a k-anonymity range lookup: the first 5 hex characters of the SHA-1 go to
   `api.pwnedpasswords.com/range/` with `Add-Padding`, with a 2 s timeout. It **fails open** and logs
@@ -71,10 +75,14 @@ digests (invitations, #27), the `document_delete_retries` outbox (#170), tsx CLI
   demo accounts (`@example.test`) outside production.
   - Pages redirect to `/verify-email/pending`.
   - APIs return 403 `email_unverified`.
-  - Accounts that existed before M6 and are unverified must verify (S3 AC6). This forces a **deploy-order rule**:
-    the email provider must work in an environment before this gate ships there.
+  - **Accepting an invitation verifies the email.** The invitation token was sent to that address, so redeeming it
+    proves control of it. `acceptInvitation` sets `email_verified = true` from M6 on.
+  - **Backfill.** The M6 migration sets `email_verified = true` for every user with an accepted invitation, and writes
+    one `system` platform audit event per user. Demo accounts are unchanged.
+  - Any other account that existed before M6 and is unverified must verify (S3 AC6). That's what forces a
+    **deploy-order rule**: the email provider must work in an environment before this gate ships there.
 
-### D2. Request wrappers: every route declares one of four boundaries
+### D2. Request wrappers: every route declares one of five boundaries
 
 `tests/unit/route-policy.test.ts` is extended so that every `route.ts` method uses exactly one of these wrappers.
 
@@ -84,9 +92,19 @@ digests (invitations, #27), the `document_delete_retries` outbox (#170), tsx CLI
 | `withSession(handler, opts)` | Any signed-in user. `allowUnverified` only for resend and sign-out | Origin, body limit, session. No company context |
 | `withPublic(handler, { reason, bodyLimit, throttle, turnstile })` | Anyone | Origin, body limit (4 KiB), IP throttle, optional Turnstile |
 | `withOperator(handler)` | Platform operator (D5) | Origin, body limit, operator check. **Every failure returns 404** |
+| `withWebhook(provider, handler)` | A signed provider callback | **No origin check.** The signature is verified over the **raw** body before parsing, the timestamp must be within ±5 min, the provider event ID is recorded once (replay → 200 with no effect), the body limit is 64 KiB, and there's an IP throttle |
 
 Public and operator routes are listed in the test with a reason, as `PUBLIC_ROUTES` is today. A route under
-`app/api/operator/**` must use `withOperator`, and no other route may.
+`app/api/operator/**` must use `withOperator`, and no other route may. Likewise, `withWebhook` is allowed only under
+`app/api/webhooks/**`, and routes there may use nothing else.
+
+- **The browser origin check stays on every browser-facing mutation.** `withWebhook` is the only wrapper without it,
+  because provider callbacks carry no `Origin`. The provider signature replaces it.
+- **Signed-out API requests get JSON, not a redirect.** The proxy redirects pages to `/login?next=`, but a request to
+  `/api/*` outside the public allowlist with no session cookie gets `401 { code: "unauthenticated" }`. A `fetch` that
+  followed a 302 would otherwise get the login HTML with a 200. `next` only ever carries page paths.
+- **One source for the public API list.** The proxy's public API allowlist is generated from the routes that use
+  `withPublic` and `withWebhook`, and a test fails if the proxy, `route-policy.test.ts` and the route files disagree.
 
 ### D3. Company access state: stored facts, derived phase
 
@@ -144,8 +162,13 @@ Enforcement has two layers, and the database layer is authoritative.
    - `withPolicy` maps the error to 403 `company_read_only`, the same way `isLockedPeriodError` maps 409 today.
    - **Exemptions.**
      - `withAudit(db, work, { readOnlyExemption })` runs `set_config('jobflow.read_only_exemption', key, true)`.
-     - The trigger accepts only keys in the SQL list `jobflow_read_only_exemptions()`, which mirrors the TypeScript
-       union `ReadOnlyExemption`. A parity test checks the two lists match.
+       The third argument makes it **transaction-local**, so it can't leak into a later transaction on the same pooled
+       connection.
+     - The trigger checks **the audit row's action against the actions allowed for the declared key**, using the SQL
+       map `jobflow_read_only_exemption_actions(key)`, which mirrors the table below. A key on its own admits nothing:
+       a transaction that declares `export` and also writes an invoice is still rolled back, because the invoice's
+       audit action isn't an `export` action.
+     - The SQL map mirrors the TypeScript map `READ_ONLY_EXEMPTION_ACTIONS`, and a parity test checks they match.
      - Raw audit inserts (document cleanup) use the same helper.
 
 | Exemption key | Allowed action (S9 AC2, S12 AC2) |
@@ -197,13 +220,18 @@ Enforcement has two layers, and the database layer is authoritative.
   - Each grant and revoke writes a `platform_audit_events` row (`actor_kind = 'system'`, the OS user from `--by`).
   - Revocation takes effect on the next request. Removing the ID from the environment and restarting is the second
     off switch.
-- **AQ1, MFA: required in production.**
+- **AQ1, MFA: required in production.** Confirmed by the owner on 3 November 2026. TOTP is an open standard with free
+  authenticator apps, and Better Auth's plugin is open source, which meets the owner's "free or open source" condition.
   - TOTP comes from Better Auth's `twoFactor` plugin. Its `two_factor` table and `users.two_factor_enabled` field are
     an addition to ADR 0003's tables. Trust-device is disabled.
   - In production, `withOperator` and `requireOperator()` also need `two_factor_enabled = true`. Better Auth only
     creates a session for such a user after the TOTP step.
   - An operator without TOTP reaches only `/operator/mfa`, the enrolment page. Every other operator page and API
     returns 404.
+  - **Enrolment needs a host-issued code.** A password-only session could otherwise enrol an attacker's authenticator
+    before the real operator does. `pnpm operator enrol-code --user <id>` prints a one-time code (10 minutes, single
+    use, stored as a SHA-256 digest, audited). `/operator/mfa` asks for it, and a Better Auth `hooks.before` refuses
+    `/two-factor/enable` without a valid code. Re-enrolment after a lost device needs a new code.
   - Until enrolment, the CLI is the production path, as the requirements recommend.
   - A Better Auth `hooks.before` refuses `/two-factor/*` enrolment for non-operators. MFA for company users stays
     with #61.
@@ -213,8 +241,10 @@ Enforcement has two layers, and the database layer is authoritative.
     a pending request, writes the audit event and enqueues emails in one transaction.
   - The CLI calls the same service with `--as <operatorUserId>`, which must pass the same two-key check. The production
     MFA rule doesn't apply to the CLI, because shell access is the stronger credential.
-- **Recommended extra, owner's choice.** Put `/operator*` and `/api/operator/*` behind a Cloudflare Access policy for
-  the operator's email.
+- **Cloudflare Access: required (owner decision, 3 November 2026).** An Access policy, allowing only the operator's
+  Cloudflare identity, covers `/operator*`, `/api/operator/*` and `/api/auth/two-factor/*`. The last is under
+  `/api/auth`, so it needs its own rule. The policy must **not** cover `/api/webhooks/*`. The app's own checks still
+  apply behind it: Access is defence in depth, not the only gate.
 
 ### D6. Audit actors and the user-level security log
 
@@ -260,9 +290,15 @@ Enforcement has two layers, and the database layer is authoritative.
     disabled in production.
   - `ConsoleTransport` serves development and prints the link only, never in production.
   - The real adapter is chosen by the E1 spike.
-  - Bounces and complaints add the address digest to `email_suppressions`, and suppressed addresses aren't sent to.
-- **Addresses.** Sender, reply-to and support default to `jobflow@shivomsangha.com` through `EMAIL_FROM`,
-  `EMAIL_REPLY_TO` and `SUPPORT_EMAIL`. `OPERATOR_NOTIFY_EMAIL` is the operator's address and has no default.
+  - Bounces and complaints arrive at `POST /api/webhooks/email` (`withWebhook`). A hard bounce or complaint adds the
+    address HMAC to `email_suppressions`, and suppressed addresses aren't sent to.
+- **Addresses.** Sender, reply-to, support and operator notifications all default to `jobflow@shivomsangha.com`,
+  through `EMAIL_FROM`, `EMAIL_REPLY_TO`, `SUPPORT_EMAIL` and `OPERATOR_NOTIFY_EMAIL` (operator address confirmed by
+  the owner on 3 November 2026).
+- **Address HMAC.** Suppressions and per-recipient throttles key on an HMAC-SHA-256 of the lower-cased address. Its
+  key is derived from `EMAIL_OUTBOX_KEY` by HKDF with the info label `jobflow/address-hmac/v1`, separate from the
+  payload key. Rotating `EMAIL_OUTBOX_KEY` drops the suppression list, and the provider's own suppression list covers
+  the gap.
 - **Content.** Templates are plain text plus minimal escaped HTML.
   - Emails to unverified addresses contain no user-entered text (S2 AC9).
   - System emails are JobFlow-branded, not company-branded.
@@ -332,8 +368,9 @@ Enforcement has two layers, and the database layer is authoritative.
   - the Pwned Passwords range API, which fails open.
 
   Egress from the web container must allow these three.
-- These questions are left to the owner: the AQ1 confirmation, the optional Cloudflare Access for `/operator`, the
-  operator notification address, the provider choice and cost after E1, and the reviewed legal text.
+- **Owner decisions, 3 November 2026:** AQ1 TOTP is required; Cloudflare Access for the operator area is required;
+  operator notifications go to `jobflow@shivomsangha.com`. Still open: the provider choice and cost after E1 (#239
+  recommends Amazon SES in Sydney), and the reviewed legal text.
 
 ### Documentation to change after acceptance (not edited in this ADR)
 
@@ -346,7 +383,7 @@ Enforcement has two layers, and the database layer is authoritative.
   - Non-negotiables: mention the platform-operator boundary and that new mutating routes must declare read-only
     behaviour.
   - Commands table: add `pnpm jobs:run` and `pnpm operator`.
-- **`docs/architecture/authorisation.md`**: the four wrappers (D2), the `unverified` resolution, the read-only guard
+- **`docs/architecture/authorisation.md`**: the five wrappers (D2), the `unverified` resolution, the read-only guard
   and the operator boundary.
 - **`docs/architecture/user-access.md`**: "Accounts without any membership can authenticate" now leads to onboarding.
   Deactivation and revocation stay allowed while read-only.

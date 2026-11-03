@@ -667,7 +667,7 @@ architect.
 
 | # | Question | Blocking? |
 |---|---|---|
-| AQ1 | **Operator MFA:** should multi-factor authentication (TOTP or passkey) be required for platform-operator accounts? Recommendation: required before the operator area is enabled in production. Until then, the CLI fallback is the only production path. | **Blocking for enabling S11's and S14's operator area in production.** Not blocking for build or staging |
+| AQ1 | **Operator MFA:** should multi-factor authentication (TOTP or passkey) be required for platform-operator accounts? **Decided (owner, 3 November 2026): TOTP is required in production**, and Cloudflare Access is also required in front of the operator area (ADR 0004 D5). Until enrolment, the CLI is the only production path. | Resolved |
 | AQ2 | **Granting the operator role:** how is it granted and revoked? For example, an environment allowlist of verified user IDs, or a platform table changed only by a server-side command. Each change must be audited. | Not blocking for requirements. It's decided in the E2 ADR, before S11 starts |
 
 ## Recommended order and hand-off

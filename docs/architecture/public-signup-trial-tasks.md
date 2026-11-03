@@ -220,8 +220,11 @@ the ADR 0004 D1 deploy-order rule.
     - `JOBFLOW_OPERATOR_USER_IDS`;
     - `EMAIL_OUTBOX_KEY`;
     - `SIGNUP_ENABLED`.
-  - It lists the owner actions: create the tunnel, the hostname, Turnstile site keys and any optional Cloudflare Access
-    for `/operator`.
+  - **Cloudflare Access is required** (owner decision, 3 November 2026). Its policy allows only the operator's
+    identity on `/operator*`, `/api/operator/*` and `/api/auth/two-factor/*`, and excludes `/api/webhooks/*`. A staging
+    check shows these paths refuse a request without an Access token, and the webhook path accepts one.
+  - It lists the owner actions: create the tunnel, the hostname, the Turnstile site keys and the Cloudflare Access
+    application and policy.
 
 ### T10. [M6] Email outbox, transport port and dispatcher
 
@@ -250,10 +253,17 @@ the ADR 0004 D1 deploy-order rule.
 - **Depends on:** T2, T10 · **Covers:** E1
 - **Acceptance criteria:**
   - The adapter for the T2-chosen provider implements `EmailTransport`. Its dependency is pinned and licence-checked.
-  - `EMAIL_FROM`, `EMAIL_REPLY_TO` and `SUPPORT_EMAIL` default to `jobflow@shivomsangha.com`. `OPERATOR_NOTIFY_EMAIL`
-    is required wherever S14 is enabled.
-  - `POST /api/webhooks/email` (`withPublic`) verifies the provider signature. It refuses unsigned or replayed events,
-    and adds bounces and complaints to `email_suppressions` by address HMAC.
+  - `EMAIL_FROM`, `EMAIL_REPLY_TO`, `SUPPORT_EMAIL` and `OPERATOR_NOTIFY_EMAIL` all default to
+    `jobflow@shivomsangha.com`.
+  - `withWebhook` exists (ADR 0004 D2), and `route-policy.test.ts` allows it only under `app/api/webhooks/**`.
+  - `POST /api/webhooks/email` uses it:
+    - It verifies the provider signature over the raw body, with no origin check.
+    - It refuses unsigned, stale (±5 min), wrong-topic or replayed events (`email_webhook_events`).
+    - It never follows a subscription-confirmation URL.
+    - It adds hard bounces and complaints to `email_suppressions` by address HMAC.
+    - Tests use a locally generated test certificate or key; nothing calls the provider.
+  - Outside production, `EMAIL_RECIPIENT_ALLOWLIST` is required. Other recipients are marked `cancelled` and never
+    sent (#239).
   - Provider errors map to retryable or permanent. Tested with a stub server.
   - The API key is read from the environment only and never logged.
 
@@ -264,8 +274,8 @@ the ADR 0004 D1 deploy-order rule.
 - **Acceptance criteria:**
   - `docs/ops/email.md` lists the exact Cloudflare DNS records for SPF, DKIM and DMARC that the owner adds, and how to
     check them (`dig`, plus a provider verification screenshot or output).
-  - Staging and production environment files gain the provider key, `EMAIL_OUTBOX_KEY` and the addresses. Nothing is
-    committed.
+  - Staging and production environment files gain the provider key, `EMAIL_OUTBOX_KEY`, `EMAIL_EVENTS_TOPIC_ARN`,
+    `EMAIL_RECIPIENT_ALLOWLIST` (staging) and the addresses. Nothing is committed.
   - A staging test email to a test inbox passes SPF, DKIM and DMARC alignment, and the headers are recorded.
   - Egress from the web container to the provider, Turnstile and `api.pwnedpasswords.com` is allowed and documented.
 
@@ -274,7 +284,7 @@ the ADR 0004 D1 deploy-order rule.
 - **Agent:** backend-engineer · **Type:** feature · **Priority:** p0 · **Areas:** backend, security
 - **Depends on:** T6, T8, T10 · **Covers:** S2, S12 AC4
 - **Acceptance criteria:**
-  - `withPublic` exists and `route-policy.test.ts` enforces the four-wrapper rule (ADR 0004 D2).
+  - `withPublic` exists and `route-policy.test.ts` enforces the five-wrapper rule (ADR 0004 D2).
   - `POST /api/account/sign-up` validates per S2 AC2 and returns an identical 202 for a new, unverified, verified,
     invited, deactivated or demo email.
     - An existing account is unchanged and gets the "account exists" email.
@@ -283,6 +293,10 @@ the ADR 0004 D1 deploy-order rule.
   - Turnstile is verified server-side (`success`, hostname, action). A missing or failed token creates nothing and
     returns a generic 400. Test keys are used outside production.
   - IP throttle 5/h → 429 with `retryAfterSeconds`.
+  - The existing-email path sends at most 1 "account exists" email per hour and 3 per day per address HMAC. Beyond that
+    it sends nothing and still returns the identical 202. Tested.
+  - The shared email schema refuses a non-ASCII local part with a field message and stores an IDN domain as Punycode
+    (#239: SES has no SMTPUTF8). Invitations use the same schema.
   - In production, reserved TLDs (`.test`, `.example`, `.invalid`, `.localhost`) are refused, and placeholder legal
     versions give 503 (T8).
   - The breached-password k-anonymity check rejects a known-breached password. When the service is down (stubbed),
@@ -304,7 +318,10 @@ the ADR 0004 D1 deploy-order rule.
   - `resolveActor()` returns `unverified` for unverified users, except non-production demo accounts.
     - `withPolicy` returns 403 `email_unverified`.
     - `withSession` exists with `allowUnverified`.
-    - An integration test shows that an unverified pre-existing or invited user can't reach any company API.
+    - An integration test shows that an unverified pre-existing user can't reach any company API.
+  - `acceptInvitation` sets `email_verified = true`. A migration backfills it for users with an accepted invitation,
+    writing one `system` platform audit event each, and tests show that such a user isn't sent to
+    `/verify-email/pending`.
   - The token never appears in logs, audit or platform events. The verify page sends `Referrer-Policy: no-referrer`.
 
 ### T15. [M6] Password reset by email
@@ -394,8 +411,12 @@ the ADR 0004 D1 deploy-order rule.
 - **Agent:** frontend-engineer · **Type:** feature · **Priority:** p0 · **Areas:** frontend, security
 - **Depends on:** T4, T14, T16 · **Covers:** S1, S12 AC3
 - **Acceptance criteria:**
-  - `proxy.ts` redirects any path outside the public allowlist, when the request has no session cookie, to
-    `/login?next=<path>`. The allowlist is exported and unit-tested.
+  - With no session cookie, `proxy.ts` redirects a **page** outside the public allowlist to `/login?next=<path>`, and
+    answers an **`/api/*`** request outside it with `401 { code: "unauthenticated" }` JSON.
+    - The public API allowlist is generated from the `withPublic` and `withWebhook` routes, including
+      `POST /api/invitations/accept` and `POST /api/webhooks/email`.
+    - A test fails if the proxy list, `route-policy.test.ts` and the route files disagree.
+    - An e2e test accepts an invitation as a brand-new user with no session.
   - Layouts route by resolution: unverified → `/verify-email/pending`, no membership → `/onboarding`, several →
     `/choose-company`. `/invite` works in every state.
   - `next` accepts only same-origin relative paths. A table test covers `//evil.example`, `/\evil`, `https://…`,
@@ -507,6 +528,9 @@ the ADR 0004 D1 deploy-order rule.
       from the allowlist and (in production) an operator without MFA.
   - The Better Auth `twoFactor` plugin (TOTP, trust-device off) is configured. Enrolment is refused for non-operators.
     `/operator/mfa` is the only operator page reachable before enrolment.
+  - `pnpm operator enrol-code --user <id>` issues a one-time enrolment code (10 minutes, single use, digest stored,
+    audited). `/two-factor/enable` is refused without a valid code. A test shows that a password-only session can't
+    enrol without it.
   - The `trialAccess` service provides `extend` and `setAccessMode`, which validate per S11 AC4 and AC8 (demo or
     unknown company → error, no change).
     - Each locks the company, writes an `operator` audit event (before and after values, reason, requestId) with the

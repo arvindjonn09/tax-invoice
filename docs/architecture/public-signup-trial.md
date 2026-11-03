@@ -103,7 +103,8 @@ The default `'unrestricted'` keeps old app versions and the demo seed working. O
 | `account_tokens` | `user_id` → users, `purpose`, `token_hash char(64)`, `expires_at`, `consumed_at` NULL, `superseded_at` NULL | `token_hash` UNIQUE; partial UNIQUE `(user_id, purpose) WHERE consumed_at IS NULL AND superseded_at IS NULL`; index `(user_id, purpose, created_at)` |
 | `terms_acceptances` | `user_id`, `terms_version varchar(40)`, `privacy_version varchar(40)`, `accepted_at` | Append-only (trigger); index `user_id` |
 | `email_outbox` | `kind varchar(50)`, `dedupe_key varchar(200)`, `user_id` NULL, `company_id` NULL, `payload_ciphertext bytea` NULL, `status`, `attempts int`, `next_attempt_at`, `sent_at` NULL, `provider_message_id varchar(200)` NULL, `last_error varchar(100)` NULL (an error class, no message text) | `dedupe_key` UNIQUE; index `(status, next_attempt_at)`; CHECK payload is null when `status` is `sent` or `cancelled` |
-| `email_suppressions` | `address_hash char(64)` PK (HMAC-SHA-256 of the lower-cased address), `reason varchar(20)` (`bounce`/`complaint`), `created_at` | |
+| `email_suppressions` | `address_hash char(64)` PK (HMAC-SHA-256 of the lower-cased address, key per ADR 0004 D7), `reason varchar(20)` (`bounce`/`complaint`), `created_at` | |
+| `email_webhook_events` | `provider varchar(20)`, `provider_event_id varchar(200)`, `received_at` | UNIQUE `(provider, provider_event_id)`; rows older than 30 days may be deleted by `jobs:run` |
 | `trial_notifications` | `company_id`, `trial_last_day date`, `threshold`, `created_at` | UNIQUE `(company_id, trial_last_day, threshold)` |
 | `user_notices` | `user_id`, `company_id` NULL, `notice_key varchar(100)`, `dismissed_at` NULL | UNIQUE `(user_id, company_id, notice_key)` |
 | `trial_extension_requests` | `company_id`, `requested_by` (composite FK → memberships), `message varchar(1000)` NULL, `last_day_at_request date`, `status`, `decided_at` NULL, `decided_by` → `platform_operators.user_id` NULL, `extension_days int` NULL (1–365), `decision_note varchar(500)` NULL, `new_last_day date` NULL, `closed_reason varchar(30)` NULL (`direct_extension`/`made_unrestricted`) | Partial UNIQUE `(company_id) WHERE status = 'pending'`; CHECK status ↔ decision fields; decided rows are immutable (trigger); index `(status, created_at)` |
@@ -172,13 +173,18 @@ type SupplierSnapshotV2 = {
 
 ## Route map and redirects (S1)
 
-The proxy (`apps/web/src/proxy.ts`) checks an explicit **public allowlist**. A request to any other path with no
-session cookie redirects to `/login?next=<path>`. Every other decision is made on the server in layouts, with database
-state, because the proxy only sees whether a cookie is present.
+The proxy (`apps/web/src/proxy.ts`) checks an explicit **public allowlist**. With no session cookie:
+
+- a **page** outside the allowlist redirects to `/login?next=<path>`;
+- an **API** route (`/api/*`) outside the allowlist gets `401 { code: "unauthenticated" }` JSON, never a redirect.
+
+Every other decision is made on the server in layouts, with database state, because the proxy only sees whether a
+cookie is present.
 
 | Path | Kind | Allowed for |
 |---|---|---|
-| `/login`, `/signup`, `/signup/check-email`, `/verify-email`, `/forgot-password`, `/reset-password`, `/invite`, `/terms`, `/privacy`, `/api/health*`, `/api/auth/*`, `/api/account/*` (public ones) | public | everyone |
+| Pages: `/login`, `/signup`, `/signup/check-email`, `/verify-email`, `/forgot-password`, `/reset-password`, `/invite`, `/terms`, `/privacy` | public | everyone |
+| APIs: `/api/health*`, `/api/auth/*`, and every `withPublic` or `withWebhook` route by method and path: `POST /api/account/sign-up`, `POST /api/account/verify-email`, `POST /api/account/verification/resend`, `POST /api/account/password/forgot`, `POST /api/account/password/reset`, **`POST /api/invitations/accept`**, **`POST /api/webhooks/email`** | public | everyone. The handler does its own token or signature check. The list is generated from the route wrappers and tested against them |
 | `/verify-email/pending` | signed-in | unverified users |
 | `/onboarding`, `/onboarding/details`, `/choose-company`, `/account` | signed-in | verified users, with no company needed |
 | `/(app)/**` | app | active company member |
@@ -214,13 +220,18 @@ Every response is JSON with `Cache-Control: private, no-store`. Errors look like
 
 | Method and path | Body | Responses | Throttle / Turnstile |
 |---|---|---|---|
-| POST `/api/account/sign-up` | `{ name, email, password, passwordConfirmation, acceptTerms: true, termsVersion, privacyVersion, turnstileToken }` | **202** `{ status: "check-email" }` for both new and existing emails; 400 with `fields` (validation, breached password, reserved TLD in production, stale terms version); 400 `turnstile_failed`; 429 `{ retryAfterSeconds }`; 503 `signup_unavailable` | IP 5/h, Turnstile `signup` |
+| POST `/api/account/sign-up` | `{ name, email, password, passwordConfirmation, acceptTerms: true, termsVersion, privacyVersion, turnstileToken }` | **202** `{ status: "check-email" }` for both new and existing emails; 400 with `fields` (validation, breached password, reserved TLD in production, stale terms version, non-ASCII local part); 400 `turnstile_failed`; 429 `{ retryAfterSeconds }`; 503 `signup_unavailable` | IP 5/h, Turnstile `signup`. For an existing address, at most 1 "account exists" email per hour and 3 per day per address HMAC; beyond that the same 202 is returned and nothing is sent |
 | POST `/api/account/verify-email` | `{ token }` | 200 `{ status: "verified" \| "already-verified" }`; 400 `token_invalid` | IP 30/h |
 | POST `/api/account/verification/resend` | `{ email, turnstileToken }` | **202** generic, always | IP 10/h, plus account 1/min and 5/day silently; Turnstile `resend` |
 | POST `/api/account/password/forgot` | `{ email, turnstileToken }` | **202** generic, always | IP 10/h, account 3/h silently; Turnstile `forgot` |
 | POST `/api/account/password/reset` | `{ token, password, passwordConfirmation }` | 200; 400 `token_invalid` or `fields` | IP 10/h |
-| POST `/api/invitations/accept` (existing) | unchanged | adds 403 `company_read_only` when the invitation was created on or after `read_only_from` | unchanged |
-| POST `/api/webhooks/email` | provider payload, signature-verified | 204 | provider-specific (E1) |
+| POST `/api/invitations/accept` (existing) | unchanged | adds 403 `company_read_only` when the invitation was created on or after `read_only_from`. Success now also sets `email_verified = true` (ADR 0004 D1) | unchanged |
+
+### Webhook (`withWebhook`)
+
+| Method and path | Body | Responses | Checks |
+|---|---|---|---|
+| POST `/api/webhooks/email` | The provider's signed event. For Amazon SES (#239): an SNS `Notification`, with SES's "include original headers" off | 204; 200 with no effect for an event already seen; 400 for a bad signature, stale timestamp or wrong topic (nothing logged beyond the reason class) | No origin check. Signature over the raw body before parsing (for SNS: SignatureVersion 2, certificate URL host `sns.ap-southeast-2.amazonaws.com`, `TopicArn` = `EMAIL_EVENTS_TOPIC_ARN`); timestamp ±5 min; `email_webhook_events` replay check; 64 KiB limit; IP throttle. A `SubscriptionConfirmation` is never followed automatically: the owner confirms it in the provider console |
 
 ### Signed-in account (`withSession`)
 
