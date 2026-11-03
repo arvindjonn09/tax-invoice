@@ -290,16 +290,24 @@ Enforcement has two layers, and the database layer is authoritative.
   - `MemoryTransport` serves tests. The e2e harness reads verification links from it through a test-only hook that is
     disabled in production.
   - `ConsoleTransport` serves development and prints the link only, never in production.
-  - The real adapter is chosen by the E1 spike.
-  - Bounces and complaints arrive at `POST /api/webhooks/email` (`withWebhook`). A hard bounce or complaint adds the
-    address HMAC to `email_suppressions`, and suppressed addresses aren't sent to.
-- **Addresses.** Sender, reply-to, support and operator notifications all default to `jobflow@shivomsangha.com`,
-  through `EMAIL_FROM`, `EMAIL_REPLY_TO`, `SUPPORT_EMAIL` and `OPERATOR_NOTIFY_EMAIL` (operator address confirmed by
-  the owner on 3 November 2026).
+  - **Real adapter: Zoho Mail SMTP** (owner decision, 3 November 2026). The domain already uses Zoho's Australian
+    data centre (MX `mx.zoho.com.au`, SPF `include:zohomail.com.au`, DKIM selector `zmail`). `SmtpTransport` sends
+    as `admin@shivomsangha.com` through `smtppro.zoho.com.au:465` with implicit TLS, authenticated with a Zoho
+    **app-specific password**, never the account password. Settings: `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`,
+    `SMTP_USER` and `SMTP_PASSWORD`, all from the environment only. Certificate verification stays on.
+  - Zoho caps sending per user per day. The dispatcher treats throttling replies (SMTP 4xx and 554 rate replies) as
+    retryable and alerts when limits are hit. Move to a transactional provider if volume outgrows the mailbox.
+  - Bounces and complaints: Zoho SMTP has no signed webhook, so bounces arrive as mail in the `admin@` mailbox and
+    the suppression list is fed manually (or by a later IMAP reader). `POST /api/webhooks/email` (`withWebhook`)
+    ships only with a provider that signs callbacks. A hard bounce or complaint adds the address HMAC to
+    `email_suppressions`, and suppressed addresses aren't sent to.
+- **Addresses.** Sender, reply-to and support default to `admin@shivomsangha.com` through `EMAIL_FROM`,
+  `EMAIL_REPLY_TO` and `SUPPORT_EMAIL`. `EMAIL_FROM` must equal `SMTP_USER` (or an alias verified in Zoho), or Zoho
+  rejects the message. `OPERATOR_NOTIFY_EMAIL` was recorded as `jobflow@shivomsangha.com` (#241); the app host
+  currently uses `admin@shivomsangha.com`, so the owner confirms which before S14 ships.
 - **Address HMAC.** Suppressions and per-recipient throttles key on an HMAC-SHA-256 of the lower-cased address. Its
   key is derived from `EMAIL_OUTBOX_KEY` by HKDF with the info label `jobflow/address-hmac/v1`, separate from the
-  payload key. Rotating `EMAIL_OUTBOX_KEY` drops the suppression list, and the provider's own suppression list covers
-  the gap.
+  payload key. Rotating `EMAIL_OUTBOX_KEY` drops the suppression list.
 - **Content.** Templates are plain text plus minimal escaped HTML.
   - Emails to unverified addresses contain no user-entered text (S2 AC9).
   - System emails are JobFlow-branded, not company-branded.
@@ -370,8 +378,9 @@ Enforcement has two layers, and the database layer is authoritative.
 
   Egress from the web container must allow these three.
 - **Owner decisions, 3 November 2026:** AQ1 TOTP is required; Cloudflare Access for the operator area is required;
-  operator notifications go to `jobflow@shivomsangha.com`. Still open: the provider choice and cost after E1 (#239
-  recommends Amazon SES in Sydney), and the reviewed legal text.
+  operator notifications go to `jobflow@shivomsangha.com` (to reconfirm against the app host's `admin@`); email is
+  sent through **Zoho Mail SMTP as `admin@shivomsangha.com`** (D7), which settles the E1 provider choice (#239's
+  Amazon SES recommendation remains the fallback if Zoho's limits are outgrown). Still open: the reviewed legal text.
 
 ### Documentation to change after acceptance (not edited in this ADR)
 
