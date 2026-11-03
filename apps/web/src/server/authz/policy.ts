@@ -16,6 +16,11 @@ import {
   requireTrustedOrigin,
 } from "../http/guards";
 import { log, safeError } from "../log";
+import {
+  READ_ONLY_RESPONSE,
+  allowedWhileReadOnly,
+  isCompanyReadOnlyError,
+} from "./read-only";
 
 /** PostgreSQL and Prisma adapter errors must carry the actual SQLSTATE. */
 export function isLockedPeriodError(error: unknown): boolean {
@@ -125,6 +130,13 @@ export function createWithPolicy(deps: PolicyDependencies) {
           request.headers,
           permission,
         );
+        // ADR 0004 D4: a read-only company can't change anything except
+        // the READ_ONLY_ALLOWED routes. Safe methods are never blocked.
+        if (
+          access.readOnly &&
+          !allowedWhileReadOnly(request.method, new URL(request.url).pathname)
+        )
+          return privateJson(READ_ONLY_RESPONSE, { status: 403 });
         return await handler({ actor, access, request, context });
       } catch (error) {
         if (error instanceof AuthzError || error instanceof HttpError) {
@@ -133,6 +145,9 @@ export function createWithPolicy(deps: PolicyDependencies) {
             { status: error.status },
           );
         }
+        // The commit-time database guard (a write that raced the expiry).
+        if (isCompanyReadOnlyError(error))
+          return privateJson(READ_ONLY_RESPONSE, { status: 403 });
         if (isLockedPeriodError(error))
           return privateJson(
             {

@@ -9,6 +9,7 @@ import { withAudit } from "../../../../../packages/database/src/index";
 import type { Auth } from "../auth/config";
 import { createCredentialUser } from "../auth/credentials";
 import { privateJson, type PolicyHandler } from "../authz/policy";
+import { READ_ONLY_RESPONSE, isCompanyReadOnlyError } from "../authz/read-only";
 import { invalid, jsonOrNull } from "../company/handlers";
 import {
   HttpError,
@@ -157,64 +158,77 @@ export function userHandlers(db: () => PrismaClient) {
     if (!uuid.safeParse(id).success) throw notFound();
     const parsed = Update.safeParse(await jsonOrNull(request));
     if (!parsed.success) return invalid(parsed.error);
-    const row = await withAudit(db(), async (tx, audit) => {
-      await ownerLock(tx, actor);
-      const before = await tx.membership.findFirst({
-        where: { id, companyId: actor.companyId },
-        select: MEMBER_SELECT,
-      });
-      if (!before) throw notFound();
-      const role = parsed.data.role ?? before.role;
-      const isActive = parsed.data.isActive ?? before.isActive;
-      if (role === before.role && isActive === before.isActive)
-        throw new UnchangedAccess(before);
-      if (
-        before.role === "owner" &&
-        before.isActive &&
-        (role !== "owner" || !isActive)
-      ) {
-        const owners = await tx.membership.count({
-          where: { companyId: actor.companyId, role: "owner", isActive: true },
+    // While read-only, only a pure deactivation may commit (ADR 0004 D4).
+    // The database checks the audit change set, so a role change in the
+    // same request is still refused.
+    const deactivation =
+      parsed.data.isActive === false && parsed.data.role === undefined;
+    const row = await withAudit(
+      db(),
+      async (tx, audit) => {
+        await ownerLock(tx, actor);
+        const before = await tx.membership.findFirst({
+          where: { id, companyId: actor.companyId },
+          select: MEMBER_SELECT,
         });
-        if (owners <= 1)
-          throw new HttpError(
-            409,
-            "The last active owner cannot be deactivated or demoted.",
-          );
-      }
-      const member = await tx.membership.update({
-        where: { id },
-        data: { role, isActive },
-        select: MEMBER_SELECT,
-      });
-      if (before.isActive && !isActive) {
-        const remaining = await tx.membership.count({
-          where: { userId: before.userId, isActive: true },
+        if (!before) throw notFound();
+        const role = parsed.data.role ?? before.role;
+        const isActive = parsed.data.isActive ?? before.isActive;
+        if (role === before.role && isActive === before.isActive)
+          throw new UnchangedAccess(before);
+        if (
+          before.role === "owner" &&
+          before.isActive &&
+          (role !== "owner" || !isActive)
+        ) {
+          const owners = await tx.membership.count({
+            where: {
+              companyId: actor.companyId,
+              role: "owner",
+              isActive: true,
+            },
+          });
+          if (owners <= 1)
+            throw new HttpError(
+              409,
+              "The last active owner cannot be deactivated or demoted.",
+            );
+        }
+        const member = await tx.membership.update({
+          where: { id },
+          data: { role, isActive },
+          select: MEMBER_SELECT,
         });
-        await tx.authSession.deleteMany({
-          where: {
-            userId: before.userId,
-            ...(remaining > 0
-              ? {
-                  OR: [
-                    { activeCompanyId: actor.companyId },
-                    { activeCompanyId: null },
-                  ],
-                }
-              : {}),
-          },
+        if (before.isActive && !isActive) {
+          const remaining = await tx.membership.count({
+            where: { userId: before.userId, isActive: true },
+          });
+          await tx.authSession.deleteMany({
+            where: {
+              userId: before.userId,
+              ...(remaining > 0
+                ? {
+                    OR: [
+                      { activeCompanyId: actor.companyId },
+                      { activeCompanyId: null },
+                    ],
+                  }
+                : {}),
+            },
+          });
+        }
+        await audit({
+          companyId: actor.companyId,
+          actorUserId: actor.userId,
+          action: "membership.access_updated",
+          target: { type: "membership", id },
+          before: { role: before.role, isActive: before.isActive },
+          after: { role, isActive },
         });
-      }
-      await audit({
-        companyId: actor.companyId,
-        actorUserId: actor.userId,
-        action: "membership.access_updated",
-        target: { type: "membership", id },
-        before: { role: before.role, isActive: before.isActive },
-        after: { role, isActive },
-      });
-      return member;
-    }).catch((error: unknown) => {
+        return member;
+      },
+      deactivation ? { readOnlyExemption: "access_removal" } : undefined,
+    ).catch((error: unknown) => {
       if (error instanceof UnchangedAccess) return error.member;
       throw error;
     });
@@ -302,30 +316,37 @@ export function userHandlers(db: () => PrismaClient) {
   const revoke: PolicyHandler<Context> = async ({ actor, context }) => {
     const { id } = await context.params;
     if (!uuid.safeParse(id).success) throw notFound();
-    await withAudit(db(), async (tx, audit) => {
-      await ownerLock(tx, actor);
-      const invitation = await tx.userInvitation.findFirst({
-        where: { id, companyId: actor.companyId },
-      });
-      if (!invitation) throw notFound();
-      if (invitation.acceptedAt || invitation.revokedAt)
-        throw new HttpError(409, "This invitation is no longer pending.");
-      await tx.userInvitation.update({
-        where: { id },
-        data: { revokedAt: new Date() },
-      });
-      await audit({
-        companyId: actor.companyId,
-        actorUserId: actor.userId,
-        action: "invitation.revoked",
-        target: { type: "user_invitation", id },
-        after: { revoked: true },
-      });
-    });
+    await withAudit(
+      db(),
+      async (tx, audit) => {
+        await ownerLock(tx, actor);
+        const invitation = await tx.userInvitation.findFirst({
+          where: { id, companyId: actor.companyId },
+        });
+        if (!invitation) throw notFound();
+        if (invitation.acceptedAt || invitation.revokedAt)
+          throw new HttpError(409, "This invitation is no longer pending.");
+        await tx.userInvitation.update({
+          where: { id },
+          data: { revokedAt: new Date() },
+        });
+        await audit({
+          companyId: actor.companyId,
+          actorUserId: actor.userId,
+          action: "invitation.revoked",
+          target: { type: "user_invitation", id },
+          after: { revoked: true },
+        });
+        // Revoking removes access, so it stays allowed while read-only.
+      },
+      { readOnlyExemption: "access_removal" },
+    );
     return privateJson({ revoked: true });
   };
   return { list, update, invite, revoke };
 }
+
+class CompanyReadOnly extends Error {}
 
 /** Public only for invitation redemption; explicit CSRF, body and rate guards. */
 export function acceptInvitation(deps: {
@@ -363,103 +384,120 @@ export function acceptInvitation(deps: {
       const session = await deps
         .auth()
         .api.getSession({ headers: request.headers });
-      await withAudit(db, async (tx, audit) => {
-        // Same lock order as issue/revoke/access updates; token consumed atomically.
-        await tx.$queryRaw`SELECT id FROM companies WHERE id = ${candidate.companyId}::uuid FOR UPDATE`;
-        const invitation = await tx.userInvitation.findUniqueOrThrow({
-          where: { id: candidate.id },
-        });
-        if (
-          invitation.acceptedAt ||
-          invitation.revokedAt ||
-          invitation.expiresAt <= new Date()
-        )
-          throw new HttpError(
-            400,
-            "This invitation is invalid or no longer available.",
-          );
-        const inviter = await tx.membership.findUnique({
-          where: {
-            companyId_userId: {
-              companyId: invitation.companyId,
-              userId: invitation.createdBy,
-            },
-          },
-        });
-        if (!inviter?.isActive || inviter.role !== "owner")
-          throw new HttpError(
-            400,
-            "This invitation is invalid or no longer available.",
-          );
-        let user = await tx.user.findUnique({
-          where: { email: invitation.email },
-        });
-        if (user) {
-          if (session?.user.id !== user.id)
-            throw new HttpError(
-              401,
-              "Sign in with the invited email address, then return to this invitation.",
-            );
+      await withAudit(
+        db,
+        async (tx, audit) => {
+          // Same lock order as issue/revoke/access updates; token consumed atomically.
+          const [company] = await tx.$queryRaw<
+            { read_only: boolean; read_only_from: Date | null }[]
+          >`SELECT (access_mode = 'trial' AND read_only_from <= now()) AS read_only, read_only_from
+          FROM companies WHERE id = ${candidate.companyId}::uuid FOR UPDATE`;
+          const invitation = await tx.userInvitation.findUniqueOrThrow({
+            where: { id: candidate.id },
+          });
+          // ADR 0004 D4: a read-only company accepts only invitations issued
+          // before its trial ended (S12 AC2); later ones are refused.
           if (
-            await tx.membership.findUnique({
-              where: {
-                companyId_userId: {
-                  companyId: invitation.companyId,
-                  userId: user.id,
-                },
-              },
-            })
+            company?.read_only &&
+            company.read_only_from &&
+            invitation.createdAt >= company.read_only_from
+          )
+            throw new CompanyReadOnly();
+          if (
+            invitation.acceptedAt ||
+            invitation.revokedAt ||
+            invitation.expiresAt <= new Date()
           )
             throw new HttpError(
-              409,
-              "A membership already exists. Ask the owner to edit your access.",
+              400,
+              "This invitation is invalid or no longer available.",
             );
-        } else {
-          if (session)
-            throw new HttpError(
-              403,
-              "Sign out before setting up a different account.",
-            );
-          const { name, password } = parsed.data;
-          if (!name || !password)
+          const inviter = await tx.membership.findUnique({
+            where: {
+              companyId_userId: {
+                companyId: invitation.companyId,
+                userId: invitation.createdBy,
+              },
+            },
+          });
+          if (!inviter?.isActive || inviter.role !== "owner")
             throw new HttpError(
               400,
-              "Enter your name and a password of 12–128 characters for a new account.",
+              "This invitation is invalid or no longer available.",
             );
-          user = await createCredentialUser(tx, {
-            email: invitation.email,
-            name,
-            password,
-            createdBy: invitation.createdBy,
+          let user = await tx.user.findUnique({
+            where: { email: invitation.email },
           });
-        }
-        const member = await tx.membership.create({
-          data: {
+          if (user) {
+            if (session?.user.id !== user.id)
+              throw new HttpError(
+                401,
+                "Sign in with the invited email address, then return to this invitation.",
+              );
+            if (
+              await tx.membership.findUnique({
+                where: {
+                  companyId_userId: {
+                    companyId: invitation.companyId,
+                    userId: user.id,
+                  },
+                },
+              })
+            )
+              throw new HttpError(
+                409,
+                "A membership already exists. Ask the owner to edit your access.",
+              );
+          } else {
+            if (session)
+              throw new HttpError(
+                403,
+                "Sign out before setting up a different account.",
+              );
+            const { name, password } = parsed.data;
+            if (!name || !password)
+              throw new HttpError(
+                400,
+                "Enter your name and a password of 12–128 characters for a new account.",
+              );
+            user = await createCredentialUser(tx, {
+              email: invitation.email,
+              name,
+              password,
+              createdBy: invitation.createdBy,
+            });
+          }
+          const member = await tx.membership.create({
+            data: {
+              companyId: invitation.companyId,
+              userId: user.id,
+              role: invitation.role,
+              createdBy: invitation.createdBy,
+            },
+          });
+          await tx.userInvitation.update({
+            where: { id: invitation.id },
+            data: { acceptedAt: new Date() },
+          });
+          // The inviter authorized this grant; recipient identity is also captured.
+          await audit({
             companyId: invitation.companyId,
-            userId: user.id,
-            role: invitation.role,
-            createdBy: invitation.createdBy,
-          },
-        });
-        await tx.userInvitation.update({
-          where: { id: invitation.id },
-          data: { acceptedAt: new Date() },
-        });
-        // The inviter authorized this grant; recipient identity is also captured.
-        await audit({
-          companyId: invitation.companyId,
-          actorUserId: invitation.createdBy,
-          action: "invitation.accepted",
-          target: { type: "user_invitation", id: invitation.id },
-          after: {
-            membershipId: member.id,
-            recipientUserId: user.id,
-            role: invitation.role,
-          },
-        });
-      });
+            actorUserId: invitation.createdBy,
+            action: "invitation.accepted",
+            target: { type: "user_invitation", id: invitation.id },
+            after: {
+              membershipId: member.id,
+              recipientUserId: user.id,
+              role: invitation.role,
+            },
+          });
+        },
+        { readOnlyExemption: "invitation_pre_expiry" },
+      );
       return privateJson({ accepted: true });
     } catch (error) {
+      if (error instanceof CompanyReadOnly || isCompanyReadOnlyError(error))
+        return privateJson(READ_ONLY_RESPONSE, { status: 403 });
       if (error instanceof HttpError)
         return privateJson({ error: error.message }, { status: error.status });
       // Cross-company concurrent invitations may race creating the global user.

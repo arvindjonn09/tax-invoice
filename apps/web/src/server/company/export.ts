@@ -194,14 +194,18 @@ export function companyExportHandler(
       (total, table) => total + table.rows.length,
       0,
     );
-    await withAudit(db(), (_tx, audit) =>
-      audit({
-        companyId: actor.companyId,
-        actorUserId: actor.userId,
-        action: "company.exported",
-        target: { type: "company", id: actor.companyId },
-        after: { tables: Object.keys(data.tables).length, rows },
-      }),
+    await withAudit(
+      db(),
+      (_tx, audit) =>
+        audit({
+          companyId: actor.companyId,
+          actorUserId: actor.userId,
+          action: "company.exported",
+          target: { type: "company", id: actor.companyId },
+          after: { tables: Object.keys(data.tables).length, rows },
+        }),
+      // Exports stay available while read-only (S9 AC2).
+      { readOnlyExemption: "export" },
     );
     return new Response(JSON.stringify(data), {
       headers: {
