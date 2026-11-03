@@ -78,7 +78,7 @@ the ADR 0004 D1 deploy-order rule.
     - deliverability features;
     - bounce and complaint webhooks and how they're signed;
     - API key scoping.
-  - It recommends one provider and gives the exact DNS records needed for `jobflow@shivomsangha.com` (SPF include,
+  - It recommends one provider and gives the exact DNS records needed for `admin@shivomsangha.com` (SPF include,
     DKIM selectors, DMARC policy starting at `p=none` with rua).
   - It confirms that internationalised address (SMTPUTF8) support exists, or doesn't.
   - It sketches the adapter for the `EmailTransport` port (ADR 0004 D7) without adding a dependency.
@@ -257,10 +257,10 @@ the ADR 0004 D1 deploy-order rule.
 - **Depends on:** T2, T10 · **Covers:** E1
 - **Acceptance criteria:**
   - The adapter for the T2-chosen provider implements `EmailTransport`. Its dependency is pinned and licence-checked.
-  - `EMAIL_FROM`, `EMAIL_REPLY_TO`, `SUPPORT_EMAIL` and `OPERATOR_NOTIFY_EMAIL` all default to
-    `jobflow@shivomsangha.com`.
+  - `EMAIL_FROM`, `EMAIL_REPLY_TO` and `SUPPORT_EMAIL` default to `admin@shivomsangha.com` (Zoho SMTP, ADR 0004
+    D7). `OPERATOR_NOTIFY_EMAIL` is required wherever S14 is enabled (owner confirms the address).
   - `withWebhook` exists (ADR 0004 D2), and `route-policy.test.ts` allows it only under `app/api/webhooks/**`.
-  - `POST /api/webhooks/email` uses it:
+  - `POST /api/webhooks/email` uses it, once a provider that signs callbacks is in use (Zoho SMTP has none):
     - It verifies the provider signature over the raw body, with no origin check.
     - It refuses unsigned, stale (±5 min), wrong-topic or replayed events (`email_webhook_events`).
     - It never follows a subscription-confirmation URL.
