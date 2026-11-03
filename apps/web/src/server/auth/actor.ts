@@ -2,7 +2,7 @@ import type {
   MembershipRole,
   PrismaClient,
 } from "../../../../../packages/database/src/generated/prisma/client";
-import type { Auth } from "./config";
+import { type Auth, DEMO_EMAIL, isProductionEnvironment } from "./config";
 
 /** Who is acting, and in which company, for one request. */
 export type Actor = {
@@ -14,6 +14,8 @@ export type Actor = {
 
 export type ActorResolution =
   | { status: "signed-out" }
+  /** Signed in, but the email address is not verified yet (ADR 0004 D1). */
+  | { status: "unverified"; userId: string; email: string }
   | { status: "no-membership"; userId: string }
   | {
       status: "choose-company";
@@ -36,6 +38,9 @@ export async function resolveActor(
   const session = await auth.api.getSession({ headers });
   if (!session) return { status: "signed-out" };
   const userId = session.user.id;
+  if (!isVerified(session.user)) {
+    return { status: "unverified", userId, email: session.user.email };
+  }
   const memberships = await db.membership.findMany({
     where: { userId, isActive: true },
     select: { companyId: true, role: true },
@@ -58,6 +63,25 @@ export async function resolveActor(
       role: active.role,
     },
   };
+}
+
+/** Reserved TLDs (RFC 2606/6761) can never receive email. */
+const UNDELIVERABLE_EMAIL = /\.(test|example|invalid|localhost)$/i;
+
+/**
+ * Verified email is required for every account (S3 AC6). Synthetic demo and
+ * test identities on reserved TLDs can't receive email, so they are exempt
+ * outside production only; production sign-up refuses those domains.
+ */
+export function isVerified(
+  user: { email: string; emailVerified: boolean },
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  if (user.emailVerified) return true;
+  return (
+    (DEMO_EMAIL.test(user.email) || UNDELIVERABLE_EMAIL.test(user.email)) &&
+    !isProductionEnvironment(env)
+  );
 }
 
 /** Switch the session's company; only to a company the user actively belongs to. */

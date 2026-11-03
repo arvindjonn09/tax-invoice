@@ -4,6 +4,10 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 
 | Route | Method | Permission | Roles |
 |---|---|---|---|
+| `/api/account/sign-up` | POST | — | public (see route-policy.test.ts) |
+| `/api/account/verification/resend` | POST | — | public (see route-policy.test.ts) |
+| `/api/account/verification/resend-mine` | POST | — | public (see route-policy.test.ts) |
+| `/api/account/verify-email` | POST | — | public (see route-policy.test.ts) |
 | `/api/auth/[...all]` | GET | — | public (see route-policy.test.ts) |
 | `/api/auth/[...all]` | POST | — | public (see route-policy.test.ts) |
 | `/api/bill-submissions` | GET | `bill.read` | owner, manager, accountant |

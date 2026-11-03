@@ -173,11 +173,19 @@ test("visitors without an account can find Sign up everywhere", async ({
       name: "Create your JobFlow account",
     }),
   ).toBeVisible();
-  // Honest placeholder: no form pretends to create an account yet.
-  await expect(page.locator("form")).toHaveCount(0);
+  // Outside production the real sign-up form is shown (#224).
+  await expect(page.getByLabel("Your name")).toBeVisible();
+  await expect(page.getByLabel("Email")).toHaveAttribute(
+    "autocomplete",
+    "email",
+  );
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute(
+    "autocomplete",
+    "new-password",
+  );
   await expect(
-    page.getByRole("link", { name: "Request early access" }),
-  ).toHaveAttribute("href", /^mailto:admin@shivomsangha\.com\?/);
+    page.getByRole("link", { name: "Terms of Service" }),
+  ).toHaveAttribute("href", "/terms");
   await page.getByRole("main").getByRole("link", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/login$/);
 });

@@ -12,6 +12,19 @@ export const MIN_PASSWORD_LENGTH = 12;
 /** Synthetic demo identities (#21) use the reserved `.test` TLD. */
 export const DEMO_EMAIL = /@example\.test$/i;
 
+/**
+ * The real production environment. `next start` always sets NODE_ENV=production,
+ * so staging and previews declare themselves with APP_ENV (staging, preview,
+ * development); without APP_ENV a production build counts as production.
+ */
+export function isProductionEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  return env.APP_ENV
+    ? env.APP_ENV === "production"
+    : env.NODE_ENV === "production";
+}
+
 export type AuthSettings = {
   db: PrismaClient;
   /** At least 32 random characters; never committed (BETTER_AUTH_SECRET). */
@@ -24,7 +37,8 @@ export type AuthSettings = {
 
 /**
  * Email + password sign-in with database sessions (ADR 0003).
- * - No public sign-up: users are created by owners (#27) or seeding (#21).
+ * - Better Auth's own sign-up stays disabled: public sign-up, verification
+ *   and reset are JobFlow handlers (ADR 0004 D1, server/account).
  * - Sessions live in `auth_sessions`, so they can be revoked by deleting rows.
  * - Cookies are HttpOnly, SameSite=Lax and Secure in production.
  * - POSTs are rejected unless their Origin is the app's own (CSRF).
