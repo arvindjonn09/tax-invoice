@@ -22,10 +22,12 @@ const EXCLUDED_TABLES = new Set([
   "idempotency_keys",
   "document_delete_retries", // private maintenance outbox; contains storage keys
   "_prisma_migrations",
+  "email_outbox", // encrypted queued email and dedupe keys (#210)
 ]);
 const EXCLUDED_COLUMNS = new Set([
   "user_invitations.token_hash",
   "documents.object_key",
+  "companies.self_service_request_key", // onboarding idempotency key (#210)
 ]);
 const isExcluded = (table: string, column: string) =>
   EXCLUDED_COLUMNS.has(`${table}.${column}`) || column === "request_hash";
@@ -133,7 +135,10 @@ export async function exportCompany(
   const companyColumns = await tx.$queryRaw<Column[]>`
     SELECT column_name AS name, data_type AS type FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'companies' ORDER BY ordinal_position`;
-  tables.companies = plain(company, companyColumns);
+  tables.companies = plain(
+    company,
+    companyColumns.filter((c) => !isExcluded("companies", c.name)),
+  );
   tables.users = plain(members, [
     { name: "id", type: "uuid" },
     { name: "email", type: "text" },
