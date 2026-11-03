@@ -31,6 +31,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 -- Append-only audit: insert and read only (the trigger is a second layer).
 REVOKE UPDATE, DELETE, TRUNCATE ON audit_events FROM jobflow_app;
+-- #210: platform audit and terms acceptances are append-only too.
+REVOKE UPDATE, DELETE, TRUNCATE ON platform_audit_events, terms_acceptances FROM jobflow_app;
 -- Migration bookkeeping belongs to the owner.
 REVOKE ALL ON _prisma_migrations FROM jobflow_app;
 

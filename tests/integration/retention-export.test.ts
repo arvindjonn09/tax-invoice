@@ -282,6 +282,23 @@ describe("full company export (#62)", () => {
       },
     });
 
+    // #210: queued email and the onboarding idempotency key stay internal.
+    await db.emailOutbox.create({
+      data: {
+        companyId,
+        kind: "trial_reminder",
+        dedupeKey: "export-test-dedupe-key",
+        payloadCiphertext: Buffer.from("sealed-export-test-payload"),
+      },
+    });
+    await db.company.update({
+      where: { id: companyId },
+      data: {
+        selfServiceOwnerId: userIds.owner,
+        selfServiceRequestKey: "export-test-request-key",
+      },
+    });
+
     const response = await download("owner");
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
@@ -293,7 +310,11 @@ describe("full company export (#62)", () => {
     expect(text).not.toContain("c".repeat(64));
     expect(text).not.toContain(`documents/${companyId}/`);
     expect(text).not.toContain("Their Sample");
-    expect(text).not.toMatch(/password|request_hash|token_hash|object_key/);
+    expect(text).not.toMatch(
+      /password|request_hash|token_hash|object_key|self_service_request_key|email_outbox|payload_ciphertext/,
+    );
+    expect(text).not.toContain("export-test-dedupe-key");
+    expect(text).not.toContain("export-test-request-key");
     const raw = JSON.parse(text);
     expect(raw).toMatchObject({
       format: "jobflow.company-export",
