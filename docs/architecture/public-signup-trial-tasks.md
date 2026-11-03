@@ -78,7 +78,7 @@ the ADR 0004 D1 deploy-order rule.
     - deliverability features;
     - bounce and complaint webhooks and how they're signed;
     - API key scoping.
-  - It recommends one provider and gives the exact DNS records needed for `jobflow@shivomsangha.com` (SPF include,
+  - It recommends one provider and gives the exact DNS records needed for `admin@shivomsangha.com` (SPF include,
     DKIM selectors, DMARC policy starting at `p=none` with rua).
   - It confirms that internationalised address (SMTPUTF8) support exists, or doesn't.
   - It sketches the adapter for the `EmailTransport` port (ADR 0004 D7) without adding a dependency.
@@ -250,7 +250,7 @@ the ADR 0004 D1 deploy-order rule.
 - **Depends on:** T2, T10 · **Covers:** E1
 - **Acceptance criteria:**
   - The adapter for the T2-chosen provider implements `EmailTransport`. Its dependency is pinned and licence-checked.
-  - `EMAIL_FROM`, `EMAIL_REPLY_TO` and `SUPPORT_EMAIL` default to `jobflow@shivomsangha.com`. `OPERATOR_NOTIFY_EMAIL`
+  - `EMAIL_FROM`, `EMAIL_REPLY_TO` and `SUPPORT_EMAIL` default to `admin@shivomsangha.com`. `OPERATOR_NOTIFY_EMAIL`
     is required wherever S14 is enabled.
   - `POST /api/webhooks/email` (`withPublic`) verifies the provider signature. It refuses unsigned or replayed events,
     and adds bounces and complaints to `email_suppressions` by address HMAC.
