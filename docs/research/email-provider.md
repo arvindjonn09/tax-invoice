@@ -83,11 +83,11 @@ outbound SMTP ports by default, so check the host firewall and provider policy (
 
 ### Owner actions
 
-1. Add the DMARC record above.
-2. Create a Zoho **app-specific password** for `admin@` and put it in the host's `infra/staging/env/web.env`
-   (`SMTP_PASSWORD`, mode 600). Never put it in an issue or commit.
-3. Confirm `OPERATOR_NOTIFY_EMAIL`: `admin@` or `jobflow@shivomsangha.com`. If it's `jobflow@`, make it an alias
-   that receives mail in Zoho.
+1. ~~Add the DMARC record above.~~ Done (owner, 4 November 2026: "already added and it's working fine").
+2. ~~Create a Zoho **app-specific password** for `admin@` and put it in the host's secret file (`SMTP_PASSWORD`,
+   mode 600).~~ Done, and sending works (owner, 4 November 2026). Never put it in an issue or commit.
+3. ~~Confirm `OPERATOR_NOTIFY_EMAIL`.~~ **`admin@shivomsangha.com`** (owner, 4 November 2026). Every address (sender,
+   reply-to, support, operator notifications) is the one Zoho mailbox.
 4. Optional: ask `support@zohomail.com` for this plan's daily per-user sending figure, and record it here.
 
 ---

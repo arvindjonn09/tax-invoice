@@ -309,8 +309,8 @@ Enforcement has two layers, and the database layer is authoritative.
 - **Addresses.** Sender, reply-to and support default to `admin@shivomsangha.com` through `EMAIL_FROM`,
   `EMAIL_REPLY_TO` and `SUPPORT_EMAIL`. The **address** in `EMAIL_FROM` (which may have a display
   name, as in `"JobFlow <admin@shivomsangha.com>"`) must equal `SMTP_USER` or an alias verified in Zoho, or Zoho
-  rejects the message. `OPERATOR_NOTIFY_EMAIL` was recorded as `jobflow@shivomsangha.com` (#241); the app host
-  currently uses `admin@shivomsangha.com`, so the owner confirms which before S14 ships.
+  rejects the message. `OPERATOR_NOTIFY_EMAIL` is **`admin@shivomsangha.com`** (owner, 4 November 2026; replaces
+  the earlier `jobflow@` note), so every address is the one Zoho mailbox.
 - **Address HMAC.** Suppressions and per-recipient throttles key on an HMAC-SHA-256 of the lower-cased address. Its
   key is derived from `EMAIL_OUTBOX_KEY` by HKDF-SHA-256 with salt `jobflow-email` and info `address-digest-v1`
   (as implemented in #248), separate from the payload key. Rotating `EMAIL_OUTBOX_KEY` drops the suppression list.
@@ -385,7 +385,7 @@ Enforcement has two layers, and the database layer is authoritative.
   Egress from the web and maintenance containers must allow these three. The host firewall must allow outbound TCP
   465, which some cloud hosts block by default.
 - **Owner decisions, 3 November 2026:** AQ1 TOTP is required; Cloudflare Access for the operator area is required;
-  operator notifications go to `jobflow@shivomsangha.com` (to reconfirm against the app host's `admin@`); email is
+  operator notifications go to `admin@shivomsangha.com` (confirmed 4 November 2026); email is
   sent through **Zoho Mail SMTP as `admin@shivomsangha.com`** (D7), which settles the E1 provider choice (#239's
   Amazon SES recommendation remains the fallback if Zoho's limits are outgrown). Still open: the reviewed legal text.
 
