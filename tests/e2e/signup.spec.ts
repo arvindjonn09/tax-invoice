@@ -5,7 +5,7 @@ import { createDatabaseClient } from "../../packages/database/src/index";
 import { issueToken } from "../../apps/web/src/server/account/tokens";
 import { isolatedTestConnection } from "../helpers/test-environment";
 
-// #217/#218/#224: sign up → check email → unverified gate → verify.
+// #217/#218/#220/#224: sign up → verify → onboarding → trial.
 test.skip(
   !process.env.JOBFLOW_ISOLATED_TEST_DATABASE,
   "Use pnpm test:e2e with an isolated database for sign-up tests",
@@ -16,6 +16,8 @@ const PASSWORD = "a long synthetic sign-up phrase";
 test("a visitor signs up, is held at verification, then verifies", async ({
   page,
 }) => {
+  // Five pages compile on first visit in `next dev`; the flow is long.
+  test.setTimeout(120_000);
   const db = createDatabaseClient(isolatedTestConnection());
   // A deliverable-looking address, so the reserved-domain exemption doesn't apply.
   const email = `signup-${randomUUID()}@example.com`;
@@ -66,7 +68,25 @@ test("a visitor signs up, is held at verification, then verifies", async ({
     expect(new URL(page.url()).hash).toBe("");
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     await page.getByRole("link", { name: "Continue" }).click();
-    await expect(page).not.toHaveURL(/verify-email/);
+
+    // A verified user without a company sets up their business (S5).
+    await expect(page).toHaveURL(/\/onboarding$/);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.getByLabel("Business name").fill("Signup Sparks");
+    await page.getByLabel("No, not registered").check();
+    await page.getByRole("button", { name: /Create my business/ }).click();
+    // /home sends a new Owner on to their dashboard.
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(
+      page.getByRole("region", { name: "Free trial" }),
+    ).toContainText("Free trial: 30 days left");
+    const company = await db.company.findFirstOrThrow({
+      where: { selfServiceOwnerId: user.id },
+    });
+    expect(company).toMatchObject({
+      name: "Signup Sparks",
+      accessMode: "trial",
+    });
   } finally {
     await db.$disconnect();
   }
