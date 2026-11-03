@@ -125,9 +125,10 @@ ALTER TABLE "trial_extension_requests" ADD CONSTRAINT "trial_extension_requests_
 ALTER TABLE "trial_extension_requests" ADD CONSTRAINT "trial_extension_requests_extension_days" CHECK (
   "extension_days" IS NULL OR "extension_days" BETWEEN 1 AND 365
 );
--- Each status carries exactly its own decision fields.
+-- Each status carries exactly its own decision fields. COALESCE: a CHECK
+-- that evaluates to NULL passes, so an unknown (NULL) branch must fail.
 ALTER TABLE "trial_extension_requests" ADD CONSTRAINT "trial_extension_requests_decision" CHECK (
-  CASE "status"
+  COALESCE(CASE "status"
     WHEN 'pending' THEN num_nonnulls("decided_at", "decided_by", "extension_days", "decision_note",
                                      "new_last_day", "closed_reason") = 0
     WHEN 'approved' THEN "decided_at" IS NOT NULL AND "decided_by" IS NOT NULL
@@ -137,10 +138,10 @@ ALTER TABLE "trial_extension_requests" ADD CONSTRAINT "trial_extension_requests_
                      AND "decision_note" IS NOT NULL AND btrim("decision_note") <> ''
                      AND num_nonnulls("extension_days", "new_last_day", "closed_reason") = 0
     WHEN 'closed' THEN "decided_at" IS NOT NULL AND "decided_by" IS NOT NULL
-                     AND "extension_days" IS NULL
+                     AND "extension_days" IS NULL AND "closed_reason" IS NOT NULL
                      AND (("closed_reason" = 'direct_extension' AND "new_last_day" IS NOT NULL)
                        OR ("closed_reason" = 'made_unrestricted' AND "new_last_day" IS NULL))
-  END
+  END, false)
 );
 
 -- A request is decided once: only pending → decided, and nothing after that.
