@@ -42,7 +42,7 @@ Owner answers to the first draft's open questions (2 November 2026):
    - An owner-only in-app "Request extension" action notifies the platform operator, who approves or declines it in a
      minimal operator area (S14, S11).
    - The CLI extension stays as a fallback.
-8. **Sender (was OQ4):** emails come from `jobflow@shivomsangha.com`, and the owner adds SPF, DKIM and DMARC records in
+8. **Sender (was OQ4):** emails come from `admin@shivomsangha.com`, and the owner adds SPF, DKIM and DMARC records in
    Cloudflare DNS. The same address is the default support and reply-to address. Both are configurable by environment
    variable.
 9. **Defaults adopted (were OQ5–OQ9):**
@@ -320,7 +320,7 @@ As an owner, I want to always see how long my trial has left, so that I'm not su
 
    In the warning, critical and expired states:
    - the banner shows the support email address (the configured support address, which defaults to
-     `jobflow@shivomsangha.com`);
+     `admin@shivomsangha.com`);
    - owners also see a "Request extension" action (S14).
 2. Employees and subcontractors see no countdown. In the expired state they see "This company's account is read-only.
    Contact your owner." No trial dates are shown to them.
@@ -381,7 +381,7 @@ As an owner, I want reminders before my trial ends, so that I can arrange an ext
      - explains what read-only means;
      - gives both extension channels: the support email address, and a link to the in-app "Request extension" action
        (S14).
-   - Emails are sent from `jobflow@shivomsangha.com`, which is also the reply-to address by default. Both can be
+   - Emails are sent from `admin@shivomsangha.com`, which is also the reply-to address by default. Both can be
      configured (E1).
 2. **Sending rules:**
    - Each threshold is sent at most once per company and trial end date. Retries and multiple instances never send
@@ -531,9 +531,9 @@ for a contact.
 
 - **E1. Spike:** transactional email provider (research-dev). It must cover:
   - Australian or GDPR-grade data handling, cost and deliverability;
-  - sending from `jobflow@shivomsangha.com` on the main domain, with the owner adding SPF, DKIM and DMARC in
+  - sending from `admin@shivomsangha.com` on the main domain, with the owner adding SPF, DKIM and DMARC in
     Cloudflare DNS;
-  - environment-configured sender, reply-to and support addresses (each defaulting to `jobflow@shivomsangha.com`) and
+  - environment-configured sender, reply-to and support addresses (each defaulting to `admin@shivomsangha.com`) and
     an operator notification address;
   - bounce and complaint handling, and keeping the API key in a secret store.
 - **E2. ADR (architect):**
