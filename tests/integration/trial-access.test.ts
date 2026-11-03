@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Actor } from "@jobflow/authz";
+import type { Actor } from "../../packages/authz/src/index";
 import { addDays, sydneyDate, trialStatus } from "../../packages/domain/src";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
 import { resolveActor } from "../../apps/web/src/server/auth/actor";
