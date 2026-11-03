@@ -75,12 +75,13 @@ digests (invitations, #27), the `document_delete_retries` outbox (#170), tsx CLI
   demo accounts (`@example.test`) outside production.
   - Pages redirect to `/verify-email/pending`.
   - APIs return 403 `email_unverified`.
-  - **Accepting an invitation verifies the email.** The invitation token was sent to that address, so redeeming it
-    proves control of it. `acceptInvitation` sets `email_verified = true` from M6 on.
-  - **Backfill.** The M6 migration sets `email_verified = true` for every user with an accepted invitation, and writes
-    one `system` platform audit event per user. Demo accounts are unchanged.
-  - Any other account that existed before M6 and is unverified must verify (S3 AC6). That's what forces a
-    **deploy-order rule**: the email provider must work in an environment before this gate ships there.
+  - Accounts that existed before M6 and are unverified must verify (S3 AC6). That includes **invited** users:
+    accepting an invitation is **not** proof of mailbox control, because the owner copies and shares the link by hand
+    and no invitation email is sent (`docs/architecture/user-access.md`). An owner could invite any address and redeem
+    the link themselves. Invited accounts stay unverified until email verification or a password reset proves the
+    mailbox.
+  - This forces a **deploy-order rule**: the email provider must work in an environment before this gate ships
+    there, so existing members can verify on their next sign-in.
 
 ### D2. Request wrappers: every route declares one of five boundaries
 

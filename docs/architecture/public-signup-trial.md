@@ -94,7 +94,9 @@ The default `'unrestricted'` keeps old app versions and the demo seed working. O
 - **Write guard:** `CONSTRAINT TRIGGER audit_events_company_writable AFTER INSERT DEFERRABLE INITIALLY DEFERRED FOR
   EACH ROW EXECUTE FUNCTION jobflow_assert_company_writable()`.
   - It raises `55000` / `jobflow_company_read_only` when the company is `trial`, `read_only_from <= clock_timestamp()`,
-    and `current_setting('jobflow.read_only_exemption', true)` is null or isn't in `jobflow_read_only_exemptions()`.
+    and the audit row's `action` isn't in `jobflow_read_only_exemption_actions(current_setting('jobflow.read_only_exemption', true))`.
+  - A null or unknown key allows no action. A valid key allows only its own actions (ADR 0004 D4), so an unrelated
+    business write in an exempt transaction is still rolled back.
 
 ### New tables
 
@@ -225,7 +227,7 @@ Every response is JSON with `Cache-Control: private, no-store`. Errors look like
 | POST `/api/account/verification/resend` | `{ email, turnstileToken }` | **202** generic, always | IP 10/h, plus account 1/min and 5/day silently; Turnstile `resend` |
 | POST `/api/account/password/forgot` | `{ email, turnstileToken }` | **202** generic, always | IP 10/h, account 3/h silently; Turnstile `forgot` |
 | POST `/api/account/password/reset` | `{ token, password, passwordConfirmation }` | 200; 400 `token_invalid` or `fields` | IP 10/h |
-| POST `/api/invitations/accept` (existing) | unchanged | adds 403 `company_read_only` when the invitation was created on or after `read_only_from`. Success now also sets `email_verified = true` (ADR 0004 D1) | unchanged |
+| POST `/api/invitations/accept` (existing) | unchanged | adds 403 `company_read_only` when the invitation was created on or after `read_only_from`. It doesn't set `email_verified`: an invitation link isn't mailbox proof (ADR 0004 D1) | unchanged |
 
 ### Webhook (`withWebhook`)
 

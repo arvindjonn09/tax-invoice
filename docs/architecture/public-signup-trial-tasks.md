@@ -171,7 +171,11 @@ the ADR 0004 D1 deploy-order rule.
     on the T5 fixtures, including DST.
   - A demo company can't be `trial`. A `trial` company without its dates is refused.
   - The deferred `audit_events_company_writable` trigger rejects a commit after `read_only_from` with
-    `jobflow_company_read_only`, unless `jobflow.read_only_exemption` is a listed key.
+    `jobflow_company_read_only`, unless the audit row's action is one of the actions allowed for the
+    transaction's `jobflow.read_only_exemption` key (`jobflow_read_only_exemption_actions`).
+    - Tests show that each key admits its own actions, and that a valid key with an unrelated action (for example
+      `export` together with `invoice.issued`) is rejected and rolled back.
+    - A null, unknown or stale key admits nothing.
     - Tested: a commit after the instant fails, an exempt key passes, and an unknown key fails.
   - **S13:** every existing company is `unrestricted` and gets one `system` audit event `company.access_initialised`.
     A test proves no company is read-only after the migration.
@@ -318,10 +322,9 @@ the ADR 0004 D1 deploy-order rule.
   - `resolveActor()` returns `unverified` for unverified users, except non-production demo accounts.
     - `withPolicy` returns 403 `email_unverified`.
     - `withSession` exists with `allowUnverified`.
-    - An integration test shows that an unverified pre-existing user can't reach any company API.
-  - `acceptInvitation` sets `email_verified = true`. A migration backfills it for users with an accepted invitation,
-    writing one `system` platform audit event each, and tests show that such a user isn't sent to
-    `/verify-email/pending`.
+    - An integration test shows that an unverified pre-existing or invited user can't reach any company API.
+  - Accepting an invitation does **not** set `email_verified`, because the link is shared by the owner and isn't
+    mailbox proof. Tested.
   - The token never appears in logs, audit or platform events. The verify page sends `Referrer-Policy: no-referrer`.
 
 ### T15. [M6] Password reset by email
