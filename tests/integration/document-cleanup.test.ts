@@ -91,6 +91,12 @@ describe("unattached document cleanup (#137)", () => {
         "companies",
       ]),
     );
+    // The logo pairs with companies.id, not a company_id column (#211).
+    expect(await documentReferences(db)).toContainEqual({
+      tbl: "companies",
+      col: "logo_document_id",
+      companyCol: "id",
+    });
   });
 
   it("deletes old unattached uploads with an audit event; keeps recent and attached ones", async () => {

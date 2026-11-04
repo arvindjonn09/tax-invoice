@@ -3,9 +3,10 @@
 -- trial extension requests and the commit-time read-only write guard.
 -- Trial access state and the S13 backfill landed in #210.
 
--- A new enum value can't be used in the transaction that adds it, so this
--- runs on its own before the main transaction (the logo kind check below only
--- names it inside a function body, evaluated later).
+-- PostgreSQL 12+ accepts ADD VALUE inside a transaction, but the new value
+-- can't be used until that transaction commits. Nothing in this migration uses
+-- it: the logo kind check names it only inside a function body, evaluated at
+-- run time.
 ALTER TYPE "document_kind" ADD VALUE IF NOT EXISTS 'company_logo';
 
 BEGIN;
@@ -204,10 +205,11 @@ BEGIN
   END IF;
   IF exemption IS NOT NULL AND NEW.action = ANY (jobflow_read_only_exemption_actions(exemption)) THEN
     -- access_removal admits a membership change only when it is a pure
-    -- deactivation: auditChanges() lists changed keys only, so a role change
-    -- always carries "role".
+    -- deactivation: auditChanges() lists changed keys only, so the change set
+    -- must hold isActive → false and nothing else (a role change, or any
+    -- field a later PATCH adds, is refused).
     IF NEW.action <> 'membership.access_updated' OR (
-         NOT (NEW.metadata -> 'changes' ? 'role')
+         (NEW.metadata -> 'changes') - 'isActive' = '{}'::jsonb
          AND NEW.metadata #>> '{changes,isActive,after}' = 'false'
        ) THEN
       RETURN NULL;
