@@ -38,7 +38,8 @@ const longDate = (day: string) =>
 
 /**
  * Persistent free-trial notice (S8). Owners, managers and accountants see the
- * countdown and end date; other roles only see that the trial has ended.
+ * countdown and end date; other roles only see that the trial has ended, with
+ * no dates.
  */
 export function TrialBanner({
   status,
@@ -52,6 +53,18 @@ export function TrialBanner({
   supportEmail: string;
 }) {
   const ends = longDate(lastDay);
+  if (status.phase === "expired" && !showCountdown) {
+    return (
+      <section
+        aria-label="Trial ended"
+        className="flex flex-wrap items-center gap-2 border-b-2 border-danger-foreground bg-danger p-4 text-danger-foreground"
+      >
+        <span aria-hidden="true">⏱</span>
+        <strong>This company&apos;s free trial has ended.</strong>
+        <span>Contact your company owner.</span>
+      </section>
+    );
+  }
   if (status.phase === "expired") {
     return (
       <section

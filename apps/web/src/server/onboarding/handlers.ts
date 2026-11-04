@@ -3,7 +3,7 @@ import { sydneyDate, trialWindow } from "@jobflow/domain";
 import { z } from "zod";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import { withAudit } from "../../../../../packages/database/src/index";
-import { isVerified } from "../auth/actor";
+import { isVerified, setActiveCompany } from "../auth/actor";
 import type { Auth } from "../auth/config";
 import { privateJson } from "../authz/policy";
 import { invalid } from "../company/handlers";
@@ -235,6 +235,59 @@ export function createCompany(deps: OnboardingDependencies) {
       }
       const reference = crypto.randomUUID();
       log("error", "onboarding.unhandled", {
+        reference,
+        error: safeError(error),
+      });
+      return privateJson(
+        { error: "Something went wrong. Try again.", reference },
+        { status: 500 },
+      );
+    }
+  };
+}
+
+const SelectCompany = z.object({ companyId: z.uuid() }).strict();
+
+/**
+ * POST /api/session/company: choose which company this session acts in. 404
+ * unless the verified caller is an active member (S1, S12).
+ */
+export function selectCompany(deps: OnboardingDependencies) {
+  return async (request: Request): Promise<Response> => {
+    try {
+      requireTrustedOrigin(request, deps.trustedOrigins());
+      requireBodyWithin(request, 4096);
+      const session = await deps
+        .auth()
+        .api.getSession({ headers: request.headers });
+      if (!session) throw new HttpError(401, "Sign in to continue");
+      if (!isVerified(session.user)) {
+        throw new HttpError(403, "Verify your email address first");
+      }
+      const parsed = SelectCompany.safeParse(
+        await readJson(request, 4096).catch((error: unknown) => {
+          if (error instanceof HttpError && error.status !== 400) throw error;
+          return null;
+        }),
+      );
+      if (!parsed.success) return invalid(parsed.error);
+      const changed = await setActiveCompany(
+        deps.auth(),
+        deps.db(),
+        request.headers,
+        parsed.data.companyId,
+      );
+      if (!changed) throw new HttpError(404, "Company not found");
+      return new Response(null, {
+        status: 204,
+        headers: { "cache-control": "private, no-store" },
+      });
+    } catch (error) {
+      if (error instanceof HttpError) {
+        return privateJson({ error: error.message }, { status: error.status });
+      }
+      const reference = crypto.randomUUID();
+      log("error", "onboarding.select_company_failed", {
         reference,
         error: safeError(error),
       });

@@ -4,7 +4,10 @@ import type { PrismaClient } from "../../packages/database/src/generated/prisma/
 import { resolveActor } from "../../apps/web/src/server/auth/actor";
 import { createAuth } from "../../apps/web/src/server/auth/config";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
-import { createCompany } from "../../apps/web/src/server/onboarding/handlers";
+import {
+  createCompany,
+  selectCompany,
+} from "../../apps/web/src/server/onboarding/handlers";
 import {
   type CommittedDatabase,
   withCommittedDatabase,
@@ -225,5 +228,102 @@ describe("onboarding", () => {
     });
     keyless.headers.delete("idempotency-key");
     expect((await handler(keyless)).status).toBe(400);
+  });
+});
+
+describe("choosing a company (S12)", () => {
+  function choose(cookies: Headers, companyId: string) {
+    const body = JSON.stringify({ companyId });
+    const headers = new Headers(cookies);
+    headers.set("origin", ORIGIN);
+    headers.set("content-type", "application/json");
+    headers.set("content-length", String(Buffer.byteLength(body)));
+    return selectCompany({
+      db: () => db,
+      auth: () => auth,
+      trustedOrigins: () => [ORIGIN],
+    })(
+      new Request(`${ORIGIN}/api/session/company`, {
+        method: "POST",
+        headers,
+        body,
+      }),
+    );
+  }
+
+  it("lets a member of two companies pick either, and nothing else", async () => {
+    const email = "two-companies@example.com";
+    const first = await session(email);
+    const created = await handler(
+      post(
+        first,
+        { businessName: "Mine", gstRegistered: false },
+        "two-key-001",
+      ),
+    );
+    const { companyId: mine } = (await created.json()) as { companyId: string };
+    const other = await session("other-owner@example.com");
+    const made = await handler(
+      post(
+        other,
+        { businessName: "Theirs", gstRegistered: false },
+        "two-key-002",
+      ),
+    );
+    const { companyId: theirs } = (await made.json()) as { companyId: string };
+    const stranger = await session("stranger-owner@example.com");
+    const strangers = await handler(
+      post(
+        stranger,
+        { businessName: "Else", gstRegistered: false },
+        "two-key-003",
+      ),
+    );
+    const { companyId: elsewhere } = (await strangers.json()) as {
+      companyId: string;
+    };
+    const user = await db.user.findUniqueOrThrow({ where: { email } });
+    const owner = await db.user.findUniqueOrThrow({
+      where: { email: "other-owner@example.com" },
+    });
+    await db.membership.create({
+      data: {
+        companyId: theirs,
+        userId: user.id,
+        role: "employee",
+        createdBy: owner.id,
+      },
+    });
+    // A new session has no remembered company: the user must choose.
+    const response = await auth.handler(
+      new Request(`${ORIGIN}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: ORIGIN,
+          "x-forwarded-for": `198.51.100.${(ipCounter += 1)}`,
+        },
+        body: JSON.stringify({ email, password: PASSWORD }),
+      }),
+    );
+    const fresh = new Headers({
+      cookie: response.headers
+        .getSetCookie()
+        .map((value) => value.split(";")[0])
+        .join("; "),
+    });
+    expect((await resolveActor(auth, db, fresh)).status).toBe("choose-company");
+    expect((await choose(fresh, elsewhere)).status).toBe(404);
+    expect((await resolveActor(auth, db, fresh)).status).toBe("choose-company");
+    expect((await choose(fresh, theirs)).status).toBe(204);
+    expect(await resolveActor(auth, db, fresh)).toMatchObject({
+      status: "active",
+      actor: { companyId: theirs, role: "employee" },
+    });
+    expect((await choose(fresh, mine)).status).toBe(204);
+    expect(await resolveActor(auth, db, fresh)).toMatchObject({
+      actor: { companyId: mine, role: "owner" },
+    });
+    expect((await choose(new Headers(), mine)).status).toBe(401);
   });
 });

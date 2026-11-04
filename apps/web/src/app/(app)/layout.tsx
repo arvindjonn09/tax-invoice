@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -6,7 +5,6 @@ import { trialStatus } from "@jobflow/domain";
 import { AppShell } from "@/components/shell/app-shell";
 import { TrialBanner } from "@/components/shell/banners";
 import { supportEmail } from "@/server/email";
-import { EmptyState } from "@/components/shell/states";
 import { getAuth, getDatabase, resolveActor } from "@/server/auth";
 import { ROLE_LABELS, navLinksFor } from "@/server/shell";
 
@@ -30,29 +28,7 @@ export default async function SignedInLayout({
   if (resolution.status === "unverified") redirect("/verify-email/pending");
   // Verified, but no company yet: set one up (S1, S5).
   if (resolution.status === "no-membership") redirect("/onboarding");
-  if (resolution.status !== "active") {
-    return (
-      <main className="foundation">
-        <EmptyState
-          title={
-            resolution.status === "choose-company"
-              ? "Choose a company"
-              : "No company access"
-          }
-          description={
-            resolution.status === "choose-company"
-              ? "You belong to several companies. Company switching arrives with user management (#27)."
-              : "Your account is not an active member of any company. Ask your company owner to invite you."
-          }
-          action={
-            <Link className="underline" href="/account">
-              Account and sign out
-            </Link>
-          }
-        />
-      </main>
-    );
-  }
+  if (resolution.status === "choose-company") redirect("/choose-company");
   const { actor } = resolution;
   const company = await getDatabase().company.findUniqueOrThrow({
     where: { id: actor.companyId },
