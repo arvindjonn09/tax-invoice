@@ -108,6 +108,11 @@ describe("read_only_from: SQL agrees with packages/domain trialWindow", () => {
     "2026-07-14T02:00:00Z", // AEST throughout
     "2026-09-20T02:00:00Z", // crosses DST start
     "2027-03-20T03:00:00Z", // crosses DST end
+    // read_only_from on the DST days themselves (Claude A, #255 review):
+    "2026-09-04T02:00:00Z", // last day 3 Oct → read-only 00:00 AEST on 4 Oct
+    "2026-09-05T02:00:00Z", // last day 4 Oct → read-only 00:00 AEDT on 5 Oct
+    "2027-03-05T02:00:00Z", // last day 3 Apr → read-only 00:00 AEDT on 4 Apr
+    "2027-03-06T02:00:00Z", // last day 4 Apr → read-only 00:00 AEST on 5 Apr
   ])("trial started %s", async (start) => {
     const window = trialWindow(new Date(start));
     const { readOnlyFrom } = await setTrial(window.lastDay);
@@ -156,6 +161,37 @@ describe("commit-time read-only guard", () => {
           where: { id: companyId },
           data: { trialLastDay: day("2020-01-01") },
         }),
+      ),
+    ).rejects.toThrow(/jobflow_company_read_only/);
+  });
+
+  it("judges expiry by the clock at commit, not at transaction start (S9 AC4)", async () => {
+    await setTrial("2099-12-31");
+    // Make the company expire one second from now: set read_only_from
+    // directly, with the deriving trigger switched off for that statement.
+    await client.$transaction([
+      client.$executeRaw`ALTER TABLE companies DISABLE TRIGGER companies_read_only_from`,
+      client.$executeRaw`UPDATE companies SET read_only_from = clock_timestamp() + interval '1 second' WHERE id = ${companyId}::uuid`,
+      client.$executeRaw`ALTER TABLE companies ENABLE TRIGGER companies_read_only_from`,
+    ]);
+    // The transaction starts (and writes) while the company is writable,
+    // then commits after expiry: with now() instead of clock_timestamp()
+    // in the guard, this would wrongly commit.
+    await expect(
+      client.$transaction(
+        async (tx) => {
+          await tx.auditEvent.create({
+            data: {
+              companyId,
+              createdBy: owner.id,
+              action: "customer.created",
+              targetType: "company",
+              targetId: companyId,
+            },
+          });
+          await tx.$executeRaw`SELECT pg_sleep(2)`;
+        },
+        { timeout: 10_000 },
       ),
     ).rejects.toThrow(/jobflow_company_read_only/);
   });
@@ -253,6 +289,13 @@ describe("commit-time read-only guard", () => {
         },
       },
       { changes: { isActive: { before: false, after: true } } }, // reactivation
+      // Deactivation plus any other changed field (a later PATCH field).
+      {
+        changes: {
+          isActive: { before: true, after: false },
+          title: { before: null, after: "Lead" },
+        },
+      },
       {},
     ])
       await expect(
@@ -446,11 +489,75 @@ describe("trial extension requests", () => {
   });
 
   it("requires the requester to be a member of the company", async () => {
+    // A fully valid declined row, so only the membership FK can refuse it.
     await expect(
       client.trialExtensionRequest.create({
-        data: { ...base(), requestedBy: other.id, status: "declined" },
+        data: {
+          ...base(),
+          requestedBy: other.id,
+          status: "declined",
+          decidedAt: new Date(),
+          decidedBy: other.id,
+          decisionNote: "Synthetic decline",
+        },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/trial_extension_requests_requester_fkey/);
+  });
+
+  it("accepts each decided status with exactly its fields", async () => {
+    const decided = { decidedAt: new Date(), decidedBy: other.id };
+    for (const data of [
+      {
+        status: "closed" as const,
+        closedReason: "direct_extension",
+        newLastDay: day("2026-12-20"),
+      },
+      { status: "closed" as const, closedReason: "made_unrestricted" },
+      { status: "declined" as const, decisionNote: "Synthetic decline" },
+      {
+        status: "approved" as const,
+        extensionDays: 365,
+        newLastDay: day("2027-12-01"),
+      },
+    ])
+      await expect(
+        client.trialExtensionRequest.create({
+          data: { ...base(), ...decided, ...data },
+        }),
+        JSON.stringify(data),
+      ).resolves.toBeDefined();
+  });
+
+  it("refuses decided rows with the wrong or missing fields", async () => {
+    const decided = { decidedAt: new Date(), decidedBy: other.id };
+    for (const data of [
+      // made_unrestricted carries no new last day.
+      {
+        status: "closed" as const,
+        closedReason: "made_unrestricted",
+        newLastDay: day("2026-12-20"),
+      },
+      // A blank decline reason.
+      { status: "declined" as const, decisionNote: "   " },
+    ])
+      await expect(
+        client.trialExtensionRequest.create({
+          data: { ...base(), ...decided, ...data },
+        }),
+        JSON.stringify(data),
+      ).rejects.toThrow(/trial_extension_requests_decision/);
+    // 366 days: a valid approved row otherwise, so only the range check fails.
+    await expect(
+      client.trialExtensionRequest.create({
+        data: {
+          ...base(),
+          ...decided,
+          status: "approved",
+          extensionDays: 366,
+          newLastDay: day("2027-12-02"),
+        },
+      }),
+    ).rejects.toThrow(/trial_extension_requests_extension_days/);
   });
 
   it("carries exactly the fields of its status", async () => {
@@ -491,12 +598,6 @@ describe("trial extension requests", () => {
         },
       }),
     ).rejects.toThrow(/trial_extension_requests_decision/);
-    await expect(
-      client.trialExtensionRequest.update({
-        where: { id: pending.id },
-        data: { extensionDays: 400 },
-      }),
-    ).rejects.toThrow();
     // Closed without any reason (a NULL CHECK result must not pass).
     for (const newLastDay of [null, day("2026-12-15")])
       await expect(
