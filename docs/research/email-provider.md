@@ -50,9 +50,10 @@ Zoho SMTP has no signed bounce or complaint webhook. A bounce arrives as a deliv
 mailbox.
 
 - **For now this is manual.** When an NDR shows a hard bounce (5.1.x "user unknown", 5.7.x refused), the operator
-  suppresses that address on the host. The `email_suppressions.reason` CHECK in #247 already allows `manual`. #215
-  should add `pnpm email suppress --address <a> --reason bounce|complaint|manual` (host CLI, audited in
-  `platform_audit_events`, storing the HMAC only) and an `unsuppress`.
+  suppresses that address on the host. The `email_suppressions.reason` CHECK in #247 already allows `manual`.
+  **#259** adds `pnpm email suppress --address <a> --reason bounce|complaint|manual` (host CLI, audited in
+  `platform_audit_events`, storing the HMAC only) and an `unsuppress`, together with the pacing,
+  account-first ordering and `email.rate_limited` logging described above. None of these is on `main` yet.
 - **Later:** an IMAP reader on `admin@` can parse NDRs (RFC 3464 `message/delivery-status`) and suppress
   automatically. It isn't needed at pilot volume.
 - `POST /api/webhooks/email` (`withWebhook`) **doesn't ship with Zoho**. It ships only with a provider that signs
@@ -196,9 +197,12 @@ below mark where they go.
 2. **SNS topic** per environment, with an **HTTPS subscription** to `https://<host>/api/webhooks/email`. Set the
    topic attribute **`SignatureVersion` to `2`** (SHA-256). SNS topics default to version 1 (SHA-1), which the handler
    refuses, so genuine notifications would be rejected without this setting.
-3. **Subscription confirmation is done by hand.** The handler stores nothing and never fetches the `SubscribeURL`.
-   The owner confirms the subscription in the SNS console, so a forged message can't make the server fetch an
-   arbitrary URL.
+3. **Subscription confirmation is done by hand, and the server never fetches the `SubscribeURL`.** SNS sends the
+   confirmation token only to the endpoint, so the handler, after verifying the message signature (step 4), logs the
+   `TopicArn` and `Token` as `email.sns_subscription_pending`. The owner then runs
+   `aws sns confirm-subscription --topic-arn <arn> --token <token>` (or pastes the URL into the console). Nothing
+   is fetched automatically, so a forged message can't make the server fetch an arbitrary URL. *(Fallback only: Zoho
+   SMTP has no webhook.)*
 4. **Verification in `withWebhook`** (see the #238 review), before parsing anything else:
    - `SignatureVersion` is `2` (SHA-256), and `SigningCertURL` is `https:` with the host exactly
      `sns.ap-southeast-2.amazonaws.com` and a path ending in `.pem`. The certificate is fetched, cached, and checked

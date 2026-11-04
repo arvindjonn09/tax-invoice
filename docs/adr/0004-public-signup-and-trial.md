@@ -305,7 +305,7 @@ Enforcement has two layers, and the database layer is authoritative.
     reputation, and bulk sending isn't supported. Exceeding it blocks sending for up to an hour. So the dispatcher
     sends at most `EMAIL_MAX_PER_HOUR` (default 40) and sends account emails (verification, reset, password
     changed, account exists) before trial reminders and notices. A reminder that misses its hour simply waits for
-    the next sweep. See `docs/research/email-provider.md`.
+    the next sweep. See `docs/research/email-provider.md`. **Not built yet: tracked in #259.**
 - **Addresses.** Sender, reply-to and support default to `admin@shivomsangha.com` through `EMAIL_FROM`,
   `EMAIL_REPLY_TO` and `SUPPORT_EMAIL`. The **address** in `EMAIL_FROM` (which may have a display
   name, as in `"JobFlow <admin@shivomsangha.com>"`) must equal `SMTP_USER` or an alias verified in Zoho, or Zoho
