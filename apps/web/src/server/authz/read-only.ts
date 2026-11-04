@@ -1,10 +1,16 @@
-import { HttpError } from "../http/guards";
-import type { CompanyAccess } from "../auth/actor";
+import { hasDatabaseError } from "../http/database-errors";
 
 // ADR 0004 D4, route layer (#222). The database guard at commit is
 // authoritative; this gives a fast, clear 403 before any work is done.
 
-/** Unsafe methods a read-only company can't use, unless allowed below. */
+/** Methods that never change data: never blocked (an allowlist, so an
+ * unexpected verb is treated as unsafe). Same set as http/guards.ts. */
+export const SAFE_METHODS: ReadonlySet<string> = new Set([
+  "GET",
+  "HEAD",
+  "OPTIONS",
+]);
+/** The unsafe methods route handlers export (for the route matrix tests). */
 export const UNSAFE_METHODS: ReadonlySet<string> = new Set([
   "POST",
   "PUT",
@@ -29,8 +35,8 @@ export const READ_ONLY_ALLOWED: Readonly<Record<string, string>> = {
 };
 
 export const READ_ONLY_RESPONSE = {
-  error:
-    "This company's trial has ended, so it's read-only. You can still view and export everything.",
+  // Role-neutral: workers can't export, and S8 AC2 shows them no trial details.
+  error: "This company's account is read-only, so this change can't be saved.",
   code: "company_read_only",
 } as const;
 
@@ -56,7 +62,7 @@ export function allowedWhileReadOnly(
   pathname: string,
 ): boolean {
   const upper = method.toUpperCase();
-  if (!UNSAFE_METHODS.has(upper)) return true;
+  if (SAFE_METHODS.has(upper)) return true;
   return ALLOWED.some(
     (entry) => entry.method === upper && entry.pattern.test(pathname),
   );
@@ -64,30 +70,5 @@ export function allowedWhileReadOnly(
 
 /** The SQLSTATE 55000 `jobflow_company_read_only` error from the commit-time guard. */
 export function isCompanyReadOnlyError(error: unknown): boolean {
-  const visited = new WeakSet<object>();
-  const inspect = (value: unknown, depth: number): boolean => {
-    if (!value || typeof value !== "object" || visited.has(value)) return false;
-    visited.add(value);
-    const row = value as Record<string, unknown>;
-    const state = row.code ?? row.originalCode;
-    if (
-      state === "55000" &&
-      [row.message, row.originalMessage].some(
-        (message) =>
-          typeof message === "string" &&
-          message.includes("jobflow_company_read_only"),
-      )
-    )
-      return true;
-    if (depth === 5) return false;
-    return [row.meta, row.cause, row.driverAdapterError].some((child) =>
-      inspect(child, depth + 1),
-    );
-  };
-  return inspect(error, 0);
-}
-
-/** For server actions that write company data: refuse while read-only. */
-export function requireWritableActor(access: CompanyAccess | undefined): void {
-  if (access?.readOnly) throw new HttpError(403, READ_ONLY_RESPONSE.error);
+  return hasDatabaseError(error, "55000", "jobflow_company_read_only");
 }

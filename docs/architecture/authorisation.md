@@ -50,7 +50,7 @@ A trial company is read-only from `read_only_from`, which is Sydney midnight aft
    - `PATCH /api/users/[id]`: deactivation only (a role change is refused at the database);
    - `DELETE /api/users/invitations/[id]`: revoking an invitation.
 
-   Safe methods (GET, including every export) are never blocked. Server actions that write company data call `requireWritableActor()`. A new unsafe route is guarded by default; `tests/unit/read-only.test.ts` pins the allowlist, and `tests/integration/read-only-guard.test.ts` sends every unsafe route through `withPolicy` for an expired company.
+   Safe methods (GET, including every export) are never blocked. There are no company-writing server actions yet (the only one is sign-out); the first one must refuse a read-only company too. A new unsafe route is guarded by default; `tests/unit/read-only.test.ts` pins the allowlist, and `tests/integration/read-only-guard.test.ts` sends every unsafe route through `withPolicy` for an expired company.
 2. **Commit-time database guard.** `audit_events_company_writable` refuses the commit of any audited write for a read-only company (SQLSTATE `55000`, `jobflow_company_read_only`; see DATA_MODEL.md). `withPolicy` and the invitation-accept handler map that error to the same 403, which covers a write that started before expiry and commits after it. A handler opts a transaction in with `withAudit(db, work, { readOnlyExemption })`. The database admits only that key's actions (`READ_ONLY_EXEMPTION_ACTIONS`, kept equal to the SQL map by a parity test):
    - `export`: company and report exports;
    - `record_rendering`: issued-invoice PDFs;

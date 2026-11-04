@@ -14,7 +14,8 @@ describe("READ_ONLY_ALLOWED", () => {
     entries.filter((e) => e.permission).map((e) => `${e.method} ${e.route}`),
   );
 
-  it("is exactly the ADR 0004 D4 list", () => {
+  // #231 adds POST /api/company/trial/extension-requests here when it ships.
+  it("is exactly the ADR 0004 D4 list (so far)", () => {
     expect(Object.keys(READ_ONLY_ALLOWED).sort()).toEqual([
       "DELETE /api/users/invitations/[id]",
       "PATCH /api/users/[id]",

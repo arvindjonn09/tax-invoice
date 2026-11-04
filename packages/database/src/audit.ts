@@ -55,7 +55,6 @@ function redact(key: string, value: Json): Json {
   return value;
 }
 
-/** Field-level diff of `before` → `after`, redacted and limited to changed fields. */
 /**
  * ADR 0004 D4: the read-only exemption keys and the audit actions each admits
  * while a company is read-only. Mirrors the SQL function
@@ -78,6 +77,7 @@ export const READ_ONLY_EXEMPTION_ACTIONS = {
 } as const satisfies Record<string, readonly string[]>;
 export type ReadOnlyExemption = keyof typeof READ_ONLY_EXEMPTION_ACTIONS;
 
+/** Field-level diff of `before` → `after`, redacted and limited to changed fields. */
 export function auditChanges(
   before: Readonly<Record<string, unknown>> = {},
   after: Readonly<Record<string, unknown>> = {},
@@ -147,7 +147,7 @@ export async function withAudit<T>(
   const { readOnlyExemption, ...transactionOptions } = options ?? {};
   return client.$transaction(async (tx) => {
     if (readOnlyExemption !== undefined) {
-      if (!(readOnlyExemption in READ_ONLY_EXEMPTION_ACTIONS))
+      if (!Object.hasOwn(READ_ONLY_EXEMPTION_ACTIONS, readOnlyExemption))
         throw new RangeError(
           `Unknown read-only exemption "${readOnlyExemption}"`,
         );

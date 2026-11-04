@@ -251,6 +251,17 @@ describe("withAudit readOnlyExemption", () => {
     expect(unknown!.actions).toEqual([]);
   });
 
+  it("has no SQL-only key: every key in the SQL CASE exists in TypeScript", async () => {
+    const [row] = await db.$queryRaw<{ definition: string }[]>`
+      SELECT pg_get_functiondef('jobflow_read_only_exemption_actions(text)'::regprocedure) AS definition`;
+    const sqlKeys = [...row!.definition.matchAll(/WHEN '([a-z_]+)' THEN/g)].map(
+      (match) => match[1]!,
+    );
+    expect(sqlKeys.sort()).toEqual(
+      Object.keys(READ_ONLY_EXEMPTION_ACTIONS).sort(),
+    );
+  });
+
   it("refuses an unknown key before touching the database", async () => {
     await expect(
       withAudit(db, async () => undefined, {
@@ -293,6 +304,27 @@ describe("allowlisted user routes while read-only", () => {
       context(id),
     );
     expect(off.status).toBe(200);
+    const member = await db.membership.findUniqueOrThrow({ where: { id } });
+    expect(member).toMatchObject({ isActive: false, role: "employee" });
+  });
+
+  it("refuses a deactivation combined with a role change, and a reactivation, at the route", async () => {
+    await expire();
+    const update = withPolicy("user.manage", users.update);
+    const id = ids.employeeMembership!;
+    for (const body of [
+      { isActive: false, role: "manager" },
+      { isActive: true },
+    ]) {
+      const response = await update(
+        request("PATCH", `/api/users/${id}`, body),
+        context(id),
+      );
+      expect(response.status, JSON.stringify(body)).toBe(403);
+      expect(await response.json()).toMatchObject({
+        code: "company_read_only",
+      });
+    }
     const member = await db.membership.findUniqueOrThrow({ where: { id } });
     expect(member).toMatchObject({ isActive: false, role: "employee" });
   });
