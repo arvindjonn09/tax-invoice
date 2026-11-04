@@ -269,6 +269,69 @@ describe("GET /api/company/trial", () => {
     expect(await demo.json()).toEqual(unrestricted);
   });
 
+  it("computes phase and days from the database clock, not the app's", async () => {
+    // A stub database whose clock reads 25 Nov 2026 (Sydney). The real
+    // clock is weeks away, so a handler using new Date() would get it wrong.
+    const fixedNow = new Date("2026-11-25T04:00:00Z");
+    const stubbed = trialHandlers(
+      () =>
+        ({
+          $queryRaw: async () => [
+            {
+              access_mode: "trial",
+              last_day: "2026-12-01",
+              read_only_from: new Date("2026-12-01T13:00:00Z"),
+              trial_extension_count: 0,
+              read_only: false,
+              now: fixedNow,
+            },
+          ],
+        }) as unknown as PrismaClient,
+      { SUPPORT_EMAIL: "" },
+    );
+    const actor: Actor = { userId: owner.id, companyId, role: "owner" };
+    const body = (await (
+      await stubbed.status({
+        actor,
+        request: new Request("http://localhost/api/company/trial"),
+        context: undefined,
+      })
+    ).json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ daysRemaining: 7, phase: "warning" });
+    expect(trialStatus("2026-12-01", fixedNow)).toEqual({
+      daysRemaining: 7,
+      phase: "warning",
+    });
+  });
+
+  it.each([
+    [0, 1, "critical"], // last day = today
+    [7, 8, "normal"], // the first normal day
+    [6, 7, "warning"],
+  ] as const)(
+    "last day today + %i → N = %i, %s (T5 fixtures)",
+    async (offset, daysRemaining, phase) => {
+      await setTrial(addDays(today(), offset));
+      expect(await status("owner")).toMatchObject({ daysRemaining, phase });
+    },
+  );
+
+  it("treats a blank SUPPORT_EMAIL as unset, like the email module", async () => {
+    await setTrial(null);
+    for (const value of ["", "   "]) {
+      const blank = trialHandlers(() => client, { SUPPORT_EMAIL: value });
+      const actor: Actor = { userId: owner.id, companyId, role: "owner" };
+      const response = await blank.status({
+        actor,
+        request: new Request("http://localhost/api/company/trial"),
+        context: undefined,
+      });
+      expect(await response.json()).toMatchObject({
+        supportEmail: DEFAULT_SUPPORT_EMAIL,
+      });
+    }
+  });
+
   it("uses the configured support address", async () => {
     const configured = trialHandlers(() => client, {
       SUPPORT_EMAIL: "support@synthetic.example",

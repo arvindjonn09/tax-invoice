@@ -3,8 +3,9 @@ import { type TrialPhase, trialStatus } from "@jobflow/domain";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import { type PolicyHandler, privateJson } from "../authz/policy";
 
-/** Default support address (ADR 0004 D7: Zoho SMTP, admin@). */
-export const DEFAULT_SUPPORT_EMAIL = "admin@shivomsangha.com";
+import { supportEmail } from "../email/addresses";
+
+export { DEFAULT_SUPPORT_EMAIL } from "../email/addresses";
 
 /** Full trial status, for `trial.read` holders (owner, manager, accountant). */
 export type TrialStatusView = {
@@ -64,7 +65,7 @@ export function trialHandlers(
       readOnlyFrom: trial
         ? (company.read_only_from?.toISOString() ?? null)
         : null,
-      supportEmail: env.SUPPORT_EMAIL?.trim() || DEFAULT_SUPPORT_EMAIL,
+      supportEmail: supportEmail(env),
       extended: trial && company.trial_extension_count > 0,
     } satisfies TrialStatusView);
   };
