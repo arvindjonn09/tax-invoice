@@ -20,6 +20,8 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { EICAR, type FakeClamd, startFakeClamd } from "../helpers/fake-clamd";
+import { clamdScanner } from "../../apps/web/src/server/documents/scanner";
 
 // #34: private storage — type/size allow-list, random keys, links only after
 // authz, expired or forged links fail, other companies never get a URL.
@@ -282,6 +284,81 @@ describe("uploads", () => {
       maxBodyBytes: UPLOAD_BODY_LIMIT,
     })(uploadRequest("owner", PDF), undefined);
     expect(response.status).toBe(503);
+  });
+});
+
+describe("malware scanning (#136)", () => {
+  let clamd: FakeClamd;
+  beforeAll(async () => {
+    clamd = await startFakeClamd();
+  });
+  afterAll(() => clamd.close());
+
+  function scanned(required: boolean, port = () => clamd.port) {
+    const own = new MemoryStore();
+    const scanning = documentHandlers({
+      ...deps,
+      store: () => own,
+      scanner: () => ({
+        required,
+        scanner: clamdScanner({
+          host: "127.0.0.1",
+          port: port(),
+          timeoutMs: 500,
+        }),
+      }),
+    });
+    return {
+      store: own,
+      upload: (request: Request) =>
+        withPolicy("document.upload", scanning.upload, {
+          maxBodyBytes: UPLOAD_BODY_LIMIT,
+        })(request, undefined),
+    };
+  }
+  const count = () => db.document.count({ where: { companyId } });
+
+  it("stores a clean file", async () => {
+    clamd.mode = "normal";
+    const { store: own, upload: send } = scanned(true);
+    const response = await send(uploadRequest("owner", PDF));
+    expect(response.status).toBe(201);
+    expect(own.objects.size).toBe(1);
+  });
+
+  it("refuses an infected file with a safe error and stores nothing", async () => {
+    clamd.mode = "normal";
+    const before = await count();
+    const { store: own, upload: send } = scanned(true);
+    const infected = new Uint8Array(Buffer.from(`%PDF-1.7\n${EICAR}\n%%EOF\n`));
+    const response = await send(uploadRequest("owner", infected));
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/flagged as unsafe/);
+    expect(JSON.stringify(body)).not.toMatch(/EICAR|Win\.Test/);
+    expect(own.objects.size).toBe(0);
+    expect(await count()).toBe(before);
+  });
+
+  it("fails closed when the scanner can't answer, and when it's required but missing", async () => {
+    const before = await count();
+    clamd.mode = "error";
+    const broken = scanned(true);
+    expect((await broken.upload(uploadRequest("owner", PDF))).status).toBe(503);
+    expect(broken.store.objects.size).toBe(0);
+    const own = new MemoryStore();
+    const missing = documentHandlers({
+      ...deps,
+      store: () => own,
+      scanner: () => ({ required: true, scanner: null }),
+    });
+    const response = await withPolicy("document.upload", missing.upload, {
+      maxBodyBytes: UPLOAD_BODY_LIMIT,
+    })(uploadRequest("owner", PDF), undefined);
+    expect(response.status).toBe(503);
+    expect(own.objects.size).toBe(0);
+    expect(await count()).toBe(before);
+    clamd.mode = "normal";
   });
 });
 

@@ -26,7 +26,7 @@ Performed on 2 November 2026 by Claude B, on `main` after #198 (pinned images), 
 
 ## Open before real data (owner and operations)
 
-1. **Malware scanning of uploads (#136).** Deferred by the owner on 24 October. This is an open risk, not an accepted one: uploads are private and never executed, but files are not scanned.
+1. ~~**Malware scanning of uploads (#136).**~~ Built on 5 November 2026 (owner decision: ClamAV). Every upload is scanned before storage; infected files are refused, and uploads fail closed on staging and production when the scanner can't answer. Still to do on the host: set the digest-pinned `CLAMAV_IMAGE` (see `docs/ops/staging.md`).
 2. **Staging host hardening (#168).** Still to do: a non-superuser migration owner, the SCRAM password-verifier handoff, a policy blocking access to the cloud metadata service, Postgres/nginx privilege limits, and IPv6 rollout checks. These need the real host.
 3. **Maintenance credentials (#170).** Provision the separate maintenance database login, the delete-only S3 credential and the cleanup timer when staging is set up.
 4. ~~**Development audit exception.**~~ Closed on 2 November 2026: braces is no longer installed, and neither audit has exceptions (see [audit exceptions](audit-exceptions.md)).

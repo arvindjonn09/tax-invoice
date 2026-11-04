@@ -42,6 +42,8 @@ describe("staging Compose (#64)", () => {
   it("pins every external image and both Dockerfile bases by digest (#168)", () => {
     for (const [, image] of compose.matchAll(/image: (\S+)/g)) {
       if (image!.startsWith("jobflow-")) continue; // locally built release image
+      // #136: set on the host, digest-pinned; the deploy gate enforces it.
+      if (image!.startsWith("${CLAMAV_IMAGE:?")) continue;
       expect(image).toMatch(/:[\w.-]+@sha256:[a-f0-9]{64}$/);
     }
     expect(dockerfile).toMatch(
@@ -51,6 +53,55 @@ describe("staging Compose (#64)", () => {
       /^ARG NODE_IMAGE=node:24-bookworm-slim@sha256:[a-f0-9]{64}$/m,
     );
     expect(dockerfile.match(/^FROM \$\{NODE_IMAGE\}/gm)).toHaveLength(2);
+  });
+});
+
+describe("malware scanning service (#136)", () => {
+  const deploy = readFileSync(
+    new URL("../../infra/staging/deploy.sh", import.meta.url),
+    "utf8",
+  );
+  const example = readFileSync(
+    new URL("../../infra/staging/env/compose.env.example", import.meta.url),
+    "utf8",
+  );
+  const web = readFileSync(
+    new URL("../../infra/staging/env/web.env.example", import.meta.url),
+    "utf8",
+  );
+  const block = compose.slice(
+    compose.indexOf("\n  clamav:\n"),
+    compose.indexOf("\n  nginx:\n"),
+  );
+
+  it("runs clamd from a required, digest-pinned image the deploy gate checks", () => {
+    expect(block).toMatch(/image: \$\{CLAMAV_IMAGE:\?/);
+    expect(example).toMatch(/^CLAMAV_IMAGE=clamav\/clamav:[\w.-]+@sha256:/m);
+    expect(deploy).toContain(
+      "^clamav/clamav:[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$",
+    );
+    // The check runs before anything is fetched or built.
+    expect(deploy.indexOf("CLAMAV_IMAGE")).toBeLessThan(
+      deploy.indexOf("git fetch"),
+    );
+  });
+
+  it("keeps clamd private: no published port, its own networks", () => {
+    expect(block).not.toMatch(/^\s+ports:/m);
+    expect(block).toMatch(/networks: \[scan, clamav_updates\]/);
+    expect(compose).toMatch(/ {2}scan:\n {4}internal: true/);
+    expect(block).toMatch(/no-new-privileges:true/);
+  });
+
+  it("starts the web app only once clamd is healthy, and points it there", () => {
+    const webBlock = compose.slice(
+      compose.indexOf("\n  web:\n"),
+      compose.indexOf("\n  clamav:\n"),
+    );
+    expect(webBlock).toMatch(/clamav:\n\s+condition: service_healthy/);
+    expect(webBlock).toMatch(/networks: \[data, edge, scan\]/);
+    expect(web).toMatch(/^CLAMAV_HOST=clamav$/m);
+    expect(web).toMatch(/^CLAMAV_PORT=3310$/m);
   });
 });
 

@@ -19,6 +19,8 @@ import {
   sniffType,
   verifyLink,
 } from "./files";
+import { log } from "../log";
+import { type MalwareScanner, ScannerUnavailable } from "./scanner";
 import type { ObjectStore } from "./store";
 
 // #34. Upload through the app (so the server checks the real bytes), store
@@ -31,6 +33,11 @@ export type DocumentDeps = {
   store: () => ObjectStore | null;
   /** App secret (BETTER_AUTH_SECRET); a link key is derived from it. */
   secret: () => string;
+  /**
+   * #136 malware scanning. `required` (staging, production) refuses uploads
+   * when no scanner is configured or it can't answer. Omitted = no scanning.
+   */
+  scanner?: () => { required: boolean; scanner: MalwareScanner | null };
 };
 
 /** Multipart overhead allowed on top of the file itself. */
@@ -88,6 +95,14 @@ const unavailable = () =>
     { error: "File storage isn't available right now. Try again later." },
     { status: 503 },
   );
+const scanUnavailable = () =>
+  privateJson(
+    {
+      error:
+        "File checking isn't available right now, so the file wasn't saved. Try again in a few minutes.",
+    },
+    { status: 503 },
+  );
 
 export function documentHandlers(deps: DocumentDeps) {
   const upload: PolicyHandler<unknown> = async ({ actor, request }) => {
@@ -119,6 +134,38 @@ export function documentHandlers(deps: DocumentDeps) {
         { error: "Upload a PDF, JPEG, PNG, WebP or HEIC file" },
         { status: 415 },
       );
+    // #136: scan before anything is stored; fail closed when required.
+    const scanning = deps.scanner?.() ?? { required: false, scanner: null };
+    if (scanning.scanner) {
+      let result;
+      try {
+        result = await scanning.scanner.scan(bytes);
+      } catch (error) {
+        log("error", "document.scan_unavailable", {
+          reason:
+            error instanceof ScannerUnavailable ? error.reason : "unknown",
+        });
+        return scanUnavailable();
+      }
+      if (result.status === "infected") {
+        // No file name or contents in the log: only who and what was found.
+        log("warn", "document.malware_rejected", {
+          companyId: actor.companyId,
+          userId: actor.userId,
+          signature: result.signature,
+        });
+        return privateJson(
+          {
+            error:
+              "This file can't be accepted because it was flagged as unsafe. Upload a different copy.",
+          },
+          { status: 422 },
+        );
+      }
+    } else if (scanning.required) {
+      log("error", "document.scan_unavailable", { reason: "not configured" });
+      return scanUnavailable();
+    }
     const id = randomUUID();
     // Random key, never derived from the file name or any user input.
     const objectKey = `documents/${actor.companyId}/${randomBytes(32).toString("hex")}`;

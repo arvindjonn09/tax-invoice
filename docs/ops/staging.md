@@ -6,7 +6,7 @@ This repository has the configuration. Creating the server, the DNS name, the bu
 
 ## What runs
 
-`infra/staging/compose.yml` runs four services on one host:
+`infra/staging/compose.yml` runs these services on one host:
 
 | Service | What it does | Reachable from |
 |---|---|---|
@@ -14,8 +14,17 @@ This repository has the configuration. Creating the server, the DNS name, the bu
 | `web` | The Next.js app (`apps/web/Dockerfile`, `runtime` target) | nginx only |
 | `postgres` | PostgreSQL 16 | `web` and `migrate`, on a network with no route out |
 | `migrate` | One-off: `prisma migrate deploy`, then the runtime-role grants | – |
+| `clamav` | ClamAV `clamd` plus `freshclam` (#136): every upload is scanned before it is stored | `web` only, on the internal `scan` network; it has its own outbound network for signature updates |
 
 Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
+
+**Malware scanning (#136).** The app streams each upload to `clamd` (INSTREAM on port 3310) before storing it.
+
+- An infected file is refused with "flagged as unsafe" (422) and nothing is stored. The log line `document.malware_rejected` records the company, the user and the signature, but no file name or contents.
+- Scanning is **required** when `APP_ENV` is `staging` or `production`. If `clamd` is down, unreachable or answers unclearly, uploads fail closed with 503 ("File checking isn't available") and nothing is stored.
+- The web container waits for `clamav` to be healthy before it starts. The first start downloads the signature database, which can take several minutes.
+- `clamd` needs about 1.5 GB of RAM, and up to about 3 GB while signatures reload, so give the host at least **6 GB**.
+- Watch the logs for `document.scan_unavailable`.
 
 **Hardening:**
 - **Image:** the web image holds the standalone server only, with no source, tests or `.env` files, and it runs as `node`, not root.
@@ -49,6 +58,10 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
    - Publish IPv4 only and create no AAAA record until Docker IPv6 is set up. Without it, every IPv6 client reaches nginx from the same bridge address and shares one rate limit.
    - Create a `deploy` user in the `docker` group.
 2. **DNS:** `staging.<domain>` → the server.
+   - **ClamAV image (#136):** in `infra/staging/env/compose.env`, set `CLAMAV_IMAGE` to the digest-pinned image. Get the digest on the host with
+     `docker buildx imagetools inspect clamav/clamav:1.4 --format '{{json .Manifest.Digest}}'` and write it as
+     `CLAMAV_IMAGE=clamav/clamav:1.4@sha256:<digest>`. The deploy gate refuses anything else.
+   - Re-install the gate after this change: `sudo install -o root -g root -m 0755 infra/staging/deploy.sh /usr/local/sbin/jobflow-deploy`.
 3. **Bucket:** a private bucket in `ap-southeast-2`, with public access blocked, default encryption on and versioning on. Create an access key that can reach **this bucket only**.
 4. **Code and secrets on the host:**
    - Clone the repo to `/opt/jobflow` **as the `deploy` user**, so `deploy.sh` can fetch and check out.

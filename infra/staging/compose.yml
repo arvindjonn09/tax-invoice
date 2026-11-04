@@ -63,9 +63,12 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      # #136: uploads are refused (fail closed) until clamd answers.
+      clamav:
+        condition: service_healthy
     # No published ports: only nginx reaches the app.
     expose: ["3000"]
-    networks: [data, edge]
+    networks: [data, edge, scan]
     mem_limit: 1g
     pids_limit: 256
     read_only: true
@@ -73,6 +76,31 @@ services:
       - /tmp
       - /app/apps/web/.next/cache
     cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # Malware scanning for uploads (#136): clamd plus freshclam signature
+  # updates. The app streams every upload to clamd (INSTREAM on 3310) before
+  # storing it. The image must be pinned by digest in compose.env, and the
+  # deploy gate refuses anything else.
+  clamav:
+    <<: *logging
+    image: ${CLAMAV_IMAGE:?Set CLAMAV_IMAGE in compose.env to clamav/clamav:<tag>@sha256:<digest>}
+    restart: unless-stopped
+    volumes:
+      - clamav_db:/var/lib/clamav
+    # scan: reachable from the web app only. clamav_updates: freshclam's way out.
+    networks: [scan, clamav_updates]
+    expose: ["3310"]
+    # Signatures take about 1.2-1.5 GB in memory, roughly double while reloading.
+    mem_limit: 3g
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # The first start downloads the signature database.
+      start_period: 600s
     security_opt: ["no-new-privileges:true"]
 
   nginx:
@@ -149,8 +177,14 @@ networks:
   data:
     internal: true
   edge: {}
+  # Web app ↔ clamd only, no route out (#136).
+  scan:
+    internal: true
+  # clamd/freshclam only: outbound for signature updates.
+  clamav_updates: {}
 
 volumes:
+  clamav_db:
   postgres_data:
   letsencrypt:
   acme_webroot:

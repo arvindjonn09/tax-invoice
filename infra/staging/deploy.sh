@@ -21,6 +21,12 @@ esac
 [ "${#SHA}" -eq 40 ] || { echo "invalid commit" >&2; exit 64; }
 
 cd "$REPO"
+# #136: the ClamAV image must be pinned by digest (compose.env is host-only).
+CLAMAV_IMAGE=$(sed -n 's/^CLAMAV_IMAGE=//p' infra/staging/env/compose.env | tail -n 1)
+if ! printf '%s\n' "$CLAMAV_IMAGE" | grep -Eq '^clamav/clamav:[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$'; then
+  echo "CLAMAV_IMAGE in compose.env must be clamav/clamav:<tag>@sha256:<digest>" >&2
+  exit 66
+fi
 git fetch --quiet origin main
 if [ "$SHA" != "$(git rev-parse origin/main)" ]; then
   # A newer main commit has its own deploy; this one is superseded.
