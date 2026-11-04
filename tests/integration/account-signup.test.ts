@@ -253,6 +253,22 @@ describe("sign-up", () => {
     ).toBe(0);
   });
 
+  it("refuses reserved domains in every environment, as they skip verification", async () => {
+    for (const email of [
+      "anyone@x.test",
+      "a@b.invalid",
+      "a@b.example",
+      "a@b.localhost",
+    ]) {
+      const response = await signUp(deps)(
+        post("/api/account/sign-up", form(email)),
+      );
+      expect(response.status).toBe(400);
+      expect((await response.json()).fields.email).toBeDefined();
+      expect(await client.user.count({ where: { email } })).toBe(0);
+    }
+  });
+
   it("throttles sign-up per IP and refuses cross-origin requests", async () => {
     const ip = "203.0.113.99";
     const statuses = [];
@@ -288,7 +304,10 @@ describe("verification", () => {
     const token = tokenFrom(email?.message?.text ?? "");
     expect(token).toBeDefined();
     const tampered = await verifyEmail(deps)(
-      post("/api/account/verify-email", { token: `${token!.slice(0, -1)}A` }),
+      post("/api/account/verify-email", {
+        // Always a different last character, so the token is really changed.
+        token: `${token!.slice(0, -1)}${token!.endsWith("A") ? "B" : "A"}`,
+      }),
     );
     expect((await tampered.json()).code).toBe("token_invalid");
     const ok = await verifyEmail(deps)(

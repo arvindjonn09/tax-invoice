@@ -9,6 +9,7 @@ import {
   legalTextIsPlaceholder,
 } from "@/server/account/terms";
 import { isProductionEnvironment } from "@/server/auth";
+import { turnstileSiteKey } from "@/server/security/turnstile";
 import { SignupForm } from "./signup-form";
 
 export const metadata: Metadata = { title: "Sign up · JobFlow" };
@@ -64,6 +65,7 @@ export default function SignupPage() {
               <SignupForm
                 termsVersion={TERMS_VERSION}
                 privacyVersion={PRIVACY_VERSION}
+                turnstileSiteKey={turnstileSiteKey()}
               />
             </>
           ) : (

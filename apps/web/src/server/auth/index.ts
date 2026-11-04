@@ -28,6 +28,7 @@ export function getAuth(): Auth {
     secret: required("BETTER_AUTH_SECRET"),
     baseURL: required("BETTER_AUTH_URL"),
     production: isProductionEnvironment(process.env),
+    clientIpHeader: process.env.CLIENT_IP_HEADER,
   });
   return auth;
 }

@@ -2,11 +2,14 @@ import { log } from "../log";
 
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
-/** Turnstile is enforced once TURNSTILE_SECRET_KEY is configured (#213). */
-export function turnstileEnabled(
+/**
+ * Public key for the widget. Set TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY
+ * together: a secret without the widget refuses every submission.
+ */
+export function turnstileSiteKey(
   env: Readonly<Record<string, string | undefined>> = process.env,
-): boolean {
-  return Boolean(env.TURNSTILE_SECRET_KEY);
+): string | null {
+  return env.TURNSTILE_SITE_KEY || null;
 }
 
 /**
@@ -20,11 +23,14 @@ export async function verifyTurnstile(
   {
     env = process.env,
     production,
+    hostname,
     ip,
     fetcher = fetch,
   }: {
     env?: Readonly<Record<string, string | undefined>>;
     production: boolean;
+    /** The app's own hostname; a token solved on another site is refused. */
+    hostname: string;
     ip?: string | null;
     fetcher?: Fetch;
   },
@@ -42,8 +48,13 @@ export async function verifyTurnstile(
     const result = (await response.json()) as {
       success?: boolean;
       action?: string;
+      hostname?: string;
     };
-    return result.success === true && result.action === action;
+    return (
+      result.success === true &&
+      result.action === action &&
+      result.hostname === hostname
+    );
   } catch (error) {
     log("warn", "security.turnstile_unavailable", {
       error: error instanceof Error ? error.name : "Error",

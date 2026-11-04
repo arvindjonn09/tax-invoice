@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { type FormEvent, useEffect, useState } from "react";
+import { Turnstile } from "@/components/turnstile";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 type State =
@@ -15,8 +16,14 @@ type State =
  * Reads the token from the URL fragment (never sent to servers or logs),
  * removes it from the address bar, then confirms it with the API (S3).
  */
-export function VerifyEmail() {
+export function VerifyEmail({
+  turnstileSiteKey,
+}: {
+  turnstileSiteKey: string | null;
+}) {
   const [state, setState] = useState<State>({ kind: "checking" });
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const token = new URLSearchParams(window.location.hash.slice(1)).get(
@@ -47,8 +54,13 @@ export function VerifyEmail() {
     const response = await fetch("/api/account/verification/resend", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: form.get("email") }),
+      body: JSON.stringify({
+        email: form.get("email"),
+        ...(turnstileToken ? { turnstileToken } : {}),
+      }),
     }).catch(() => undefined);
+    setTurnstileToken(null);
+    setAttempt((value) => value + 1);
     setState(
       response?.status === 202
         ? { kind: "resent" }
@@ -115,7 +127,20 @@ export function VerifyEmail() {
             className="min-h-11 rounded-sm border border-input bg-card px-4 text-card-foreground"
           />
         </div>
-        <Button type="submit">Send a new link</Button>
+        {turnstileSiteKey ? (
+          <Turnstile
+            key={attempt}
+            siteKey={turnstileSiteKey}
+            action="resend"
+            onToken={setTurnstileToken}
+          />
+        ) : null}
+        <Button
+          type="submit"
+          disabled={turnstileSiteKey !== null && turnstileToken === null}
+        >
+          Send a new link
+        </Button>
       </form>
     </div>
   );

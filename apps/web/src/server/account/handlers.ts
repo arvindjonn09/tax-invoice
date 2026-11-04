@@ -229,7 +229,8 @@ export function signUp(deps: AccountDependencies) {
         { status: 400 },
       );
     }
-    if (deps.production() && RESERVED_TLD.test(input.email)) {
+    // Reserved TLDs can't receive mail and skip verification outside production.
+    if (RESERVED_TLD.test(input.email)) {
       return privateJson(
         {
           error: "Check the highlighted fields",

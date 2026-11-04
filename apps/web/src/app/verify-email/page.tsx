@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { SiteHeader } from "@/components/landing/site-header";
+import { turnstileSiteKey } from "@/server/security/turnstile";
 import { VerifyEmail } from "./verify-client";
 
 // The token travels in the URL fragment; no-referrer keeps the page URL out
@@ -16,7 +17,7 @@ export default function VerifyEmailPage() {
       <main id="main" className="mx-auto max-w-xl px-4 py-16 md:px-6">
         <h1 className="text-3xl font-bold tracking-tight">Verify your email</h1>
         <section className="mt-8 rounded-2xl border bg-card p-6 text-card-foreground md:p-8">
-          <VerifyEmail />
+          <VerifyEmail turnstileSiteKey={turnstileSiteKey()} />
         </section>
       </main>
     </>

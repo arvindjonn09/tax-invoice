@@ -24,8 +24,8 @@ export default async function VerifyPendingPage() {
         <h1 className="text-3xl font-bold tracking-tight">Check your email</h1>
         <section className="mt-8 space-y-4 rounded-2xl border bg-card p-6 text-card-foreground md:p-8">
           <p>
-            We sent a verification link to <strong>{resolution.email}</strong>.
-            Open it to finish setting up your account.
+            Your email address <strong>{resolution.email}</strong> needs to be
+            verified. Open the link we emailed you, or send a new one below.
           </p>
           <p className="text-sm text-muted-foreground">
             The link expires after 24 hours. Requesting a new one cancels the

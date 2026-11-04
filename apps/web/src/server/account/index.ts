@@ -28,6 +28,7 @@ export const accountDeps: AccountDependencies = {
   verifyTurnstile: (token, action, ip) =>
     verifyTurnstile(token, action, {
       production: isProductionEnvironment(process.env),
+      hostname: new URL(appUrl()).hostname,
       ip,
     }),
 };

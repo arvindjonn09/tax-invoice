@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { type FormEvent, useState } from "react";
+import { Turnstile } from "@/components/turnstile";
 import { Button } from "@/components/ui/button";
 
 type State =
@@ -56,11 +57,16 @@ function Field({
 export function SignupForm({
   termsVersion,
   privacyVersion,
+  turnstileSiteKey,
 }: {
   termsVersion: string;
   privacyVersion: string;
+  turnstileSiteKey: string | null;
 }) {
   const [state, setState] = useState<State>({ kind: "idle" });
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  // Tokens are single use: a new key shows a fresh challenge after a failure.
+  const [attempt, setAttempt] = useState(0);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -77,6 +83,7 @@ export function SignupForm({
         acceptTerms: form.get("acceptTerms") === "on",
         termsVersion,
         privacyVersion,
+        ...(turnstileToken ? { turnstileToken } : {}),
       }),
     }).catch(() => undefined);
     if (response?.status === 202) {
@@ -87,6 +94,8 @@ export function SignupForm({
       error?: string;
       fields?: Record<string, string>;
     } | null;
+    setTurnstileToken(null);
+    setAttempt((value) => value + 1);
     setState({
       kind: "error",
       message:
@@ -192,10 +201,21 @@ export function SignupForm({
           {fields.acceptTerms}
         </p>
       ) : null}
+      {turnstileSiteKey ? (
+        <Turnstile
+          key={attempt}
+          siteKey={turnstileSiteKey}
+          action="signup"
+          onToken={setTurnstileToken}
+        />
+      ) : null}
       <Button
         type="submit"
         className="w-full"
-        disabled={state.kind === "pending"}
+        disabled={
+          state.kind === "pending" ||
+          (turnstileSiteKey !== null && turnstileToken === null)
+        }
       >
         {state.kind === "pending" ? "Creating account…" : "Create account"}
       </Button>

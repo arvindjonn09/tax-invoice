@@ -33,6 +33,8 @@ export type AuthSettings = {
   baseURL: string;
   /** The real production environment: refuses demo accounts, forces Secure cookies. */
   production: boolean;
+  /** The trusted proxy's client-IP header for sign-in throttling (CLIENT_IP_HEADER). */
+  clientIpHeader?: string | undefined;
 };
 
 /**
@@ -99,6 +101,9 @@ export function createAuth(settings: AuthSettings) {
       // Better Auth skips these checks when NODE_ENV=test; pin them on everywhere.
       disableOriginCheck: false,
       disableCSRFCheck: false,
+      ...(settings.clientIpHeader
+        ? { ipAddress: { ipAddressHeaders: [settings.clientIpHeader] } }
+        : {}),
       cookiePrefix: "jobflow",
       useSecureCookies: secureCookies,
       defaultCookieAttributes: {
