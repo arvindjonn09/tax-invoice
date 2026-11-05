@@ -15,8 +15,8 @@ import { clientIp, hit } from "../http/throttle";
 import { log, safeError } from "../log";
 import {
   accountExistsEmail,
-  passwordChangedEmail,
-  passwordResetEmail,
+  resetNoticeEmail,
+  resetLinkEmail,
   verificationEmail,
 } from "./emails";
 import {
@@ -558,7 +558,7 @@ export function forgotPassword(deps: AccountDependencies) {
           kind: "password_reset",
           dedupeKey: `password_reset:${user.id}:${crypto.randomUUID()}`,
           userId: user.id,
-          message: passwordResetEmail(user.email, deps.appUrl(), token),
+          message: resetLinkEmail(user.email, deps.appUrl(), token),
         });
         await tx.platformAuditEvent.create({
           data: {
@@ -622,7 +622,7 @@ export function resetPassword(deps: AccountDependencies) {
         kind: "password_changed",
         dedupeKey: `password_changed:${userId}:${crypto.randomUUID()}`,
         userId,
-        message: passwordChangedEmail(user.email, deps.appUrl()),
+        message: resetNoticeEmail(user.email, deps.appUrl()),
       });
       await tx.platformAuditEvent.create({
         data: {

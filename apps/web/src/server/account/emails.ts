@@ -40,7 +40,7 @@ export function accountExistsEmail(to: string, appUrl: string): EmailMessage {
   };
 }
 
-export function passwordResetEmail(
+export function resetLinkEmail(
   to: string,
   appUrl: string,
   token: string,
@@ -61,7 +61,7 @@ export function passwordResetEmail(
   };
 }
 
-export function passwordChangedEmail(to: string, appUrl: string): EmailMessage {
+export function resetNoticeEmail(to: string, appUrl: string): EmailMessage {
   return {
     to,
     subject: "Your JobFlow password was changed",
