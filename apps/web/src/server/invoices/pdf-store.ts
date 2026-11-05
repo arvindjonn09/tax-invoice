@@ -69,38 +69,50 @@ export async function ensureInvoicePdf(
   const objectKey = `documents/${actor.companyId}/${randomBytes(32).toString("hex")}`;
   await store.put(objectKey, bytes, "application/pdf");
   try {
-    return await withAudit(db, async (tx, audit) => {
-      const document = await tx.document.create({
-        data: {
+    return await withAudit(
+      db,
+      async (tx, audit) => {
+        const document = await tx.document.create({
+          data: {
+            companyId: actor.companyId,
+            kind: "other",
+            objectKey,
+            fileName: safeFileName(
+              row.reference ?? "invoice",
+              "application/pdf",
+            ),
+            contentType: "application/pdf",
+            sizeBytes: bytes.byteLength,
+            sha256,
+            createdBy: actor.userId,
+          },
+        });
+        const stored = await tx.invoicePdf.create({
+          data: {
+            companyId: actor.companyId,
+            invoiceId,
+            documentId: document.id,
+            sha256,
+            rendererVersion: PDF_RENDERER_VERSION,
+            createdBy: actor.userId,
+          },
+        });
+        await audit({
           companyId: actor.companyId,
-          kind: "other",
-          objectKey,
-          fileName: safeFileName(row.reference ?? "invoice", "application/pdf"),
-          contentType: "application/pdf",
-          sizeBytes: bytes.byteLength,
-          sha256,
-          createdBy: actor.userId,
-        },
-      });
-      const stored = await tx.invoicePdf.create({
-        data: {
-          companyId: actor.companyId,
-          invoiceId,
-          documentId: document.id,
-          sha256,
-          rendererVersion: PDF_RENDERER_VERSION,
-          createdBy: actor.userId,
-        },
-      });
-      await audit({
-        companyId: actor.companyId,
-        actorUserId: actor.userId,
-        action: "invoice.pdf_stored",
-        target: { type: "invoice", id: invoiceId },
-        after: { documentId: document.id, sha256, sizeBytes: bytes.byteLength },
-      });
-      return stored;
-    });
+          actorUserId: actor.userId,
+          action: "invoice.pdf_stored",
+          target: { type: "invoice", id: invoiceId },
+          after: {
+            documentId: document.id,
+            sha256,
+            sizeBytes: bytes.byteLength,
+          },
+        });
+        return stored;
+        // An issued document's PDF can still be produced while read-only.
+      },
+      { readOnlyExemption: "record_rendering" },
+    );
   } catch (error) {
     // Never leave an orphaned object behind.
     await store.delete(objectKey).catch(() => undefined);

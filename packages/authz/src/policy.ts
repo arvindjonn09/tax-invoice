@@ -60,6 +60,10 @@ export const PERMISSIONS = [
   /** Debtor/creditor ageing and cash movement (#56): owner/accountant. */
   "ledger_report.read",
   "export.run",
+  /** Trial countdown, dates and phase (#221, S8): owner, manager, accountant. */
+  "trial.read",
+  /** Ask the platform operator for more trial time (S14): owner only. */
+  "trial.request_extension",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -103,6 +107,7 @@ const GRANTS: Record<Role, readonly Permission[]> = {
     "expense.approve",
     "quote.write",
     "user.read",
+    "trial.read",
   ],
   accountant: [
     ...OFFICE,
@@ -116,6 +121,7 @@ const GRANTS: Record<Role, readonly Permission[]> = {
     "ledger_report.read",
     "export.run",
     "audit.read",
+    "trial.read",
   ],
   employee: [
     "company.read",

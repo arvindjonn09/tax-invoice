@@ -88,8 +88,15 @@ describe("unattached document cleanup (#137)", () => {
         "invoice_pdfs",
         "supplier_bills",
         "work_evidence",
+        "companies",
       ]),
     );
+    // The logo pairs with companies.id, not a company_id column (#211).
+    expect(await documentReferences(db)).toContainEqual({
+      tbl: "companies",
+      col: "logo_document_id",
+      companyCol: "id",
+    });
   });
 
   it("deletes old unattached uploads with an audit event; keeps recent and attached ones", async () => {
@@ -418,6 +425,50 @@ describe("durable object deletion and maintenance privilege (#170)", () => {
     } finally {
       if (created) await admin.query(`DROP ROLE ${name}`);
       await admin.end();
+    }
+  });
+});
+
+describe("company logos and read-only companies (#211)", () => {
+  it("never deletes a company logo, even an old one that is no longer current", async () => {
+    const logo = await upload(daysAgo(30), "photo");
+    await db.$executeRaw`UPDATE documents SET kind = 'company_logo' WHERE id = ${logo.id}::uuid`;
+    const result = await cleanUnattachedDocuments(db, store, { now: NOW });
+    expect(result.deleted.map((d) => d.id)).not.toContain(logo.id);
+    expect(await db.document.count({ where: { id: logo.id } })).toBe(1);
+  });
+
+  it("treats a document used as the current logo as attached", async () => {
+    const logo = await upload(daysAgo(30), "photo");
+    await db.$executeRaw`UPDATE documents SET kind = 'company_logo' WHERE id = ${logo.id}::uuid`;
+    await db.company.update({
+      where: { id: companyId },
+      data: { logoDocumentId: logo.id },
+    });
+    await cleanUnattachedDocuments(db, store, { now: NOW });
+    expect(await db.document.count({ where: { id: logo.id } })).toBe(1);
+  });
+
+  it("keeps cleaning up for a read-only trial company (housekeeping, S9 AC7)", async () => {
+    await db.company.update({
+      where: { id: companyId },
+      data: {
+        isDemo: false,
+        accessMode: "trial",
+        trialStartedAt: new Date("2019-12-01T00:00:00Z"),
+        trialLastDay: new Date("2020-01-01T00:00:00Z"),
+      },
+    });
+    try {
+      const old = await upload(daysAgo(10));
+      const result = await cleanUnattachedDocuments(db, store, { now: NOW });
+      expect(result.deleted.map((d) => d.id)).toContain(old.id);
+      expect(await db.document.count({ where: { id: old.id } })).toBe(0);
+    } finally {
+      await db.company.update({
+        where: { id: companyId },
+        data: { accessMode: "unrestricted" },
+      });
     }
   });
 });
