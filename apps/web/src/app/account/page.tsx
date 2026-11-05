@@ -19,6 +19,7 @@ export default async function AccountPage() {
     await headers(),
   );
   if (resolution.status === "signed-out") redirect("/login");
+  if (resolution.status === "unverified") redirect("/verify-email/pending");
   return (
     <main className="foundation">
       <h1>Your account</h1>
