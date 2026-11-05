@@ -25,6 +25,7 @@
     "db:test:reset": "node scripts/database/reset-test.mjs",
     "db:runtime-role": "node scripts/database/apply-runtime-role.mjs",
     "db:seed:demo": "tsx scripts/database/seed-demo.ts",
+    "email": "tsx scripts/email/cli.ts",
     "db:demo:password": "tsx scripts/database/set-demo-password.ts",
     "documents:cleanup": "tsx scripts/documents/cleanup.ts",
     "test:coverage": "vitest run --project unit --coverage",

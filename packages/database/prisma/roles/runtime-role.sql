@@ -36,6 +36,8 @@ REVOKE UPDATE, DELETE, TRUNCATE ON platform_audit_events, terms_acceptances FROM
 -- #211: reminders, notices and extension requests are never deleted by the
 -- app (deleting a trial_notifications row would re-arm a reminder, S10 AC2).
 REVOKE DELETE, TRUNCATE ON trial_notifications, user_notices, trial_extension_requests FROM jobflow_app;
+-- #259: the single pause row is updated, never removed.
+REVOKE DELETE, TRUNCATE ON email_dispatch_state FROM jobflow_app;
 -- Migration bookkeeping belongs to the owner.
 REVOKE ALL ON _prisma_migrations FROM jobflow_app;
 
