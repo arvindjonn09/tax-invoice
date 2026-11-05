@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { startFakeClamd } from "../helpers/fake-clamd";
 import { GET } from "../../apps/web/src/app/api/health/route";
 import { GET as ready } from "../../apps/web/src/app/api/health/ready/route";
 
@@ -50,5 +51,24 @@ it("is ready only when the database answers and storage is configured (#64)", as
     status: "ready",
     service: "jobflow-web",
   });
+
+  // #136: where scanning is required, clamd must answer PING too.
+  vi.stubEnv("APP_ENV", "staging");
+  vi.stubEnv("CLAMAV_HOST", "");
+  clock.mockReturnValue(4002);
+  expect((await ready()).status).toBe(503);
+  const clamd = await startFakeClamd();
+  try {
+    vi.stubEnv("CLAMAV_HOST", "127.0.0.1");
+    vi.stubEnv("CLAMAV_PORT", String(clamd.port));
+    clamd.mode = "silent";
+    clock.mockReturnValue(6003);
+    expect((await ready()).status).toBe(503);
+    clamd.mode = "normal";
+    clock.mockReturnValue(8004);
+    expect((await ready()).status).toBe(200);
+  } finally {
+    await clamd.close();
+  }
   clock.mockRestore();
 });

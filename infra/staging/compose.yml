@@ -86,8 +86,19 @@ services:
     <<: *logging
     image: ${CLAMAV_IMAGE:?Set CLAMAV_IMAGE in compose.env to clamav/clamav:<tag>@sha256:<digest>}
     restart: unless-stopped
+    # Hostile files are parsed here: never as root, no capabilities, a
+    # read-only root filesystem, and size-capped scratch space.
+    user: clamav
+    entrypoint: ["/init-unprivileged"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/log/clamav:size=16m,mode=1777
+      - /run/clamav:size=1m,mode=1777
     volumes:
       - clamav_db:/var/lib/clamav
+      - ./clamav/clamd.conf:/etc/clamav/clamd.conf:ro
     # scan: reachable from the web app only. clamav_updates: freshclam's way out.
     networks: [scan, clamav_updates]
     expose: ["3310"]

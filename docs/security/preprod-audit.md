@@ -26,7 +26,13 @@ Performed on 2 November 2026 by Claude B, on `main` after #198 (pinned images), 
 
 ## Open before real data (owner and operations)
 
-1. ~~**Malware scanning of uploads (#136).**~~ Built on 5 November 2026 (owner decision: ClamAV). Every upload is scanned before storage; infected files are refused, and uploads fail closed on staging and production when the scanner can't answer. Still to do on the host: set the digest-pinned `CLAMAV_IMAGE` (see `docs/ops/staging.md`).
+1. ~~**Malware scanning of uploads (#136).**~~ Built on 5 November 2026 (owner decision: ClamAV). Every upload that **reaches a running scanner** is scanned before storage. Infected files are refused, and so are files clamd can't fully check. Every production build (`NODE_ENV=production`) fails closed when the scanner is missing or can't answer. Still to do on the host:
+   - pin `CLAMAV_IMAGE`;
+   - add `CLAMAV_HOST`/`CLAMAV_PORT` to `web.env`;
+   - deploy (this starts clamav);
+   - upload EICAR and expect 422.
+
+   **Until then, the live site refuses uploads (503), unless `APP_ENV=development` with `MALWARE_SCAN=off`, which means no scanning.** Owner decision pending: whether password-protected PDFs are refused (see `docs/ops/staging.md`).
 2. **Staging host hardening (#168).** Still to do: a non-superuser migration owner, the SCRAM password-verifier handoff, a policy blocking access to the cloud metadata service, Postgres/nginx privilege limits, and IPv6 rollout checks. These need the real host.
 3. **Maintenance credentials (#170).** Provision the separate maintenance database login, the delete-only S3 credential and the cleanup timer when staging is set up.
 4. ~~**Development audit exception.**~~ Closed on 2 November 2026: braces is no longer installed, and neither audit has exceptions (see [audit exceptions](audit-exceptions.md)).

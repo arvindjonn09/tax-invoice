@@ -21,7 +21,10 @@ import {
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
 import { EICAR, type FakeClamd, startFakeClamd } from "../helpers/fake-clamd";
-import { clamdScanner } from "../../apps/web/src/server/documents/scanner";
+import {
+  type Scanning,
+  clamdScanner,
+} from "../../apps/web/src/server/documents/scanner";
 
 // #34: private storage — type/size allow-list, random keys, links only after
 // authz, expired or forged links fail, other companies never get a URL.
@@ -42,7 +45,17 @@ let database: CommittedDatabase;
 let db: PrismaClient;
 let withPolicy: ReturnType<typeof createWithPolicy>;
 const store = new MemoryStore();
-const deps = { db: () => db, store: () => store, secret: () => SECRET };
+const noScanning = (): Scanning => ({
+  required: false,
+  scanner: null,
+  disabled: false,
+});
+const deps = {
+  db: () => db,
+  store: () => store,
+  secret: () => SECRET,
+  scanner: noScanning,
+};
 const handlers = documentHandlers(deps);
 const download = downloadHandler(deps);
 const userIds = {} as Record<Who, string>;
@@ -296,17 +309,18 @@ describe("malware scanning (#136)", () => {
 
   function scanned(required: boolean, port = () => clamd.port) {
     const own = new MemoryStore();
+    // One scanner per handler set, as in production (documents/index.ts).
+    const scanner = clamdScanner({
+      host: "127.0.0.1",
+      port: port(),
+      idleMs: 500,
+      maxConcurrent: 1,
+      slotWaitMs: 200,
+    });
     const scanning = documentHandlers({
       ...deps,
       store: () => own,
-      scanner: () => ({
-        required,
-        scanner: clamdScanner({
-          host: "127.0.0.1",
-          port: port(),
-          timeoutMs: 500,
-        }),
-      }),
+      scanner: () => ({ required, disabled: false, scanner }),
     });
     return {
       store: own,
@@ -350,7 +364,7 @@ describe("malware scanning (#136)", () => {
     const missing = documentHandlers({
       ...deps,
       store: () => own,
-      scanner: () => ({ required: true, scanner: null }),
+      scanner: () => ({ required: true, scanner: null, disabled: false }),
     });
     const response = await withPolicy("document.upload", missing.upload, {
       maxBodyBytes: UPLOAD_BODY_LIMIT,
@@ -359,6 +373,46 @@ describe("malware scanning (#136)", () => {
     expect(own.objects.size).toBe(0);
     expect(await count()).toBe(before);
     clamd.mode = "normal";
+  });
+
+  it("refuses a file clamd couldn't fully check, and audits every rejection", async () => {
+    const before = await count();
+    clamd.mode = "limits";
+    const { store: own, upload: send } = scanned(true);
+    const response = await send(uploadRequest("owner", PDF));
+    expect(response.status).toBe(422);
+    expect(((await response.json()) as { error: string }).error).toMatch(
+      /couldn't be checked/,
+    );
+    expect(own.objects.size).toBe(0);
+    expect(await count()).toBe(before);
+    clamd.mode = "normal";
+    const events = await db.auditEvent.findMany({
+      where: { companyId, action: "document.malware_rejected" },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(
+      events.map(
+        (e) =>
+          (e.metadata as { changes: { outcome: { after: string } } }).changes
+            .outcome.after,
+      ),
+    ).toEqual(["infected", "unscannable"]);
+    expect(JSON.stringify(events)).not.toMatch(
+      /synthetic receipt|EICAR-STANDARD/,
+    );
+  });
+
+  it("holds a scan slot from before the body is read, and 503s when none frees up", async () => {
+    clamd.mode = "normal";
+    clamd.delayMs = 400;
+    const { upload: send } = scanned(true);
+    const [first, second] = await Promise.all([
+      send(uploadRequest("owner", PDF)),
+      send(uploadRequest("owner", PDF)),
+    ]);
+    clamd.delayMs = 0;
+    expect([first.status, second.status].sort()).toEqual([201, 503]);
   });
 });
 

@@ -92,8 +92,9 @@ application tests: the base has specifications only. Run these in CI as their mo
   risk but do not prevent misuse. Accountant/owner permissions must be explicit; ambiguity defaults to denial (#14).
 - A signed URL can be shared until expiry; it is not a session-bound permission. Keep lifetimes short, avoid logging it,
   document this limitation and decide whether particularly sensitive downloads require server proxying in #34.
-- Malware protection feasibility and upload quarantine/fail-closed policy must be decided in #34 and verified in #43;
-  an allowlisted MIME type alone is insufficient. Privileged MFA choice is a recorded decision for #13, not assumed enabled.
+- Malware protection: decided (#136, ClamAV). Uploads are scanned before they're stored, and fail closed in every production
+  build. Over-limit files are refused, and so is anything clamd can't check. Encrypted files are an owner decision; see
+  `docs/ops/staging.md`. Privileged MFA choice is a recorded decision for #13, not assumed enabled.
 - Backups do not prove recovery until the isolated restore drill passes (#63). Retention/deletion policy awaits #62;
   do not invent legal retention guarantees from this threat model.
 - #70 and #71 capture gaps discovered during this analysis; all linked controls are planned. Dependency ordering

@@ -93,6 +93,33 @@ describe("malware scanning service (#136)", () => {
     expect(block).toMatch(/no-new-privileges:true/);
   });
 
+  it("runs clamd unprivileged, read-only, with no capabilities", () => {
+    expect(block).toMatch(/^ {4}user: clamav$/m);
+    expect(block).toMatch(/entrypoint: \["\/init-unprivileged"\]/);
+    expect(block).toMatch(/cap_drop: \[ALL\]/);
+    expect(block).toMatch(/read_only: true/);
+    expect(block).toMatch(/- \/tmp:size=\d+m/);
+  });
+
+  it("mounts a clamd.conf that never lets an over-limit file pass as clean", () => {
+    expect(block).toContain("./clamav/clamd.conf:/etc/clamav/clamd.conf:ro");
+    const conf = read("infra/staging/clamav/clamd.conf");
+    expect(conf).toMatch(/^AlertExceedsMax yes$/m);
+    expect(conf).toMatch(/^TCPSocket 3310$/m);
+    // Uploads are at most 10 MB: clamd must accept the whole stream.
+    expect(conf).toMatch(/^StreamMaxLength 12M$/m);
+    // Encrypted files: an owner decision, recorded explicitly either way.
+    expect(conf).toMatch(/^AlertEncrypted (yes|no)$/m);
+  });
+
+  it("starts clamd before the web app on every deploy", () => {
+    const start = deploy.indexOf("up -d --wait --wait-timeout 900 clamav");
+    expect(start).toBeGreaterThan(deploy.indexOf("run --rm migrate"));
+    expect(start).toBeLessThan(
+      deploy.indexOf("up -d --no-deps --wait --wait-timeout 300 web"),
+    );
+  });
+
   it("starts the web app only once clamd is healthy, and points it there", () => {
     const webBlock = compose.slice(
       compose.indexOf("\n  web:\n"),

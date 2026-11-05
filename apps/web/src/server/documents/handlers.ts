@@ -20,7 +20,7 @@ import {
   verifyLink,
 } from "./files";
 import { log } from "../log";
-import { type MalwareScanner, ScannerUnavailable } from "./scanner";
+import { type Release, type Scanning, ScannerUnavailable } from "./scanner";
 import type { ObjectStore } from "./store";
 
 // #34. Upload through the app (so the server checks the real bytes), store
@@ -34,10 +34,11 @@ export type DocumentDeps = {
   /** App secret (BETTER_AUTH_SECRET); a link key is derived from it. */
   secret: () => string;
   /**
-   * #136 malware scanning. `required` (staging, production) refuses uploads
-   * when no scanner is configured or it can't answer. Omitted = no scanning.
+   * #136 malware scanning (scannerFromEnvironment). `required` refuses
+   * uploads when no scanner is configured or it can't give a clear answer.
+   * Required, so no caller can forget it.
    */
-  scanner?: () => { required: boolean; scanner: MalwareScanner | null };
+  scanner: () => Scanning;
 };
 
 /** Multipart overhead allowed on top of the file itself. */
@@ -104,15 +105,60 @@ const scanUnavailable = () =>
     { status: 503 },
   );
 
+const unscannable = () =>
+  privateJson(
+    {
+      error:
+        "This file couldn't be checked for malware, so it wasn't saved. Upload a different copy, such as a PDF that isn't password-protected.",
+    },
+    { status: 422 },
+  );
+
+let disabledLogged = false;
+
 export function documentHandlers(deps: DocumentDeps) {
-  const upload: PolicyHandler<unknown> = async ({ actor, request }) => {
+  const upload: PolicyHandler<unknown> = async (context) => {
     const store = deps.store();
     if (!store) return unavailable();
     // Per user and per IP, before reading a single byte of the body.
     await throttle(deps.db(), "document.upload", {
-      userId: actor.userId,
-      ip: clientIp(request.headers),
+      userId: context.actor.userId,
+      ip: clientIp(context.request.headers),
     });
+    // #136: scanning setup, and a scan slot, before the body is read.
+    const scanning = deps.scanner();
+    if (scanning.disabled && !disabledLogged) {
+      disabledLogged = true;
+      log("warn", "document.scan_disabled", { reason: "MALWARE_SCAN=off" });
+    }
+    if (!scanning.scanner && scanning.required) {
+      log("error", "document.scan_unavailable", { reason: "not configured" });
+      return scanUnavailable();
+    }
+    let release: Release | undefined;
+    if (scanning.scanner) {
+      try {
+        release = await scanning.scanner.reserve();
+      } catch (error) {
+        log("error", "document.scan_unavailable", {
+          reason:
+            error instanceof ScannerUnavailable ? error.reason : "unknown",
+        });
+        return scanUnavailable();
+      }
+    }
+    try {
+      return await receive(context, store, scanning);
+    } finally {
+      release?.();
+    }
+  };
+
+  const receive = async (
+    { actor, request }: Parameters<PolicyHandler<unknown>>[0],
+    store: ObjectStore,
+    scanning: Scanning,
+  ) => {
     const form = await readMultipart(request, UPLOAD_BODY_LIMIT);
     const file = form.get("file");
     const kind = Kind.safeParse(form.get("kind"));
@@ -135,7 +181,6 @@ export function documentHandlers(deps: DocumentDeps) {
         { status: 415 },
       );
     // #136: scan before anything is stored; fail closed when required.
-    const scanning = deps.scanner?.() ?? { required: false, scanner: null };
     if (scanning.scanner) {
       let result;
       try {
@@ -147,24 +192,39 @@ export function documentHandlers(deps: DocumentDeps) {
         });
         return scanUnavailable();
       }
-      if (result.status === "infected") {
-        // No file name or contents in the log: only who and what was found.
+      if (result.status !== "clean") {
+        // No file name or contents: only who, and what clamd reported. Logs
+        // rotate, so the audit trail keeps it too.
         log("warn", "document.malware_rejected", {
           companyId: actor.companyId,
           userId: actor.userId,
-          signature: result.signature,
+          outcome: result.status,
+          detection: result.detection,
         });
-        return privateJson(
-          {
-            error:
-              "This file can't be accepted because it was flagged as unsafe. Upload a different copy.",
-          },
-          { status: 422 },
-        );
+        await withAudit(deps.db(), async (_tx, audit) => {
+          await audit({
+            companyId: actor.companyId,
+            actorUserId: actor.userId,
+            action: "document.malware_rejected",
+            target: { type: "document_upload", id: randomUUID() },
+            after: {
+              outcome: result.status,
+              detection: result.detection,
+              contentType: type,
+              sizeBytes: bytes.byteLength,
+            },
+          });
+        });
+        return result.status === "infected"
+          ? privateJson(
+              {
+                error:
+                  "This file can't be accepted because it was flagged as unsafe. Upload a different copy.",
+              },
+              { status: 422 },
+            )
+          : unscannable();
       }
-    } else if (scanning.required) {
-      log("error", "document.scan_unavailable", { reason: "not configured" });
-      return scanUnavailable();
     }
     const id = randomUUID();
     // Random key, never derived from the file name or any user input.
@@ -248,7 +308,7 @@ export function documentHandlers(deps: DocumentDeps) {
  * is always a download with a sandboxing CSP, so it can never run as a page in
  * the app's origin.
  */
-export function downloadHandler(deps: DocumentDeps) {
+export function downloadHandler(deps: Omit<DocumentDeps, "scanner">) {
   return async (
     _request: Request,
     context: { params: Promise<{ token: string }> },

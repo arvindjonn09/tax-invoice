@@ -20,9 +20,17 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
 
 **Malware scanning (#136).** The app streams each upload to `clamd` (INSTREAM on port 3310) before storing it.
 
-- An infected file is refused with "flagged as unsafe" (422) and nothing is stored. The log line `document.malware_rejected` records the company, the user and the signature, but no file name or contents.
-- Scanning is **required** when `APP_ENV` is `staging` or `production`. If `clamd` is down, unreachable or answers unclearly, uploads fail closed with 503 ("File checking isn't available") and nothing is stored.
-- The web container waits for `clamav` to be healthy before it starts. The first start downloads the signature database, which can take several minutes.
+- An infected file is refused with "flagged as unsafe" (422), and nothing is stored.
+- A file clamd couldn't fully check (over its limits, `AlertExceedsMax`) is refused with "couldn't be checked" (422).
+- Password-protected PDFs and archives are accepted for now. Refusing them is an **owner decision**: set the `AlertEncrypted*` options in `infra/staging/clamav/clamd.conf`.
+- Each refusal writes the log line `document.malware_rejected` (outcome and `detection`, the clamd detection name) and the audit event `document.malware_rejected`. Neither records the file name or contents.
+- Scanning is **required in every production build** (`NODE_ENV=production`), and whenever `APP_ENV` is `staging` or `production`, whatever the case or spacing.
+  - `MALWARE_SCAN=off` turns it off **only** when `APP_ENV` is `development` or `test`. It's ignored everywhere else, and a warning is logged once.
+  - If clamd is down, unreachable, busy, slow (45 s overall deadline) or answers unclearly, uploads fail closed with 503 ("File checking isn't available"), and nothing is stored.
+- Each app process runs at most 4 scans at once. The slot is taken before the upload body is read, and an upload waits up to 10 s for one.
+- `/api/health/ready` is 503 when scanning is required and clamd doesn't answer PING.
+- `deploy.sh` starts `clamav` (waiting up to 15 minutes) before the web app, and the web container also waits for it to be healthy. The first start downloads the signature database, which can take several minutes.
+- clamd runs as the `clamav` user (`/init-unprivileged`), with no capabilities, a read-only root filesystem and size-capped `tmpfs` scratch space. It reads `infra/staging/clamav/clamd.conf`.
 - `clamd` needs about 1.5 GB of RAM, and up to about 3 GB while signatures reload, so give the host at least **6 GB**.
 - Watch the logs for `document.scan_unavailable`.
 

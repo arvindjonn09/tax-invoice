@@ -49,6 +49,10 @@ docker build --quiet -f apps/web/Dockerfile --target backup -t jobflow-backup:st
 compose up -d --wait postgres
 # Migrations and grants first; a failure stops here with the old app running.
 compose run --rm migrate
+# Malware scanning (#136) before the app: `--no-deps` below would never start
+# it, and the app refuses uploads without it. The first start downloads the
+# signature database, hence the long wait. A changed image is rolled out here.
+compose up -d --wait --wait-timeout 900 clamav
 compose up -d --no-deps --wait --wait-timeout 300 web
 # Recreate nginx so it re-renders its templates and picks up the new web
 # container (its upstream also re-resolves, but a fresh start is certain).
