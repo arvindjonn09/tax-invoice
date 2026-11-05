@@ -93,6 +93,7 @@ describe("staging env examples (#64)", () => {
 describe("nginx (#64)", () => {
   it("overwrites X-Forwarded-For so a client can't choose its throttling IP", () => {
     expect(nginx).toMatch(/proxy_set_header X-Forwarded-For \$remote_addr;/);
+    expect(nginx).toMatch(/proxy_set_header CF-Connecting-IP "";/);
     expect(nginx).not.toMatch(/\$proxy_add_x_forwarded_for/);
     expect(nginx).toMatch(/proxy_set_header X-Forwarded-Proto https;/);
   });
