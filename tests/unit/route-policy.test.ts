@@ -56,7 +56,7 @@ describe("route handlers", () => {
 
   for (const { path, source } of routes) {
     if (path in PUBLIC_ROUTES) continue;
-    it(`${path} wraps every HTTP method in withPolicy`, () => {
+    it(`${path} wraps every HTTP method in its policy guard`, () => {
       expect(source).not.toMatch(
         new RegExp(`export\\s+(async\\s+)?function\\s+(${METHODS})\\b`),
       );
@@ -66,8 +66,12 @@ describe("route handlers", () => {
         ),
       ];
       expect(exported.length).toBeGreaterThan(0);
+      // ADR 0004 D2: operator routes use only withOperator, and no other may.
+      const wrapper = path.startsWith("api/operator/")
+        ? /^withOperator\(/
+        : /^withPolicy\(/;
       for (const [, method, value] of exported) {
-        expect(value, `${method} in ${path}`).toMatch(/^withPolicy\(/);
+        expect(value, `${method} in ${path}`).toMatch(wrapper);
       }
     });
   }

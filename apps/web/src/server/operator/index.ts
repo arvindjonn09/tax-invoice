@@ -1,8 +1,14 @@
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
-import { getAuth, getDatabase, isProductionEnvironment } from "../auth";
-import { getTrustedOrigins } from "../auth";
+import {
+  getAuth,
+  getDatabase,
+  getTrustedOrigins,
+  isProductionEnvironment,
+} from "../auth";
+import { emailSecret } from "../email";
 import { isOperator } from "./access";
+import { operatorHandlers } from "./handlers";
 import { createWithOperator } from "./policy";
 
 const deps = {
@@ -38,3 +44,14 @@ export async function requireOperator(
   }
   return { userId: session.user.id };
 }
+
+/** Wiring for the operator API routes. */
+export const operatorApi = operatorHandlers(() => {
+  const url = process.env.BETTER_AUTH_URL;
+  if (!url) throw new Error("BETTER_AUTH_URL is not configured");
+  return {
+    db: getDatabase(),
+    emailSecret: emailSecret(),
+    appUrl: new URL(url).origin,
+  };
+});

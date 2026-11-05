@@ -24,6 +24,8 @@ export const UNSAFE_METHODS: ReadonlySet<string> = new Set([
  * key, and the database admits only that key's audit actions.
  */
 export const READ_ONLY_ALLOWED: Readonly<Record<string, string>> = {
+  "POST /api/company/trial/extension-requests":
+    "An owner asking for more time, which is how a read-only company gets out of it (trial_extension_request).",
   "POST /api/documents/[id]/link":
     "A download link for an existing record: no data changes.",
   "POST /api/invoices/[id]/pdf":
