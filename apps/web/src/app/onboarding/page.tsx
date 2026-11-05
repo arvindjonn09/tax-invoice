@@ -30,6 +30,10 @@ export default async function OnboardingPage() {
           and you can change them later in Settings. Your free 30-day trial
           starts when you finish.
         </p>
+        <p className="mt-4 text-muted-foreground">
+          Invited to join a company? Use the invitation link from your owner
+          instead.
+        </p>
         <section className="mt-8 rounded-2xl border bg-card p-6 text-card-foreground md:p-8">
           <OnboardingForm />
         </section>

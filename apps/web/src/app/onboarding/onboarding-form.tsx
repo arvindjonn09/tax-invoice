@@ -93,7 +93,13 @@ export function OnboardingForm() {
     const result = (await response?.json().catch(() => null)) as {
       error?: string;
       fields?: Record<string, string>;
+      alreadyMember?: boolean;
     } | null;
+    if (result?.alreadyMember) {
+      router.push("/home");
+      router.refresh();
+      return;
+    }
     setState({
       kind: "error",
       message: result?.error ?? "Something went wrong. Try again.",

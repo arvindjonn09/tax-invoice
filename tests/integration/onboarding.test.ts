@@ -133,6 +133,7 @@ describe("onboarding", () => {
     ).map((event) => event.action);
     expect(actions).toEqual([
       "company.created",
+      "company.profile_set",
       "gst_settings.registration_added",
       "trial.started",
     ]);
@@ -160,7 +161,112 @@ describe("onboarding", () => {
     expect(ids.size).toBe(1);
     const another = await handler(post(cookies, body, "different-key-0003"));
     expect(another.status).toBe(409);
-    expect((await another.json()).code).toBe("self_service_limit");
+    expect(await another.json()).toMatchObject({
+      code: "self_service_limit",
+      // The other tab's form carries on to the company it already has.
+      alreadyMember: true,
+    });
+  });
+
+  it("creates one company when two different keys race", async () => {
+    const cookies = await session("two-tabs@example.com");
+    const body = { businessName: "Two Tabs", gstRegistered: false };
+    const results = await Promise.all([
+      handler(post(cookies, body, "race-key-0001")),
+      handler(post(cookies, body, "race-key-0002")),
+    ]);
+    expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
+    expect(await db.company.count({ where: { name: "Two Tabs" } })).toBe(1);
+  });
+
+  it("tells a former member of their company to contact us", async () => {
+    const cookies = await session("former-owner@example.com");
+    const body = { businessName: "Former", gstRegistered: false };
+    const created = await handler(post(cookies, body, "former-key-001"));
+    const { companyId } = (await created.json()) as { companyId: string };
+    await db.membership.updateMany({
+      where: { companyId },
+      data: { isActive: false },
+    });
+    const again = await handler(post(cookies, body, "former-key-002"));
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({ alreadyMember: false });
+  });
+
+  it("switches another session to the company on a replay", async () => {
+    const email = "replay-session@example.com";
+    const first = await session(email);
+    const body = { businessName: "Replayed", gstRegistered: false };
+    const created = await handler(post(first, body, "replay-key-001"));
+    const { companyId } = (await created.json()) as { companyId: string };
+    const response = await auth.handler(
+      new Request(`${ORIGIN}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: ORIGIN,
+          "x-forwarded-for": `203.0.113.${++ipCounter}`,
+        },
+        body: JSON.stringify({ email, password: PASSWORD }),
+      }),
+    );
+    const second = new Headers({
+      cookie: response.headers
+        .getSetCookie()
+        .map((value) => value.split(";")[0])
+        .join("; "),
+    });
+    const replay = await handler(post(second, body, "replay-key-001"));
+    expect(replay.status).toBe(200);
+    const data = await auth.api.getSession({ headers: second });
+    expect(data?.session).toMatchObject({ activeCompanyId: companyId });
+  });
+
+  it("creates no GST registration for a business that isn't registered", async () => {
+    const cookies = await session("not-registered@example.com");
+    const created = await handler(
+      post(
+        cookies,
+        { businessName: "No GST", gstRegistered: false },
+        "no-gst-001",
+      ),
+    );
+    const { companyId } = (await created.json()) as { companyId: string };
+    expect(
+      await db.companyGstRegistration.count({ where: { companyId } }),
+    ).toBe(0);
+  });
+
+  it("leaves nothing behind when a late step fails", async () => {
+    const cookies = await session("late-failure@example.com");
+    const real = await auth.api.getSession({ headers: cookies });
+    const failing = createCompany({
+      db: () => db,
+      // The session update is the last write, and this session doesn't exist.
+      auth: () =>
+        ({
+          api: {
+            getSession: async () => ({
+              ...real,
+              session: { ...real?.session, id: crypto.randomUUID() },
+            }),
+          },
+        }) as never,
+      trustedOrigins: () => [ORIGIN],
+      now: () => NOW,
+    });
+    const response = await failing(
+      post(
+        cookies,
+        { businessName: "Left Behind", gstRegistered: false },
+        "fail-key-001",
+      ),
+    );
+    expect(response.status).toBe(500);
+    expect(await db.company.count({ where: { name: "Left Behind" } })).toBe(0);
+    expect(
+      await db.membership.count({ where: { userId: real!.user.id } }),
+    ).toBe(0);
   });
 
   it("validates GST details and refuses extra fields", async () => {
@@ -250,6 +356,39 @@ describe("choosing a company (S12)", () => {
       }),
     );
   }
+
+  it("refuses to select a company after the membership is deactivated", async () => {
+    const cookies = await session("deactivated@example.com");
+    const created = await handler(
+      post(
+        cookies,
+        { businessName: "Gone", gstRegistered: false },
+        "gone-key-001",
+      ),
+    );
+    const { companyId } = (await created.json()) as { companyId: string };
+    await db.membership.updateMany({
+      where: { companyId },
+      data: { isActive: false },
+    });
+    const text = JSON.stringify({ companyId });
+    const headers = new Headers(cookies);
+    headers.set("origin", ORIGIN);
+    headers.set("content-type", "application/json");
+    headers.set("content-length", String(Buffer.byteLength(text)));
+    const response = await selectCompany({
+      db: () => db,
+      auth: () => auth,
+      trustedOrigins: () => [ORIGIN],
+    })(
+      new Request(`${ORIGIN}/api/session/company`, {
+        method: "POST",
+        headers,
+        body: text,
+      }),
+    );
+    expect(response.status).toBe(404);
+  });
 
   it("lets a member of two companies pick either, and nothing else", async () => {
     const email = "two-companies@example.com";

@@ -78,6 +78,9 @@ const Company = z
 
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9-]{8,100}$/;
 
+/** Another request created this user's company while this one waited for the lock. */
+class SelfServiceCompanyExists extends Error {}
+
 function isSelfServiceConflict(error: unknown): boolean {
   const text = JSON.stringify(error, Object.getOwnPropertyNames(error ?? {}));
   return /P2002|23505/.test(text) && /self_service_owner_id/.test(text);
@@ -131,6 +134,17 @@ export function createCompany(deps: OnboardingDependencies) {
           select: { id: true, selfServiceRequestKey: true },
         });
         if (!existing) return null;
+        const member = await db.membership.findFirst({
+          where: { companyId: existing.id, userId, isActive: true },
+          select: { id: true },
+        });
+        // Any tab or session that reaches this company carries on in it.
+        if (member) {
+          await db.authSession.update({
+            where: { id: session.session.id },
+            data: { activeCompanyId: existing.id },
+          });
+        }
         if (existing.selfServiceRequestKey === key) {
           return privateJson({ companyId: existing.id }, { status: 200 });
         }
@@ -139,6 +153,8 @@ export function createCompany(deps: OnboardingDependencies) {
             error:
               "You've already set up a company. Contact us to set up another one.",
             code: "self_service_limit",
+            // Another tab finished first: the form carries on to that company.
+            alreadyMember: Boolean(member),
           },
           { status: 409 },
         );
@@ -152,6 +168,11 @@ export function createCompany(deps: OnboardingDependencies) {
       try {
         await withAudit(db, async (tx, audit) => {
           await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+          const raced = await tx.company.findUnique({
+            where: { selfServiceOwnerId: userId },
+            select: { id: true },
+          });
+          if (raced) throw new SelfServiceCompanyExists();
           const profile = {
             name: input.businessName,
             legalName: input.legalName ?? null,
@@ -184,6 +205,13 @@ export function createCompany(deps: OnboardingDependencies) {
             companyId,
             actorUserId: userId,
             action: "company.created",
+            target: { type: "company", id: companyId },
+            after: { name: profile.name },
+          });
+          await audit({
+            companyId,
+            actorUserId: userId,
+            action: "company.profile_set",
             target: { type: "company", id: companyId },
             after: profile,
           });
@@ -222,7 +250,10 @@ export function createCompany(deps: OnboardingDependencies) {
         });
       } catch (error) {
         // A concurrent request created this user's company first.
-        if (isSelfServiceConflict(error)) {
+        if (
+          error instanceof SelfServiceCompanyExists ||
+          isSelfServiceConflict(error)
+        ) {
           const raced = await existingResponse();
           if (raced) return raced;
         }
