@@ -23,6 +23,7 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 | `/api/company/gst` | PATCH | `gst_settings.update` | owner, accountant |
 | `/api/company/gst/registrations` | POST | `gst_settings.update` | owner, accountant |
 | `/api/company/gst/registrations/[id]` | PATCH | `gst_settings.update` | owner, accountant |
+| `/api/company/trial` | GET | `company.read` | owner, manager, accountant, employee, subcontractor |
 | `/api/contractors` | GET | `contractor.read` | owner, manager, accountant |
 | `/api/contractors` | POST | `contractor.write` | owner, manager |
 | `/api/contractors/[id]` | GET | `contractor.read` | owner, manager, accountant |

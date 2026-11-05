@@ -132,3 +132,36 @@ Full company exports require both export and cost-rate access because rate histo
 - Order: evidence can't be dated before the bill or its latest payment, and on the cash basis a payment can't be dated before the evidence. A day inside a finalised GST period posts to the open period, like other late sources. Voiding the bill reverses the reclassification with it. The document is claimed like any purchase document, so it can't also back an expense or another bill.
 - **Not combined with supplier credits:** a credit splits its GST as the bill was recorded, so late evidence is refused on a bill with supplier credits, and a supplier credit is refused on a bill with late evidence. In either case, void the bill and record it again with its tax invoice.
 - **Reports:** reports read a bill whose evidence is held, or posted, on or after the range start (#157). Its GST line is labelled `bill_evidence`.
+
+## Trial access, profile extras and the read-only guard (#210, #211)
+
+ADR 0004 D3–D4. #210 added the trial state on `companies` (`access_mode`, `trial_started_at`, `trial_last_day`, and `read_only_from`, which a trigger sets to Sydney midnight after the last day) and the S13 backfill. #211 adds:
+
+- **Profile extras on `companies` (S6):** `phone`, `business_email`, `website` (CHECK: `http(s)://` only), `about`, `setup_checklist_dismissed_at`, and `logo_document_id`. The logo is a composite FK to `documents(company_id, id)`, so it must be one of the company's own documents, and the `companies_logo_kind` trigger requires kind `company_logo`. `document_kind` gains `company_logo` (PostgreSQL can't remove an enum value, so the rollback leaves it).
+- **`quotes.supplier_snapshot` (S7):** set when the quote is sent. `jobflow_guard_quote()` compares every column except the decision fields, so the snapshot is frozen after send with no change to that trigger.
+- **`trial_notifications`:** one row per reminder threshold (`d7`, `d3`, `d1`, `ended`) sent for a company's current last day, unique on (company, last day, threshold). An extension changes the last day, which re-arms the thresholds (S10).
+- **`user_notices`:** dismissed one-time notices, unique on (user, company, key) with `NULLS NOT DISTINCT`, so account-level notices (no company) are unique too.
+- **`trial_extension_requests` (S14):**
+  - At most one `pending` request per company (partial unique index).
+  - The requester is a membership of that company.
+  - `trial_extension_requests_decision` ties each status to its fields:
+    - pending has no decision fields;
+    - approved has days (1–365) and a new last day;
+    - declined has a reason;
+    - closed has `direct_extension` with a new last day, or `made_unrestricted`.
+  - A request is decided once: after that, an update or delete raises `55000`, and a pending request's own details can't change either.
+  - `decided_by` references `users` until #230 adds `platform_operators`.
+- **Commit-time read-only guard (D4):**
+  - `audit_events_company_writable` is a deferred constraint trigger on `audit_events`. At commit, using the database clock (`clock_timestamp()`), it raises `55000` / `jobflow_company_read_only` when the company is on a trial with `read_only_from` in the past. Every business write is audited (`withAudit` refuses a transaction without an event), so every write passes it.
+  - A write that started before expiry and commits after it is rolled back.
+  - A transaction may declare one exemption key with `set_config('jobflow.read_only_exemption', key, true)`. It is transaction-local, so it never carries over on a pooled connection.
+  - `jobflow_read_only_exemption_actions(key)` lists the audit actions each key admits:
+    - `export`: `company.exported`, `report.exported`, `report.export_refused`;
+    - `record_rendering`: `invoice.pdf_stored`;
+    - `access_removal`: `membership.access_updated`, `invitation.revoked`;
+    - `invitation_pre_expiry`: `invitation.accepted`;
+    - `trial_extension_request`: `trial_extension.requested`;
+    - `operator`: `trial.extended`, `company.access_mode_changed`, `trial_extension.approved`, `trial_extension.declined`;
+    - `housekeeping`: `document.unattached_deleted`.
+
+    Any other action in the same transaction is still refused, and an unknown or empty key admits nothing. For `access_removal`, `membership.access_updated` is admitted only for a pure deactivation: the event's changes hold `isActive → false` and no `role`. #222 adds the matching TypeScript map, the route guard and the parity test.

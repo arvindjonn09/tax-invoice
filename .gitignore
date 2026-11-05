@@ -4,6 +4,7 @@ out/
 dist/
 coverage/
 playwright-report/
+smoke-report/
 test-results/
 *.tsbuildinfo
 .env

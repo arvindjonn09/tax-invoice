@@ -1,4 +1,4 @@
-# AI coding-agent instructions (Codex, Claude Code and others)
+# AI coding-agent instructions (Claude Code agents and others)
 
 You are implementing **JobFlow**, a small-business job management, tax-invoice and job-profitability platform for an
 Australian contracting company. Read all docs before coding. Inspect the repository before editing and preserve prior work.
@@ -67,15 +67,21 @@ TypeScript strict type-check, lint, unit + integration tests (incl. authorisatio
 audit, secret scan, static analysis) pass in CI before merge. Write tests and migrations alongside each change. Do not
 claim a feature complete until tests run. Report known limitations. Keep docs and the milestone checklist updated.
 
-## Who does what: Claude and Codex (owner decision, 23 October 2026)
-Claude Code and Codex **both implement** issues, in parallel, and **review each other's PRs**.
+## Who does what: Claude A and Claude B (owner decision, 3 November 2026)
+Two Claude Code agents, **Claude A** and **Claude B**, **both implement** issues, in parallel, and **review each
+other's PRs**. Codex is no longer on the project (this replaces the 23 October Claude/Codex split).
+- **Identity.** Both agents use the same GitHub account, so every issue comment, PR body and review starts with
+  `[session: Claude A / <session>]` or `[session: Claude B / <session>]`, and commits carry the session trailer. That
+  prefix is how authorship is told apart.
 - **Shared page:** `/home/prod/jobflow-updates.md` on the owner's machine. It's outside git, so it never causes PR
-  conflicts. It holds the current split of issues and an append-only log. Before starting an issue, read it and
-  append `<UTC time> · <Claude|Codex> · #N · claimed (branch …)`. Append one line when a PR opens, when a review is
-  posted and when a PR merges. Never edit earlier lines. GitHub issues and PRs stay the official record.
-- **Separate folders:** Codex works in `/home/prod/tax-invoice`, Claude in `/home/prod/tax-invoice-claude`. Never run
-  git commands in the other agent's folder, and don't push to a branch the other agent is working on; leave a review
-  comment instead.
+  conflicts. It holds the current split of issues and an append-only log. An agent that can reach it reads it before
+  starting an issue and appends `<UTC time> · <Claude A|Claude B> · #N · claimed (branch …)`, plus one line when a PR
+  opens, when a review is posted and when a PR merges. Never edit earlier lines. An agent that can't reach it (a
+  cloud session) claims on the GitHub issue instead. GitHub issues and PRs stay the official record.
+- **Separate working copies:** Claude A works in `/home/prod/tax-invoice-claude` on the owner's machine. Claude B
+  works in its own cloud clone and worktrees. Never run git in the other agent's working copy, and never push to a
+  branch the other agent is working on. To change their work, review it, or (when the owner asks) carry it on your
+  own branch and PR that names the one it supersedes.
 - **Migrations:** name new ones with the next free timestamp after every migration on `main` *and* in open PRs.
   Whoever lands second adds their entries to `tests/integration/database.test.ts` and
   `tests/integration/tenancy-migration.test.ts`.
@@ -84,12 +90,16 @@ Claude Code and Codex **both implement** issues, in parallel, and **review each 
   handoff note. A self-review never satisfies the "other agent has reviewed" condition.
 
 ## Merge policy (owner decision, 23 October 2026)
-The owner doesn't merge or approve PRs in advance; they test after merge and report problems as issues. Claude or
-Codex may merge a PR, its own or the other's, **only when all of these are true**:
+The owner doesn't merge or approve PRs in advance; they test after merge and report problems as issues. Claude A or
+Claude B may merge a PR, its own or the other's, **only when all of these are true**:
 1. Every required CI check on the PR's **current head commit** has passed.
-2. **The other agent** has reviewed that exact head commit, with nothing Blocking:
-   - Claude's PRs: Codex's GitHub reviewer (`chatgpt-codex-connector`) or a `🔎 Codex review (<sha7>)` comment.
-   - Codex's PRs: a `🔎 Claude review (<sha7>)` comment saying "Ready to merge".
+2. **The other agent** has reviewed that exact head commit, with nothing Blocking. That means a
+   `🔎 Claude A review (<sha7>)` or `🔎 Claude B review (<sha7>)` comment or GitHub review, from the agent that did
+   **not** write the commits under review, saying "Ready to merge".
+   - When both agents have commits on one PR, each agent's commits need the other's review. A review already given
+     for earlier commits carries over only if those commits are unchanged.
+   - Codex's GitHub bot (`chatgpt-codex-connector`), if it still comments, is **advisory**. Answer or fix its
+     findings like any other, but it doesn't satisfy this condition.
 
    A new commit needs a new review. The one exception is GitHub's update-branch merge of `main`: the merging agent
    may confirm it brought in no conflicts and no changes to the PR's own code, in a comment naming the new SHA.
