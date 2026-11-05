@@ -1,10 +1,13 @@
+import { after } from "next/server";
 import {
   getAuth,
   getDatabase,
   getTrustedOrigins,
   isProductionEnvironment,
 } from "../auth";
+import { hashPassword } from "better-auth/crypto";
 import { dispatchSoon, emailSecret } from "../email";
+import { log, safeError } from "../log";
 import { isBreachedPassword } from "../security/pwned";
 import { verifyTurnstile } from "../security/turnstile";
 import type { AccountDependencies } from "./handlers";
@@ -24,6 +27,15 @@ export const accountDeps: AccountDependencies = {
   emailSecret,
   production: () => isProductionEnvironment(process.env),
   dispatch: dispatchSoon,
+  defer: (work) =>
+    after(async () => {
+      try {
+        await work();
+      } catch (error) {
+        log("error", "account.deferred_failed", { error: safeError(error) });
+      }
+    }),
+  hashPassword,
   isBreached: (password) => isBreachedPassword(password),
   verifyTurnstile: (token, action, ip) =>
     verifyTurnstile(token, action, {

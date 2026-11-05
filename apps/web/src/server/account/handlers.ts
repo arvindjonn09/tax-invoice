@@ -1,4 +1,3 @@
-import { hashPassword } from "better-auth/crypto";
 import { z } from "zod";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import type { Auth } from "../auth/config";
@@ -32,6 +31,12 @@ export type AccountDependencies = {
   production: () => boolean;
   /** Sends queued email after the response (next/server after()). */
   dispatch: () => void;
+  /**
+   * Runs work after the response (next/server after()), so what an account's
+   * state costs in database work can't be timed by a public caller.
+   */
+  defer: (work: () => Promise<void>) => void | Promise<void>;
+  hashPassword: (password: string) => Promise<string>;
   isBreached: (password: string) => Promise<boolean>;
   verifyTurnstile: (
     token: string | undefined,
@@ -184,16 +189,34 @@ async function sendVerification(
   });
 }
 
+/** Seconds until a fixed window from `hit` ends. */
+async function windowLeft(
+  db: PrismaClient,
+  key: string,
+  windowSeconds: number,
+): Promise<number> {
+  const rows = await db.$queryRaw<{ last_request: bigint }[]>`
+    SELECT last_request FROM auth_rate_limits WHERE key = ${`jobflow:${key}`}`;
+  const start = Number(rows[0]?.last_request ?? Date.now());
+  return Math.max(1, Math.ceil(windowSeconds - (Date.now() - start) / 1000));
+}
+
 /**
  * Per-account resend limits (S3 AC5): 1 per minute and 5 per day. Returns
- * the seconds to wait, or null when a resend is allowed now.
+ * the seconds to wait, or null when a resend is allowed now. The public form
+ * and the signed-in button count separately, so strangers solving Turnstile
+ * can't use up the account holder's own allowance.
  */
 async function resendWait(
   db: PrismaClient,
   userId: string,
+  source: "public" | "mine",
 ): Promise<number | null> {
-  if (await over(db, `verify:resend:minute:${userId}`, 60, 1)) return 60;
-  if (await over(db, `verify:resend:day:${userId}`, 86_400, 5)) return 3600;
+  const prefix = `verify:resend:${source}`;
+  const minute = `${prefix}:minute:${userId}`;
+  if (await over(db, minute, 60, 1)) return windowLeft(db, minute, 60);
+  const day = `${prefix}:day:${userId}`;
+  if (await over(db, day, 86_400, 5)) return windowLeft(db, day, 86_400);
   return null;
 }
 
@@ -307,21 +330,24 @@ export function signUp(deps: AccountDependencies) {
     }
     if (!createdId) {
       // Spend the same hashing work as a new account, so timing doesn't tell.
-      if (existing) await hashPassword(input.password);
-      const owner = await db.user.findUniqueOrThrow({
-        where: { email: input.email },
-        select: { id: true, email: true },
-      });
-      const hour = Math.floor(Date.now() / 3_600_000);
-      // Silent per-recipient cap (1/h via the dedupe key, 3/day here), so
-      // many IPs can't flood one inbox; the response is the same either way.
-      const capped = await over(
-        db,
-        `signup:existing:day:${owner.id}`,
-        86_400,
-        3,
-      );
-      if (!capped)
+      if (existing) await deps.hashPassword(input.password);
+      const email = input.email;
+      // After the response: the per-recipient cap below must not show in timing.
+      await deps.defer(async () => {
+        const owner = await db.user.findUniqueOrThrow({
+          where: { email },
+          select: { id: true, email: true },
+        });
+        const hour = Math.floor(Date.now() / 3_600_000);
+        // Silent per-recipient cap (1/h via the dedupe key, 3/day here), so
+        // many IPs can't flood one inbox; the response is the same either way.
+        const capped = await over(
+          db,
+          `signup:existing:day:${owner.id}`,
+          86_400,
+          3,
+        );
+        if (capped) return;
         await db
           .$transaction(async (tx) => {
             await enqueueEmail(tx, deps.emailSecret(), {
@@ -343,6 +369,9 @@ export function signUp(deps: AccountDependencies) {
           .catch((error: unknown) => {
             if (!isUniqueViolation(error)) throw error;
           });
+        deps.dispatch();
+      });
+      return checkEmail();
     }
     deps.dispatch();
     return checkEmail();
@@ -416,13 +445,13 @@ export function resendVerification(deps: AccountDependencies) {
       where: { email: parsed.data.email },
       select: { id: true, email: true, emailVerified: true },
     });
-    if (
-      user &&
-      !user.emailVerified &&
-      (await resendWait(db, user.id)) === null
-    ) {
-      await sendVerification(deps, user);
-      deps.dispatch();
+    if (user && !user.emailVerified) {
+      // After the response: unknown addresses do none of this work.
+      await deps.defer(async () => {
+        if ((await resendWait(db, user.id, "public")) !== null) return;
+        await sendVerification(deps, user);
+        deps.dispatch();
+      });
     }
     return checkEmail();
   });
@@ -443,7 +472,7 @@ export function resendMine(deps: AccountDependencies) {
     if (user.emailVerified) {
       return privateJson({ status: "already-verified" });
     }
-    const wait = await resendWait(db, user.id);
+    const wait = await resendWait(db, user.id, "mine");
     if (wait !== null) return tooMany(wait);
     await sendVerification(deps, user);
     deps.dispatch();

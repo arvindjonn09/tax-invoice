@@ -61,6 +61,8 @@ test("a visitor signs up, is held at verification, then verifies", async ({
       issueToken(tx, user.id, "email_verification"),
     );
     await page.goto(`/verify-email#token=${token}`);
+    // Loading the link spends nothing; only the button does.
+    await page.getByRole("button", { name: "Confirm my email" }).click();
     await expect(
       page.getByRole("heading", { name: "Email verified" }),
     ).toBeVisible();

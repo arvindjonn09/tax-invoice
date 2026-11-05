@@ -8,40 +8,24 @@ import {
 } from "@jobflow/authz";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import type { Auth } from "../auth/config";
-import { resolveActor } from "../auth/actor";
+import { type CompanyAccess, resolveActor } from "../auth/actor";
 import {
   HttpError,
   MAX_JSON_BYTES,
   requireBodyWithin,
   requireTrustedOrigin,
 } from "../http/guards";
+import { hasDatabaseError } from "../http/database-errors";
 import { log, safeError } from "../log";
+import {
+  READ_ONLY_RESPONSE,
+  allowedWhileReadOnly,
+  isCompanyReadOnlyError,
+} from "./read-only";
 
 /** PostgreSQL and Prisma adapter errors must carry the actual SQLSTATE. */
 export function isLockedPeriodError(error: unknown): boolean {
-  const visited = new WeakSet<object>();
-  const inspect = (value: unknown, depth: number): boolean => {
-    if (!value || typeof value !== "object" || visited.has(value)) return false;
-    visited.add(value);
-    const row = value as Record<string, unknown>;
-    const state = row.code ?? row.originalCode;
-    if (
-      state === "55000" &&
-      [row.message, row.originalMessage].some(
-        (message) =>
-          typeof message === "string" &&
-          message.includes("jobflow_period_locked"),
-      )
-    )
-      return true;
-    // At most five wrapper edges; cycles and unusually deep adapter chains
-    // cannot overflow the stack inside the route's exception handler.
-    if (depth === 5) return false;
-    return [row.meta, row.cause, row.driverAdapterError].some((child) =>
-      inspect(child, depth + 1),
-    );
-  };
-  return inspect(error, 0);
+  return hasDatabaseError(error, "55000", "jobflow_period_locked");
 }
 
 export type PolicyDependencies = {
@@ -51,18 +35,33 @@ export type PolicyDependencies = {
   trustedOrigins: () => readonly string[];
 };
 
+/**
+ * Resolve the request's actor and require `permission`, or throw AuthzError.
+ * Also returns the company's trial access, from the same lookup (#221).
+ */
+export async function authorizeRequest(
+  deps: PolicyDependencies,
+  headers: Headers,
+  permission: Permission,
+): Promise<{ actor: Actor; access: CompanyAccess }> {
+  const resolution = await resolveActor(deps.auth(), deps.db(), headers);
+  if (resolution.status === "signed-out") throw unauthenticated();
+  // Signed in but no active company: nothing in any company is reachable.
+  if (resolution.status !== "active") throw forbidden();
+  const { userId, companyId, role, access } = resolution.actor;
+  return {
+    actor: requirePermission({ userId, companyId, role }, permission),
+    access,
+  };
+}
+
 /** Resolve the request's actor and require `permission`, or throw AuthzError. */
 export async function authorize(
   deps: PolicyDependencies,
   headers: Headers,
   permission: Permission,
 ): Promise<Actor> {
-  const resolution = await resolveActor(deps.auth(), deps.db(), headers);
-  if (resolution.status === "signed-out") throw unauthenticated();
-  // Signed in but no active company: nothing in any company is reachable.
-  if (resolution.status !== "active") throw forbidden();
-  const { userId, companyId, role } = resolution.actor;
-  return requirePermission({ userId, companyId, role }, permission);
+  return (await authorizeRequest(deps, headers, permission)).actor;
 }
 
 const PRIVATE = { "cache-control": "private, no-store" };
@@ -77,6 +76,11 @@ export function privateJson(body: unknown, init: ResponseInit = {}): Response {
 
 export type PolicyHandler<Context> = (input: {
   actor: Actor;
+  /**
+   * The company's trial access for this request (#221). Always set by
+   * withPolicy; optional so handlers can be called directly in tests.
+   */
+  access?: CompanyAccess;
   request: Request;
   context: Context;
 }) => Promise<Response>;
@@ -100,8 +104,19 @@ export function createWithPolicy(deps: PolicyDependencies) {
       try {
         requireTrustedOrigin(request, deps.trustedOrigins());
         requireBodyWithin(request, maxBodyBytes);
-        const actor = await authorize(deps, request.headers, permission);
-        return await handler({ actor, request, context });
+        const { actor, access } = await authorizeRequest(
+          deps,
+          request.headers,
+          permission,
+        );
+        // ADR 0004 D4: a read-only company can't change anything except
+        // the READ_ONLY_ALLOWED routes. Safe methods are never blocked.
+        if (
+          access.readOnly &&
+          !allowedWhileReadOnly(request.method, new URL(request.url).pathname)
+        )
+          return privateJson(READ_ONLY_RESPONSE, { status: 403 });
+        return await handler({ actor, access, request, context });
       } catch (error) {
         if (error instanceof AuthzError || error instanceof HttpError) {
           return privateJson(
@@ -109,6 +124,9 @@ export function createWithPolicy(deps: PolicyDependencies) {
             { status: error.status },
           );
         }
+        // The commit-time database guard (a write that raced the expiry).
+        if (isCompanyReadOnlyError(error))
+          return privateJson(READ_ONLY_RESPONSE, { status: 403 });
         if (isLockedPeriodError(error))
           return privateJson(
             {
