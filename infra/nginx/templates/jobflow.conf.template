@@ -91,6 +91,9 @@ server {
     # header must not survive.
     proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Real-IP $remote_addr;
+    # Only Cloudflare may set this, and nothing here is behind it yet. Dropped so
+    # CLIENT_IP_HEADER set by mistake gives no address, not one the client chose.
+    proxy_set_header CF-Connecting-IP "";
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-Host $server_name;
 

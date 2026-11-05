@@ -1,8 +1,8 @@
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import { createDatabaseClient } from "../../../../../packages/database/src/index";
-import { type Auth, createAuth } from "./config";
+import { type Auth, createAuth, isProductionEnvironment } from "./config";
 
-export { createAuth, type Auth } from "./config";
+export { createAuth, isProductionEnvironment, type Auth } from "./config";
 export { createCredentialUser } from "./credentials";
 export { resolveActor, setActiveCompany, type Actor } from "./actor";
 
@@ -21,19 +21,6 @@ export function getDatabase(): PrismaClient {
   return database;
 }
 
-/**
- * The real production environment. `next start` always sets NODE_ENV=production,
- * so staging and previews declare themselves with APP_ENV (staging, preview,
- * development); without APP_ENV a production build counts as production.
- */
-export function isProductionEnvironment(
-  env: Readonly<Record<string, string | undefined>>,
-): boolean {
-  return env.APP_ENV
-    ? env.APP_ENV === "production"
-    : env.NODE_ENV === "production";
-}
-
 /** Lazily created so `next build` needs no secrets. */
 export function getAuth(): Auth {
   auth ??= createAuth({
@@ -41,6 +28,7 @@ export function getAuth(): Auth {
     secret: required("BETTER_AUTH_SECRET"),
     baseURL: required("BETTER_AUTH_URL"),
     production: isProductionEnvironment(process.env),
+    clientIpHeader: process.env.CLIENT_IP_HEADER,
   });
   return auth;
 }

@@ -2,7 +2,7 @@ import type {
   MembershipRole,
   PrismaClient,
 } from "../../../../../packages/database/src/generated/prisma/client";
-import type { Auth } from "./config";
+import { type Auth, DEMO_EMAIL, isProductionEnvironment } from "./config";
 
 /**
  * The company's trial access for this request (#221, ADR 0004 D3). `readOnly`
@@ -36,6 +36,8 @@ type MembershipAccessRow = {
 
 export type ActorResolution =
   | { status: "signed-out" }
+  /** Signed in, but the email address is not verified yet (ADR 0004 D1). */
+  | { status: "unverified"; userId: string; email: string }
   | { status: "no-membership"; userId: string }
   | {
       status: "choose-company";
@@ -58,6 +60,9 @@ export async function resolveActor(
   const session = await auth.api.getSession({ headers });
   if (!session) return { status: "signed-out" };
   const userId = session.user.id;
+  if (!isVerified(session.user)) {
+    return { status: "unverified", userId, email: session.user.email };
+  }
   // One query: active memberships with each company's trial state, judged
   // by the database clock (the same clock the commit-time guard uses).
   const rows = await db.$queryRaw<MembershipAccessRow[]>`
@@ -102,6 +107,25 @@ export async function resolveActor(
       access: active.access,
     },
   };
+}
+
+/** The test suite's identities; a reserved TLD that can never receive email. */
+const TEST_EMAIL = /@jobflow\.invalid$/i;
+
+/**
+ * Verified email is required for every account (S3 AC6). Only the seeded demo
+ * and test-suite identities are exempt, and only outside production, because
+ * they can't receive email. Other reserved-TLD addresses get no exemption.
+ */
+export function isVerified(
+  user: { email: string; emailVerified: boolean },
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  if (user.emailVerified) return true;
+  return (
+    (DEMO_EMAIL.test(user.email) || TEST_EMAIL.test(user.email)) &&
+    !isProductionEnvironment(env)
+  );
 }
 
 /** Switch the session's company; only to a company the user actively belongs to. */

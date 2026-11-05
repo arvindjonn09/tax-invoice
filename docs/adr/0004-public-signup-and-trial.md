@@ -339,10 +339,13 @@ Enforcement has two layers, and the database layer is authoritative.
   - With a proxied DNS record instead, the origin would need to be firewalled to Cloudflare's IP ranges and use
     Authenticated Origin Pulls. The tunnel is simpler and closes the origin.
 - **Client IP.**
-  - nginx sets `real_ip_header CF-Connecting-IP`, and `set_real_ip_from` is limited to the `cloudflared` container
-    subnet. It keeps **overwriting** `X-Forwarded-For` with `$remote_addr`.
-  - `clientIp()` and nginx `limit_req` therefore see the real client without any app change.
-  - The app never reads `CF-Connecting-IP` itself, so only one hop is trusted.
+  - One source per deployment, so only one hop is ever trusted:
+    - **Tunnel to nginx (this design):** nginx sets `real_ip_header CF-Connecting-IP`, with `set_real_ip_from` limited
+      to the `cloudflared` container subnet, and keeps **overwriting** `X-Forwarded-For` with `$remote_addr`.
+      `CLIENT_IP_HEADER` stays unset, and nginx drops any client-sent `CF-Connecting-IP` before the app.
+    - **Tunnel straight to the app, no nginx (the pilot host):** `CLIENT_IP_HEADER=cf-connecting-ip`, with the app
+      listening on `127.0.0.1` only, so `cloudflared` is the one thing that can reach it.
+  - `clientIp()` and Better Auth's sign-in limit read the same source. Anything that isn't an IP address is ignored.
   - Per-/64 IPv6 keys stay a #168 item.
 - **Caching.**
   - One Cache Rule bypasses the cache for everything on the hostname except `/_next/static/*`.
@@ -405,8 +408,8 @@ Enforcement has two layers, and the database layer is authoritative.
   and the operator boundary.
 - **`docs/architecture/user-access.md`**: "Accounts without any membership can authenticate" now leads to onboarding.
   Deactivation and revocation stay allowed while read-only.
-- **`docs/adr/0003-authentication.md` consequences**: rate limiting now relies on nginx trusting `CF-Connecting-IP`
-  from the tunnel only.
+- **`docs/adr/0003-authentication.md` consequences**: rate limiting now relies on `CF-Connecting-IP` from the tunnel
+  only, through nginx or `CLIENT_IP_HEADER` (D8).
 - **`docs/SECURITY.md` / `docs/security/requirements.md`**: the client-IP rule behind Cloudflare, operator MFA, and
   the email token rules.
 - **`docs/DATA_MODEL.md`**: new tables and columns (database tasks).
