@@ -239,7 +239,7 @@ Every response is JSON with `Cache-Control: private, no-store`. Errors look like
 
 | Method and path | Body | Responses |
 |---|---|---|
-| POST `/api/account/verification/resend-mine` | none (`allowUnverified`) | 202 `{ retryAfterSeconds? }` (account 1/min, 5/day) |
+| POST `/api/account/verification/resend-mine` | none (`allowUnverified`) | 202 `{ status: "sent" }`; 429 `{ retryAfterSeconds }` with `Retry-After` when throttled (account 1/min, 5/day) |
 | POST `/api/onboarding/company` | `{ businessName, gstRegistered, abn?, gstStartsOn?, gstBasis?, basPeriod?, legalName?, addressLine1?, addressLine2?, suburb?, state?, postcode? }`. Unknown keys such as `companyId`, `isDemo`, trial dates or `role` → 400 | 201 `{ companyId }`; **200 with the same `companyId`** on retry or race; 409 `self_service_limit`; 400 `fields` |
 | POST `/api/session/company` | `{ companyId }` | 204; 404 when the user isn't an active member |
 | POST `/api/notices/dismiss` | `{ noticeKey, companyId? }` | 204 |
@@ -331,11 +331,13 @@ sequenceDiagram
   - The client generates an `Idempotency-Key` (a UUID) once per onboarding form load and sends it with every submit.
   - The handler locks the user row, then looks for a company with `self_service_owner_id = user`.
   - If that company's `self_service_request_key` equals the header, the handler returns **200** with that company.
-    This covers a double click, a retry or two tabs on the same form.
+    This covers a double click or a retry of one form load.
   - The `self_service_owner_id` UNIQUE constraint is the backstop: on a unique violation, the handler re-reads and
     applies the same rule.
 - **Self-service limit (S5 AC5).** If such a company exists with a **different** key, the handler returns 409
-  `self_service_limit` ("Contact us to set up another company") and creates nothing.
+  `self_service_limit` ("Contact us to set up another company") and creates nothing. Two tabs have different keys, so
+  the second gets this 409 with `alreadyMember: true` while the user is still an active member, and carries on to the
+  same company (S5 AC4).
 
 ## Trial indicator and read-only UI
 

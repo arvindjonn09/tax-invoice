@@ -15,6 +15,7 @@ export function AppShell({
   navigation,
   demoPresent,
   preview = false,
+  banner,
   children,
 }: {
   companyName: string;
@@ -22,6 +23,8 @@ export function AppShell({
   navigation: readonly NavLink[];
   demoPresent: boolean;
   preview?: boolean;
+  /** Account-level notice such as the trial countdown (#226). */
+  banner?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -34,6 +37,7 @@ export function AppShell({
       </a>
       {demoPresent ? <DemoDataBanner /> : null}
       {preview ? <DesignPreviewBanner /> : null}
+      {banner}
       <header className="flex flex-wrap items-center justify-between gap-4 border-b bg-card px-4 py-2 text-card-foreground">
         <div className="flex flex-wrap items-baseline gap-2">
           <strong>JobFlow</strong>
