@@ -10,6 +10,7 @@ const config = [
       "**/src/generated/**",
       "**/next-env.d.ts",
       "playwright-report/**",
+      "smoke-report/**",
       "coverage/**",
       "test-results/**",
     ],

@@ -1,6 +1,6 @@
 # ADR 0003: Authentication with Better Auth and database sessions
 
-Status: accepted for #13. Date: 23 October 2026.
+Status: accepted for #13. Date: 23 October 2026. Amended by [ADR 0004](0004-public-signup-and-trial.md) (M6): public sign-up, email verification and password reset now exist; "No public sign-up" and the password-reset consequence below are superseded.
 
 ## Context
 #13 needs email + password sign-in with an established library, secure HttpOnly

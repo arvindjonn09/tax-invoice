@@ -16,10 +16,12 @@ export function createDatabaseClient(connectionString: string): PrismaClient {
 }
 
 export {
+  READ_ONLY_EXEMPTION_ACTIONS,
   REDACTED,
   auditChanges,
   listAuditEvents,
   withAudit,
   type AuditEventInput,
   type AuditRecorder,
+  type ReadOnlyExemption,
 } from "./audit";

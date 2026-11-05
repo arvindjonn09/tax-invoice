@@ -239,6 +239,37 @@ describe("full company export (#62)", () => {
     )(new Request(`${ORIGIN}/api/company/export`, { headers: h }), undefined);
   };
 
+  it("still exports, and audits it, while the company is read-only (#222)", async () => {
+    await db.company.update({
+      where: { id: companyId },
+      data: {
+        isDemo: false,
+        accessMode: "trial",
+        trialStartedAt: new Date("2019-12-01T00:00:00Z"),
+        trialLastDay: new Date("2020-01-01T00:00:00Z"),
+      },
+    });
+    try {
+      const before = await db.auditEvent.count({
+        where: { companyId, action: "company.exported" },
+      });
+      await db.$executeRaw`DELETE FROM auth_rate_limits WHERE key LIKE 'jobflow:export:%'`;
+      const response = await download("owner");
+      expect(response.status).toBe(200);
+      expect(
+        await db.auditEvent.count({
+          where: { companyId, action: "company.exported" },
+        }),
+      ).toBe(before + 1);
+    } finally {
+      await db.company.update({
+        where: { id: companyId },
+        data: { accessMode: "unrestricted", isDemo: true },
+      });
+      await db.$executeRaw`DELETE FROM auth_rate_limits WHERE key LIKE 'jobflow:export:%'`;
+    }
+  });
+
   it("requires permission to export protected cost-rate records", async () => {
     expect((await download("accountant")).status).toBe(403);
     expect((await download("manager")).status).toBe(403);
@@ -282,6 +313,23 @@ describe("full company export (#62)", () => {
       },
     });
 
+    // #210: queued email and the onboarding idempotency key stay internal.
+    await db.emailOutbox.create({
+      data: {
+        companyId,
+        kind: "trial_reminder",
+        dedupeKey: "export-test-dedupe-key",
+        payloadCiphertext: Buffer.from("sealed-export-test-payload"),
+      },
+    });
+    await db.company.update({
+      where: { id: companyId },
+      data: {
+        selfServiceOwnerId: userIds.owner,
+        selfServiceRequestKey: "export-test-request-key",
+      },
+    });
+
     const response = await download("owner");
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
@@ -293,7 +341,11 @@ describe("full company export (#62)", () => {
     expect(text).not.toContain("c".repeat(64));
     expect(text).not.toContain(`documents/${companyId}/`);
     expect(text).not.toContain("Their Sample");
-    expect(text).not.toMatch(/password|request_hash|token_hash|object_key/);
+    expect(text).not.toMatch(
+      /password|request_hash|token_hash|object_key|self_service_request_key|email_outbox|payload_ciphertext/,
+    );
+    expect(text).not.toContain("export-test-dedupe-key");
+    expect(text).not.toContain("export-test-request-key");
     const raw = JSON.parse(text);
     expect(raw).toMatchObject({
       format: "jobflow.company-export",

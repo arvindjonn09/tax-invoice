@@ -4,6 +4,7 @@ out/
 dist/
 coverage/
 playwright-report/
+smoke-report/
 test-results/
 *.tsbuildinfo
 .env
@@ -18,3 +19,6 @@ __pycache__/
 
 # Staging host secrets (#64); only the *.env.example files are committed.
 infra/staging/env/*.env
+
+# Accountant review pack output (#67), regenerated on demand
+accountant-pack/

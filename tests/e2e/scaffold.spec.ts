@@ -1,17 +1,14 @@
 import { expect, test } from "@playwright/test";
 
-test("serves the placeholder and non-cacheable health endpoint", async ({
+test("serves the landing page and non-cacheable health endpoint", async ({
   page,
   request,
 }) => {
   await page.goto("/");
-  await expect(page).toHaveTitle("JobFlow");
+  await expect(page).toHaveTitle(/^JobFlow · /);
   await expect(page.locator("html")).toHaveAttribute("lang", "en-AU");
   await expect(
-    page.getByRole("heading", { name: "A clear view of every job." }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Implementation in progress" }),
+    page.getByRole("heading", { name: "Know what every job really made." }),
   ).toBeVisible();
   const response = await request.get("/api/health");
   expect(response.ok()).toBeTruthy();
@@ -24,7 +21,7 @@ test("serves the placeholder and non-cacheable health endpoint", async ({
 
 for (const width of [360, 390, 768, 1024, 1440]) {
   for (const colorScheme of ["light", "dark"] as const) {
-    test(`placeholder renders at ${width}px in ${colorScheme} mode`, async ({
+    test(`landing page renders at ${width}px in ${colorScheme} mode`, async ({
       page,
     }, testInfo) => {
       await page.setViewportSize({ width, height: 900 });
@@ -38,7 +35,7 @@ for (const width of [360, 390, 768, 1024, 1440]) {
         .selectOption(colorScheme);
       await expect(page.getByRole("main")).toBeVisible();
       await expect(
-        page.getByText("This is the application scaffold.", { exact: false }),
+        page.getByRole("heading", { name: "Know what every job really made." }),
       ).toBeVisible();
       expect(
         await page.evaluate(
