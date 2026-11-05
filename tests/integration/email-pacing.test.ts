@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import {
   afterAll,
   afterEach,
@@ -12,12 +11,17 @@ import {
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
 import { addressDigest } from "../../apps/web/src/server/email/crypto";
 import {
+  BLOCKED_PAUSE_MS,
   DEFAULT_MAX_PER_HOUR,
+  MAX_ATTEMPTS,
+  MAX_PAUSE_MS,
+  MAX_RATE_LIMITED_PER_ROW,
   RATE_LIMIT_PAUSE_MS,
+  classifySendError,
   dispatchOutbox,
   enqueueEmail,
-  isRateLimited,
   maxPerHourFromEnv,
+  pauseMs,
 } from "../../apps/web/src/server/email/outbox";
 import {
   suppressAddress,
@@ -34,7 +38,7 @@ import {
 } from "../helpers/committed-database";
 
 // #259: pacing under Zoho's hourly limit, account emails first, throttling
-// replies, and the host suppression CLI.
+// and block replies, and the host suppression CLI.
 const SECRET = "test-outbox-key-0123456789abcdef-0123456789";
 const HOUR = 3_600_000;
 let database: CommittedDatabase;
@@ -50,6 +54,11 @@ afterAll(() => database?.release());
 beforeEach(async () => {
   await client.emailOutbox.deleteMany({});
   await client.emailSuppression.deleteMany({});
+  await client.emailSendAttempt.deleteMany({});
+  await client.emailDispatchState.update({
+    where: { id: 1 },
+    data: { pausedUntil: null, pauseStreak: 0 },
+  });
   logs = [];
   restoreLog = setLogSink((line) => logs.push(line));
 });
@@ -70,60 +79,89 @@ async function queue(kind: string, n: number, at?: Date) {
       data: { nextAttemptAt: at, createdAt: at },
     });
 }
-const statuses = async () =>
-  Object.fromEntries(
-    (
-      await client.emailOutbox.findMany({
-        select: { dedupeKey: true, status: true },
-      })
-    ).map((row) => [row.dedupeKey, row.status]),
-  );
+const row = (key: string) =>
+  client.emailOutbox.findUniqueOrThrow({ where: { dedupeKey: key } });
+const pausedUntil = async () =>
+  (await client.emailDispatchState.findUniqueOrThrow({ where: { id: 1 } }))
+    .pausedUntil;
+const refusing = (responseCode: number, response: string): EmailTransport => ({
+  name: "refusing",
+  send: () =>
+    Promise.reject(
+      Object.assign(new Error(`${response} ${to(1)}`), {
+        responseCode,
+        response: `${responseCode} ${response} ${to(1)}`,
+      }),
+    ),
+});
+/** Due now: a little after the rows' database-set next_attempt_at. */
+const soon = () => Date.now() + 1000;
 
 describe("pacing (EMAIL_MAX_PER_HOUR)", () => {
-  it("reads the cap from the environment, defaulting to 40", () => {
+  it("reads the cap from the environment; 0 or junk is an error, not a silent default", () => {
     expect(DEFAULT_MAX_PER_HOUR).toBe(40);
     expect(maxPerHourFromEnv({})).toBe(40);
     expect(maxPerHourFromEnv({ EMAIL_MAX_PER_HOUR: "25" })).toBe(25);
-    for (const bad of ["0", "-1", "2.5", "lots", ""])
+    for (const bad of ["0", "-1", "2.5", "lots"])
       expect(maxPerHourFromEnv({ EMAIL_MAX_PER_HOUR: bad }), bad).toBe(40);
+    expect(logs.filter((l) => l.includes("email.config_invalid"))).toHaveLength(
+      1,
+    );
   });
 
   it("sends at most the cap in a rolling hour, across sweeps; the rest stay pending", async () => {
-    const start = Date.now();
+    const start = soon();
     for (let n = 1; n <= 5; n += 1)
-      await queue("trial_reminder", n, new Date(start - 1000));
+      await queue("trial_reminder", n, new Date(start - 2000));
     const transport = new MemoryTransport();
     const at = (ms: number) => () => new Date(start + ms);
-
-    const first = await dispatchOutbox(client, transport, SECRET, {
-      maxPerHour: 3,
-      now: at(0),
-    });
-    expect(first).toMatchObject({ sent: 3, paced: true });
-    // A later sweep within the hour sends nothing more.
-    const second = await dispatchOutbox(client, transport, SECRET, {
-      maxPerHour: 3,
-      now: at(30 * 60_000),
-    });
-    expect(second).toMatchObject({ sent: 0, paced: true });
     expect(
-      Object.values(await statuses()).filter((s) => s === "pending"),
-    ).toHaveLength(2);
-    // Once the first sends are an hour old, the rest go.
-    const third = await dispatchOutbox(client, transport, SECRET, {
-      maxPerHour: 3,
-      now: () => new Date(Date.now() + HOUR + 1000),
-    });
-    expect(third).toMatchObject({ sent: 2, paced: false });
+      await dispatchOutbox(client, transport, SECRET, {
+        maxPerHour: 3,
+        now: at(0),
+      }),
+    ).toMatchObject({ sent: 3, paced: true });
+    expect(
+      await dispatchOutbox(client, transport, SECRET, {
+        maxPerHour: 3,
+        now: at(30 * 60_000),
+      }),
+    ).toMatchObject({ sent: 0, paced: true });
+    expect(
+      await client.emailOutbox.count({ where: { status: "pending" } }),
+    ).toBe(2);
+    expect(
+      await dispatchOutbox(client, transport, SECRET, {
+        maxPerHour: 3,
+        now: at(HOUR + 1000),
+      }),
+    ).toMatchObject({ sent: 2, paced: false });
     expect(transport.sent).toHaveLength(5);
+  });
+
+  it("counts failed sends toward the cap, not only successful ones", async () => {
+    for (let n = 1; n <= 5; n += 1) await queue("trial_reminder", n);
+    const now = soon();
+    const result = await dispatchOutbox(
+      client,
+      refusing(552, "Mailbox full"),
+      SECRET,
+      { maxPerHour: 3, now: () => new Date(now) },
+    );
+    expect(result).toMatchObject({ failed: 3, paced: true });
+    expect(await client.emailSendAttempt.count()).toBe(3);
   });
 
   it("holds the cap exactly when dispatchers run at the same time", async () => {
     for (let n = 1; n <= 8; n += 1) await queue("trial_reminder", n);
     const transport = new MemoryTransport();
+    const now = soon();
     const results = await Promise.all(
       [1, 2, 3, 4].map(() =>
-        dispatchOutbox(client, transport, SECRET, { maxPerHour: 3 }),
+        dispatchOutbox(client, transport, SECRET, {
+          maxPerHour: 3,
+          now: () => new Date(now),
+        }),
       ),
     );
     expect(results.reduce((total, r) => total + r.sent, 0)).toBe(3);
@@ -137,90 +175,204 @@ describe("pacing (EMAIL_MAX_PER_HOUR)", () => {
     await queue("password_reset", 3);
     await queue("verify_email", 4);
     const transport = new MemoryTransport();
-    await dispatchOutbox(client, transport, SECRET, { maxPerHour: 2 });
-    expect(transport.sent.map((m) => m.to).sort()).toEqual([to(3), to(4)]);
-    expect(await statuses()).toMatchObject({
-      "trial_reminder:1": "pending",
-      "trial_notice:2": "pending",
+    const now = soon();
+    await dispatchOutbox(client, transport, SECRET, {
+      maxPerHour: 2,
+      now: () => new Date(now),
     });
+    expect(transport.sent.map((m) => m.to).sort()).toEqual([to(3), to(4)]);
+    expect((await row("trial_reminder:1")).status).toBe("pending");
+    expect((await row("trial_notice:2")).status).toBe("pending");
+  });
+
+  it("prunes attempt records older than two hours", async () => {
+    await client.emailSendAttempt.create({
+      data: { attemptedAt: new Date(Date.now() - 3 * HOUR) },
+    });
+    await queue("verify_email", 1);
+    await dispatchOutbox(client, new MemoryTransport(), SECRET, {
+      now: () => new Date(soon()),
+    });
+    expect(await client.emailSendAttempt.count()).toBe(1);
   });
 });
 
-describe("throttling replies", () => {
-  const refusing = (
-    responseCode: number,
-    response: string,
-  ): EmailTransport => ({
-    name: "refusing",
-    send: () =>
-      Promise.reject(
-        Object.assign(new Error(`${response} ${to(1)}`), {
-          responseCode,
-          response: `${responseCode} ${response} ${to(1)}`,
-        }),
-      ),
+describe("classifying send errors", () => {
+  it("treats SMTP 4xx as throttling and only narrow 5xx phrases as limits or blocks", () => {
+    const c = (responseCode: number, response = "") =>
+      classifySendError({ responseCode, response });
+    expect(c(421, "Too many connections")).toBe("throttled");
+    expect(c(451)).toBe("throttled");
+    expect(c(554, "5.4.6 Outgoing mail quota exceeded")).toBe("throttled");
+    expect(c(554, "Unusual sending activity detected")).toBe("throttled");
+    expect(c(550, "Sending limit exceeded for today")).toBe("throttled");
+    expect(c(554, "5.1.8 Email Outgoing Blocked")).toBe("blocked");
+    expect(c(554, "Your account has been blocked")).toBe("blocked");
+    for (const text of [
+      "Mailbox unavailable",
+      "Rejected by corporate policy",
+      "Content moderated",
+      "Failed to generate NDR",
+      "Message rated as spam",
+    ])
+      expect(c(554, text), text).toBe("other");
+    expect(c(552)).toBe("other");
+    expect(classifySendError(new Error("ECONNRESET"))).toBe("other");
+    expect(classifySendError(undefined)).toBe("other");
   });
 
-  it("recognises SMTP 4xx and a 554 that mentions a limit, nothing else", () => {
-    expect(isRateLimited({ responseCode: 421 })).toBe(true);
-    expect(isRateLimited({ responseCode: 451 })).toBe(true);
-    expect(
-      isRateLimited({
-        responseCode: 554,
-        response: "5.4.6 Outgoing mail quota exceeded",
-      }),
-    ).toBe(true);
-    expect(
-      isRateLimited({ responseCode: 554, response: "Unusual sending rate" }),
-    ).toBe(true);
-    expect(
-      isRateLimited({ responseCode: 554, response: "Mailbox unavailable" }),
-    ).toBe(false);
-    expect(isRateLimited({ responseCode: 552 })).toBe(false);
-    expect(isRateLimited(new Error("ECONNRESET"))).toBe(false);
-    expect(isRateLimited(undefined)).toBe(false);
+  it("backs off 15, 30, 60, 120 minutes and caps at 4 hours; a block waits at least an hour", () => {
+    expect([1, 2, 3, 4, 5, 9].map((n) => pauseMs(n, "throttled"))).toEqual([
+      RATE_LIMIT_PAUSE_MS,
+      2 * RATE_LIMIT_PAUSE_MS,
+      4 * RATE_LIMIT_PAUSE_MS,
+      8 * RATE_LIMIT_PAUSE_MS,
+      MAX_PAUSE_MS,
+      MAX_PAUSE_MS,
+    ]);
+    expect(pauseMs(1, "blocked")).toBe(BLOCKED_PAUSE_MS);
+    expect(pauseMs(5, "blocked")).toBe(MAX_PAUSE_MS);
   });
+});
 
+describe("throttling and block replies", () => {
   it.each([
-    [421, "Too many connections"],
-    [554, "5.4.6 Outgoing mail quota exceeded"],
+    [421, "Too many connections", "email.rate_limited", RATE_LIMIT_PAUSE_MS],
+    [
+      554,
+      "5.4.6 Outgoing mail quota exceeded",
+      "email.rate_limited",
+      RATE_LIMIT_PAUSE_MS,
+    ],
+    [
+      554,
+      "5.1.8 Email Outgoing Blocked",
+      "email.provider_blocked",
+      BLOCKED_PAUSE_MS,
+    ],
   ])(
-    "reschedules a %i without using an attempt, pauses the queue, and logs no address",
-    async (code, text) => {
+    "a %i pauses every dispatcher, uses no attempt, puts the row behind the others and logs %s at error with no address",
+    async (code, text, event, pause) => {
       await queue("verify_email", 1);
       await queue("trial_reminder", 2);
-      const now = Date.now() + 1000;
+      const now = soon();
       const result = await dispatchOutbox(
         client,
         refusing(code, text),
         SECRET,
-        { now: () => new Date(now) },
+        {
+          now: () => new Date(now),
+        },
       );
       expect(result).toMatchObject({ sent: 0, failed: 0, rateLimited: true });
-      const rows = await client.emailOutbox.findMany({
-        orderBy: { dedupeKey: "asc" },
+      const until = now + pause;
+      expect((await pausedUntil())?.getTime()).toBe(until);
+      const refused = await row("verify_email:1");
+      expect(refused).toMatchObject({
+        status: "pending",
+        attempts: 0,
+        rateLimitedCount: 1,
       });
-      for (const row of rows) {
-        expect(row.status).toBe("pending");
-        expect(row.attempts).toBe(0);
-        expect(row.payloadCiphertext).not.toBeNull();
-        expect(row.nextAttemptAt.getTime()).toBe(now + RATE_LIMIT_PAUSE_MS);
-      }
-      const line = logs.find((entry) => entry.includes("email.rate_limited"));
-      expect(line).toBeDefined();
-      expect(logs.join("\n")).not.toMatch(/@example\.test|quota|connections/i);
-      // Nothing is tried again before the pause ends.
+      expect(refused.nextAttemptAt.getTime()).toBeGreaterThan(until);
+      const line = logs.find((entry) => entry.includes(event));
+      expect(JSON.parse(line!)).toMatchObject({ level: "error" });
+      expect(logs.join("\n")).not.toMatch(
+        /@example\.test|quota|connections|outgoing blocked/i,
+      );
+
+      // Nothing goes during the pause; then the other row goes first.
       const transport = new MemoryTransport();
-      const early = await dispatchOutbox(client, transport, SECRET, {
-        now: () => new Date(now + RATE_LIMIT_PAUSE_MS - 1),
-      });
-      expect(early.sent).toBe(0);
-      const later = await dispatchOutbox(client, transport, SECRET, {
-        now: () => new Date(now + RATE_LIMIT_PAUSE_MS),
-      });
-      expect(later.sent).toBe(2);
+      expect(
+        await dispatchOutbox(client, transport, SECRET, {
+          now: () => new Date(until - 1),
+        }),
+      ).toMatchObject({ sent: 0, paused: true });
+      expect(
+        await dispatchOutbox(client, transport, SECRET, {
+          now: () => new Date(until),
+        }),
+      ).toMatchObject({ sent: 1 });
+      expect(transport.sent.map((m) => m.to)).toEqual([to(2)]);
     },
   );
+
+  it("holds the pause for email queued during it", async () => {
+    await queue("trial_reminder", 1);
+    const now = soon();
+    await dispatchOutbox(client, refusing(421, "Try later"), SECRET, {
+      now: () => new Date(now),
+    });
+    await queue("verify_email", 2); // a sign-up during the pause
+    const transport = new MemoryTransport();
+    const during = await dispatchOutbox(client, transport, SECRET, {
+      now: () => new Date(now + 60_000),
+    });
+    expect(during).toMatchObject({ sent: 0, paused: true });
+    expect(transport.sent).toEqual([]);
+    expect((await pausedUntil())?.getTime()).toBe(now + RATE_LIMIT_PAUSE_MS);
+  });
+
+  it("doubles the pause for each throttling reply in a row, and resets after a send", async () => {
+    await queue("trial_reminder", 1);
+    await queue("trial_reminder", 2);
+    await queue("trial_reminder", 3);
+    let now = soon();
+    await dispatchOutbox(client, refusing(421, "Try later"), SECRET, {
+      now: () => new Date(now),
+    });
+    now = (await pausedUntil())!.getTime();
+    await dispatchOutbox(client, refusing(421, "Try later"), SECRET, {
+      now: () => new Date(now),
+    });
+    expect((await pausedUntil())!.getTime() - now).toBe(
+      2 * RATE_LIMIT_PAUSE_MS,
+    );
+    now = (await pausedUntil())!.getTime();
+    await dispatchOutbox(client, new MemoryTransport(), SECRET, {
+      limit: 1,
+      now: () => new Date(now),
+    });
+    expect(
+      (await client.emailDispatchState.findUniqueOrThrow({ where: { id: 1 } }))
+        .pauseStreak,
+    ).toBe(0);
+  });
+
+  it("stops letting one row pause the queue after its throttling cap, so it can fail normally", async () => {
+    await queue("verify_email", 1);
+    await client.emailOutbox.update({
+      where: { dedupeKey: "verify_email:1" },
+      data: { rateLimitedCount: MAX_RATE_LIMITED_PER_ROW },
+    });
+    const result = await dispatchOutbox(
+      client,
+      refusing(450, "Mailbox busy"),
+      SECRET,
+      {
+        now: () => new Date(soon()),
+      },
+    );
+    expect(result).toMatchObject({ failed: 1, rateLimited: false });
+    expect(await pausedUntil()).toBeNull();
+    expect((await row("verify_email:1")).attempts).toBe(1);
+    expect(MAX_ATTEMPTS).toBe(8);
+  });
+
+  it("always pauses on a block, whatever the row's count", async () => {
+    await queue("verify_email", 1);
+    await client.emailOutbox.update({
+      where: { dedupeKey: "verify_email:1" },
+      data: { rateLimitedCount: MAX_RATE_LIMITED_PER_ROW },
+    });
+    const result = await dispatchOutbox(
+      client,
+      refusing(554, "5.1.8 Email Outgoing Blocked"),
+      SECRET,
+      { now: () => new Date(soon()) },
+    );
+    expect(result).toMatchObject({ failed: 0, rateLimited: true });
+    expect((await row("verify_email:1")).attempts).toBe(0);
+  });
 
   it("still counts a permanent 554 as a failed attempt", async () => {
     await queue("verify_email", 1);
@@ -228,38 +380,31 @@ describe("throttling replies", () => {
       client,
       refusing(554, "Mailbox unavailable"),
       SECRET,
+      { now: () => new Date(soon()) },
     );
     expect(result).toMatchObject({ failed: 1, rateLimited: false });
-    const row = await client.emailOutbox.findFirstOrThrow({});
-    expect(row.attempts).toBe(1);
+    expect((await row("verify_email:1")).attempts).toBe(1);
   });
 });
 
 describe("suppression list", () => {
-  it("stores only the HMAC, audits each change, and is idempotent", async () => {
+  it("stores only the HMAC, audits each change with who ran it, and is idempotent", async () => {
     const address = "Bounced.Person@Example.test";
     const hash = addressDigest(SECRET, address);
     expect(
-      await suppressAddress(client, SECRET, ` ${address} `, "bounce"),
+      await suppressAddress(client, SECRET, ` ${address} `, "bounce", "aj"),
     ).toEqual({ addressHash: hash, changed: true });
-    expect(await suppressAddress(client, SECRET, address, "bounce")).toEqual({
-      addressHash: hash,
-      changed: false,
-    });
-    expect(await suppressAddress(client, SECRET, address, "manual")).toEqual({
-      addressHash: hash,
-      changed: true,
-    });
     expect(
-      await client.emailSuppression.findUniqueOrThrow({
-        where: { addressHash: hash },
-      }),
-    ).toMatchObject({ reason: "manual" });
-    expect(await unsuppressAddress(client, SECRET, address)).toEqual({
+      await suppressAddress(client, SECRET, address, "bounce", "aj"),
+    ).toEqual({ addressHash: hash, changed: false });
+    expect(
+      await suppressAddress(client, SECRET, address, "manual", "aj"),
+    ).toEqual({ addressHash: hash, changed: true });
+    expect(await unsuppressAddress(client, SECRET, address, "aj")).toEqual({
       addressHash: hash,
       changed: true,
     });
-    expect(await unsuppressAddress(client, SECRET, address)).toEqual({
+    expect(await unsuppressAddress(client, SECRET, address, "aj")).toEqual({
       addressHash: hash,
       changed: false,
     });
@@ -274,15 +419,28 @@ describe("suppression list", () => {
     ]);
     for (const event of events) {
       expect(event.actorKind).toBe("operator");
-      expect(event.metadata).toMatchObject({ addressHash: hash, via: "cli" });
+      expect(event.metadata).toMatchObject({
+        addressHash: hash,
+        via: "cli",
+        ranBy: "aj",
+      });
     }
     expect(JSON.stringify(events)).not.toMatch(/bounced|example\.test/i);
   });
 
-  it("refuses an unknown reason and anything but one address", async () => {
+  it("refuses an unknown reason, a bad --by, and anything but one address", async () => {
     await expect(
-      suppressAddress(client, SECRET, "a@example.test", "spam" as "bounce"),
+      suppressAddress(
+        client,
+        SECRET,
+        "a@example.test",
+        "spam" as "bounce",
+        "aj",
+      ),
     ).rejects.toThrow(/bounce, complaint or manual/);
+    await expect(
+      suppressAddress(client, SECRET, "a@example.test", "manual", "a b"),
+    ).rejects.toThrow(/--by/);
     for (const bad of [
       "",
       "nobody",
@@ -291,7 +449,7 @@ describe("suppression list", () => {
       "a b@example.test",
     ])
       await expect(
-        suppressAddress(client, SECRET, bad, "manual"),
+        suppressAddress(client, SECRET, bad, "manual", "aj"),
         bad,
       ).rejects.toThrow(/one email address/);
     expect(await client.emailSuppression.count()).toBe(0);
@@ -299,67 +457,72 @@ describe("suppression list", () => {
 
   it("stops an email that was queued before the address was suppressed", async () => {
     await queue("trial_reminder", 1);
-    await suppressAddress(client, SECRET, to(1), "complaint");
+    await suppressAddress(client, SECRET, to(1), "complaint", "aj");
     const transport = new MemoryTransport();
-    await dispatchOutbox(client, transport, SECRET);
+    await dispatchOutbox(client, transport, SECRET, {
+      now: () => new Date(soon()),
+    });
     expect(transport.sent).toEqual([]);
-    const row = await client.emailOutbox.findFirstOrThrow({});
-    expect(row).toMatchObject({ status: "cancelled", payloadCiphertext: null });
+    expect(await row("trial_reminder:1")).toMatchObject({
+      status: "cancelled",
+      payloadCiphertext: null,
+    });
     expect(logs.join("\n")).not.toContain("example.test");
   });
 });
 
-describe("pnpm email (host CLI)", () => {
-  const run = (args: string[]) =>
-    promisify(execFile)(
-      "pnpm",
-      ["exec", "tsx", "scripts/email/cli.ts", ...args],
-      {
+describe("pnpm email (the real host command)", () => {
+  const run = (args: string[], input: string) =>
+    new Promise<{ code: number; out: string }>((resolve) => {
+      const child = spawn("pnpm", ["email", ...args], {
         env: {
           ...process.env,
           DATABASE_URL: database.url,
           EMAIL_OUTBOX_KEY: SECRET,
         },
-      },
-    ).then(
-      (out) => ({ code: 0, ...out }),
-      (error: { code: number; stdout: string; stderr: string }) => error,
-    );
+      });
+      let out = "";
+      child.stdout.on("data", (data) => (out += data));
+      child.stderr.on("data", (data) => (out += data));
+      child.on("close", (code) => resolve({ code: code ?? 1, out }));
+      child.stdin.end(input);
+    });
 
-  it("suppresses and unsuppresses by address, printing only a hash prefix", async () => {
+  it("reads the address from stdin and never prints it, even in pnpm's own echo", async () => {
     const address = "cli-person@example.test";
     const hash = addressDigest(SECRET, address);
-    const added = await run([
-      "suppress",
-      "--address",
-      address,
-      "--reason",
-      "manual",
-    ]);
-    expect(added.code).toBe(0);
-    expect(added.stdout).toContain(`Suppressed (${hash.slice(0, 12)}…)`);
-    expect(added.stdout + added.stderr).not.toContain(address);
+    const added = await run(
+      ["suppress", "--reason", "manual", "--by", "aj"],
+      `${address}\n`,
+    );
+    expect(added.code, added.out).toBe(0);
+    expect(added.out).toContain(`Suppressed (${hash.slice(0, 12)}…)`);
+    expect(added.out).not.toContain(address);
     expect(
       await client.emailSuppression.count({ where: { addressHash: hash } }),
     ).toBe(1);
-    const removed = await run(["unsuppress", "--address", address]);
-    expect(removed.code).toBe(0);
+    const removed = await run(["unsuppress", "--by", "aj"], `${address}\n`);
+    expect(removed.code, removed.out).toBe(0);
+    expect(removed.out).not.toContain(address);
     expect(
       await client.emailSuppression.count({ where: { addressHash: hash } }),
     ).toBe(0);
   }, 60_000);
 
-  it("refuses a bad reason or command with the usage text", async () => {
-    for (const args of [
-      ["suppress", "--address", "a@example.test", "--reason", "spam"],
-      ["suppress", "--address", "a@example.test"],
-      ["unsuppress", "--address", "a@example.test", "--reason", "manual"],
-      ["delete", "--address", "a@example.test"],
-      ["suppress"],
-    ]) {
-      const result = await run(args);
+  it("refuses --address, a bad reason or command, and empty input", async () => {
+    for (const [args, input] of [
+      [["suppress", "--address", "a@example.test", "--reason", "manual"], ""],
+      [["suppress", "--reason", "spam"], "a@example.test\n"],
+      [["suppress"], "a@example.test\n"],
+      [["unsuppress", "--reason", "manual"], "a@example.test\n"],
+      [["delete"], "a@example.test\n"],
+      [["suppress", "--reason", "manual"], ""],
+    ] as const) {
+      const result = await run([...args], input);
       expect(result.code, args.join(" ")).toBe(1);
-      expect(result.stderr, args.join(" ")).toMatch(/Usage: pnpm email/);
+      expect(result.out, args.join(" ")).toMatch(
+        /Usage: pnpm email|one email address/,
+      );
     }
     expect(await client.emailSuppression.count()).toBe(0);
   }, 120_000);

@@ -20,12 +20,21 @@ export function checkAddress(address: string): string {
   return trimmed;
 }
 
+/** Who ran the CLI: an OS user name or `--by` value, recorded in the audit row. */
+export function checkRanBy(ranBy: string): string {
+  const trimmed = ranBy.trim();
+  if (!/^[A-Za-z0-9._@-]{1,64}$/.test(trimmed))
+    throw new Error("--by must be 1–64 letters, digits, dots, dashes, @ or _");
+  return trimmed;
+}
+
 /** Suppress an address (or change its reason). Audited; idempotent. */
 export async function suppressAddress(
   db: PrismaClient,
   secret: string,
   address: string,
   reason: SuppressionReason,
+  ranBy: string,
 ): Promise<{ addressHash: string; changed: boolean }> {
   if (!SUPPRESSION_REASONS.includes(reason))
     throw new Error("Reason must be bounce, complaint or manual");
@@ -50,6 +59,7 @@ export async function suppressAddress(
           reason,
           previousReason: existing?.reason ?? null,
           via: "cli",
+          ranBy: checkRanBy(ranBy),
         },
       },
     });
@@ -62,6 +72,7 @@ export async function unsuppressAddress(
   db: PrismaClient,
   secret: string,
   address: string,
+  ranBy: string,
 ): Promise<{ addressHash: string; changed: boolean }> {
   const addressHash = addressDigest(secret, checkAddress(address));
   return db.$transaction(async (tx) => {
@@ -73,7 +84,7 @@ export async function unsuppressAddress(
       data: {
         actorKind: "operator",
         action: "email.unsuppressed",
-        metadata: { addressHash, via: "cli" },
+        metadata: { addressHash, via: "cli", ranBy: checkRanBy(ranBy) },
       },
     });
     return { addressHash, changed: true };

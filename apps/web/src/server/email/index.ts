@@ -48,3 +48,13 @@ export function dispatchSoon(): void {
     }
   });
 }
+
+/**
+ * One timer-driven pass (#259, server/email/sweep.ts): sends whatever is due,
+ * within the hourly cap and any provider pause.
+ */
+export async function sweepOutbox(): Promise<void> {
+  await dispatchOutbox(getDatabase(), getEmailTransport(), emailSecret(), {
+    maxPerHour: maxPerHourFromEnv(),
+  });
+}
