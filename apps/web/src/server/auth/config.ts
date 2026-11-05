@@ -1,9 +1,19 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
-import { APIError } from "better-auth/api";
+import {
+  APIError,
+  createAuthMiddleware,
+  getSessionFromCtx,
+} from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
+import { twoFactor } from "better-auth/plugins/two-factor";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import { log } from "../log";
+import {
+  ENROLMENT_CODE_HEADER,
+  consumeEnrolmentCode,
+  isOperator,
+} from "../operator/access";
 
 export const SESSION_TTL_SECONDS = 60 * 60 * 12;
 export const SIGN_IN_WINDOW_SECONDS = 60;
@@ -67,6 +77,9 @@ export function createAuth(settings: AuthSettings) {
       log: (level, message, ...args) =>
         log(level === "debug" ? "info" : level, "auth", { message, args }),
     },
+    // A lost device goes through `pnpm operator enrol-code --reset`, so a stolen
+    // session and password can't remove TOTP.
+    disabledPaths: ["/two-factor/disable"],
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
@@ -146,7 +159,38 @@ export function createAuth(settings: AuthSettings) {
         },
       },
     },
-    plugins: [nextCookies()],
+    hooks: {
+      // ADR 0004 D5: TOTP is for platform operators only. Anyone else gets the
+      // same 404 as a path that doesn't exist.
+      before: createAuthMiddleware(async (ctx) => {
+        if (!ctx.path.startsWith("/two-factor/")) return;
+        // Trust-device stays off: a trusted device would skip TOTP for 30 days.
+        if ((ctx.body as { trustDevice?: unknown } | undefined)?.trustDevice) {
+          throw new APIError("BAD_REQUEST", {
+            message: "Trusted devices aren't available",
+          });
+        }
+        const session = await getSessionFromCtx(ctx);
+        // Mid sign-in there's no session yet, and only an enrolled user gets
+        // this far: the plugin checks its own short-lived cookie.
+        if (!session && ctx.path.startsWith("/two-factor/verify-")) return;
+        const allowed =
+          session &&
+          (await isOperator(db, session.user.id, {
+            env: process.env,
+            production: false,
+          }));
+        if (!allowed) throw new APIError("NOT_FOUND");
+        if (ctx.path !== "/two-factor/enable") return;
+        const code = ctx.headers?.get(ENROLMENT_CODE_HEADER);
+        if (!code || !(await consumeEnrolmentCode(db, session.user.id, code))) {
+          throw new APIError("FORBIDDEN", {
+            message: "Enter a valid enrolment code",
+          });
+        }
+      }),
+    },
+    plugins: [twoFactor({ issuer: "JobFlow" }), nextCookies()],
   });
 }
 

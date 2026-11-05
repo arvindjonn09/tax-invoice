@@ -110,6 +110,19 @@ describe("runtime database role", () => {
     ["drop function", "DROP FUNCTION jobflow_reject_audit_mutation() CASCADE"],
     ["replication role", "SET session_replication_role = replica"],
     ["create table", "CREATE TABLE runtime_scratch (id int)"],
+    [
+      "grant itself the operator role",
+      "INSERT INTO platform_operators (user_id, granted_reason, granted_by) VALUES (gen_random_uuid(), 'x', 'x')",
+    ],
+    [
+      "unrevoke an operator",
+      "UPDATE platform_operators SET revoked_at = NULL, revoked_reason = NULL",
+    ],
+    ["remove an operator", "DELETE FROM platform_operators"],
+    [
+      "issue an enrolment code",
+      "INSERT INTO operator_enrolment_codes (user_id, code_hash, expires_at) VALUES (gen_random_uuid(), 'x', now())",
+    ],
     ["drop table", "DROP TABLE audit_events"],
     ["migration history", "SELECT * FROM _prisma_migrations"],
   ])("refuses %s on the audit log", async (_, sql) => {

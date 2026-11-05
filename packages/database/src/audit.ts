@@ -4,11 +4,15 @@ import type {
   PrismaClient,
 } from "./generated/prisma/client";
 
+/** Who acted (ADR 0004 D6); the database CHECK ties each kind to its column. */
+export type AuditActor =
+  | { kind: "member"; userId: string }
+  | { kind: "operator"; operatorUserId: string }
+  | { kind: "system" };
+
 /** One audited change. `before`/`after` hold only the fields that may change. */
 export type AuditEventInput = {
   companyId: string;
-  /** The acting user; must hold a membership in `companyId` (database FK). */
-  actorUserId: string;
   /** Namespaced, e.g. `membership.role_changed` or `invoice.issued`. */
   action: string;
   target: { type: string; id: string };
@@ -16,7 +20,26 @@ export type AuditEventInput = {
   requestId?: string;
   before?: Readonly<Record<string, unknown>>;
   after?: Readonly<Record<string, unknown>>;
-};
+} & (
+  | {
+      /** The acting user; must hold a membership in `companyId` (database FK). */
+      actorUserId: string;
+      actor?: never;
+    }
+  | { actor: AuditActor; actorUserId?: never }
+);
+
+function actorColumns(event: AuditEventInput) {
+  const actor: AuditActor = event.actor ?? {
+    kind: "member",
+    userId: event.actorUserId!,
+  };
+  return {
+    actorKind: actor.kind,
+    createdBy: actor.kind === "member" ? actor.userId : null,
+    operatorUserId: actor.kind === "operator" ? actor.operatorUserId : null,
+  };
+}
 
 export type AuditRecorder = (event: AuditEventInput) => Promise<AuditEvent>;
 
@@ -158,7 +181,7 @@ export async function withAudit<T>(
       const created = await tx.auditEvent.create({
         data: {
           companyId: event.companyId,
-          createdBy: event.actorUserId,
+          ...actorColumns(event),
           action: event.action,
           targetType: event.target.type,
           targetId: event.target.id,
