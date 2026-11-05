@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuth, getDatabase, resolveActor } from "@/server/auth";
 
@@ -31,8 +32,11 @@ export default async function AccountPage() {
           </p>
         ) : resolution.status === "choose-company" ? (
           <p>
-            You belong to several companies. Company selection arrives with the
-            app shell.
+            You belong to several companies.{" "}
+            <Link className="text-link underline" href="/choose-company">
+              Choose a company
+            </Link>
+            .
           </p>
         ) : (
           <p>Your account is not a member of any active company yet.</p>
