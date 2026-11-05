@@ -129,3 +129,34 @@ The job then polls `/api/health/ready` until it answers 200.
 - **Image digest refresh.** The Dockerfile syntax and Node base, plus PostgreSQL, nginx and Certbot in Compose, are pinned to registry multi-architecture digests (verified against Docker Hub on 28 October 2026). Update each tag and digest together after reviewing the release and running the image, staging and security checks. Do not override `NODE_IMAGE` with an unpinned value on the host.
 - **Migration owner role.** The migration owner is the image's bootstrap role, which is a superuser. For production, create a non-superuser owner and run migrations as it.
 - **Cloud metadata.** Block the instance metadata address (169.254.169.254) from containers on the host, so a future SSRF can't reach cloud credentials.
+
+## Staging smoke test (#65)
+
+After a deploy, run **Actions → Staging smoke test → Run workflow**, or `SMOKE_BASE_URL=https://jobflow.shivomsangha.com pnpm test:smoke` from the host.
+
+**Public checks**, which always run:
+- liveness and readiness;
+- security headers and HSTS;
+- private responses are never a Cloudflare cache `HIT`. Each one is requested twice and the second is checked, and the `cf-cache-status` header must be present;
+- axe on the landing and sign-in pages;
+- a signed-out API call gets 401, and a cross-origin write gets 403;
+- a forged file link is refused.
+
+**Signed-in workflow:**
+- It signs in and creates a clearly named synthetic customer, job and draft invoice, and reads them back.
+- It then discards the draft, signs out and checks the session no longer reads company data.
+- It **refuses to write** unless the account's company is demo-flagged, or its id equals `SMOKE_COMPANY_ID`.
+- The job summary says `RAN` or `SKIPPED`. "Fail if the signed-in workflow can't run" (on by default) turns a skip into a failure.
+
+**Safety:**
+- Only allow-listed origins are accepted (`playwright.smoke.config.ts`).
+- No trace, screenshot, video or HTML report is written or uploaded. The repository is public, and a trace records the sign-in values.
+
+**Owner setup, once:**
+1. Create a GitHub Environment named `staging`.
+2. Under *Deployment branches*, allow only `main`.
+3. Add the secrets `SMOKE_EMAIL` and `SMOKE_PASSWORD` to that environment, plus `SMOKE_COMPANY_ID` if the company isn't demo-flagged. They belong to a synthetic owner of a synthetic company. Don't add them as repository secrets.
+
+Until this is done, the job has no credentials and fails with the signed-in check required.
+
+Record each run's result on #65.
