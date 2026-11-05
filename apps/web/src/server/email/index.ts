@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { getDatabase, isProductionEnvironment } from "../auth";
 import { log, safeError } from "../log";
-import { dispatchOutbox } from "./outbox";
+import { dispatchOutbox, maxPerHourFromEnv } from "./outbox";
 import { type EmailTransport, transportFromEnv } from "./transport";
 
 export { enqueueEmail, cancelPendingEmail, dispatchOutbox } from "./outbox";
@@ -42,7 +42,9 @@ export function supportEmail(): string {
 export function dispatchSoon(): void {
   after(async () => {
     try {
-      await dispatchOutbox(getDatabase(), getEmailTransport(), emailSecret());
+      await dispatchOutbox(getDatabase(), getEmailTransport(), emailSecret(), {
+        maxPerHour: maxPerHourFromEnv(),
+      });
     } catch (error) {
       log("error", "email.dispatch_failed", { error: safeError(error) });
     }
