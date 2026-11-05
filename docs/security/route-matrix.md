@@ -4,6 +4,8 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 
 | Route | Method | Permission | Roles |
 |---|---|---|---|
+| `/api/account/password/forgot` | POST | — | public (see route-policy.test.ts) |
+| `/api/account/password/reset` | POST | — | public (see route-policy.test.ts) |
 | `/api/account/sign-up` | POST | — | public (see route-policy.test.ts) |
 | `/api/account/verification/resend` | POST | — | public (see route-policy.test.ts) |
 | `/api/account/verification/resend-mine` | POST | — | public (see route-policy.test.ts) |

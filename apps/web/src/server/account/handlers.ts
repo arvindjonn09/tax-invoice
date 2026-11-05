@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
-import type { Auth } from "../auth/config";
+import { type Auth, DEMO_EMAIL } from "../auth/config";
 import { createCredentialUser } from "../auth/credentials";
 import { privateJson } from "../authz/policy";
 import { invalid } from "../company/handlers";
@@ -13,7 +13,12 @@ import {
 } from "../http/guards";
 import { clientIp, hit } from "../http/throttle";
 import { log, safeError } from "../log";
-import { accountExistsEmail, verificationEmail } from "./emails";
+import {
+  accountExistsEmail,
+  passwordChangedEmail,
+  passwordResetEmail,
+  verificationEmail,
+} from "./emails";
 import {
   PRIVACY_VERSION,
   TERMS_VERSION,
@@ -88,6 +93,19 @@ const Verify = z.object({ token: z.string().max(100) }).strict();
 const Resend = z
   .object({ email, turnstileToken: z.string().max(2048).optional() })
   .strict();
+
+const Forgot = Resend;
+const Reset = z
+  .object({
+    token: z.string().max(100),
+    password,
+    passwordConfirmation: z.string(),
+  })
+  .strict()
+  .refine((value) => value.password === value.passwordConfirmation, {
+    path: ["passwordConfirmation"],
+    message: "Passwords don't match",
+  });
 
 /** Shared guard for public account endpoints: CSRF, size, errors, no-store. */
 function publicRoute(
@@ -477,5 +495,154 @@ export function resendMine(deps: AccountDependencies) {
     await sendVerification(deps, user);
     deps.dispatch();
     return privateJson({ status: "sent" }, { status: 202 });
+  });
+}
+
+/** Counted for monitoring (S4 AC5); holds no address or IP. */
+const auditForgotThrottled = (
+  db: PrismaClient,
+  scope: "ip" | "account",
+  userId?: string,
+) =>
+  db.platformAuditEvent.create({
+    data: {
+      actorKind: "anonymous",
+      ...(userId ? { userId } : {}),
+      action: "account.password_reset_throttled",
+      metadata: { scope },
+    },
+  });
+
+/** POST /api/account/password/forgot (S4): public, always the same 202. */
+export function forgotPassword(deps: AccountDependencies) {
+  return publicRoute(deps, async (request) => {
+    const db = deps.db();
+    const ip = clientIp(request.headers);
+    if (await over(db, `forgot:ip:${ip ?? "unknown"}`, 3600, 10)) {
+      await auditForgotThrottled(db, "ip");
+      return checkEmail();
+    }
+    const parsed = Forgot.safeParse(await body(request));
+    if (!parsed.success) return invalid(parsed.error);
+    if (
+      !(await deps.verifyTurnstile(parsed.data.turnstileToken, "forgot", ip))
+    ) {
+      return privateJson(
+        {
+          error: "We couldn't confirm you're not a robot. Try again.",
+          code: "turnstile_failed",
+        },
+        { status: 400 },
+      );
+    }
+    const address = parsed.data.email;
+    // After the response: looking up the account can't be timed by the caller.
+    await deps.defer(async () => {
+      const user = await db.user.findUnique({
+        where: { email: address },
+        select: { id: true, email: true },
+      });
+      if (!user) return;
+      if (deps.production() && DEMO_EMAIL.test(user.email)) return;
+      if (await over(db, `forgot:account:${user.id}`, 3600, 3)) {
+        await auditForgotThrottled(db, "account", user.id);
+        return;
+      }
+      await db.$transaction(async (tx) => {
+        await cancelPendingEmail(tx, {
+          userId: user.id,
+          kind: "password_reset",
+        });
+        const token = await issueToken(tx, user.id, "password_reset");
+        await enqueueEmail(tx, deps.emailSecret(), {
+          kind: "password_reset",
+          dedupeKey: `password_reset:${user.id}:${crypto.randomUUID()}`,
+          userId: user.id,
+          message: passwordResetEmail(user.email, deps.appUrl(), token),
+        });
+        await tx.platformAuditEvent.create({
+          data: {
+            actorKind: "anonymous",
+            userId: user.id,
+            action: "account.password_reset_requested",
+          },
+        });
+      });
+      deps.dispatch();
+    });
+    return checkEmail();
+  });
+}
+
+/**
+ * POST /api/account/password/reset (S4). One transaction replaces the hash,
+ * ends every session, verifies the address and queues the notice. Memberships
+ * aren't touched, so a reset never grants company access (S4 AC6).
+ */
+export function resetPassword(deps: AccountDependencies) {
+  return publicRoute(deps, async (request) => {
+    const db = deps.db();
+    const ip = clientIp(request.headers) ?? "unknown";
+    if (await over(db, `reset:ip:${ip}`, 3600, 10)) return tooMany(3600);
+    const parsed = Reset.safeParse(await body(request));
+    if (!parsed.success) return invalid(parsed.error);
+    const input = parsed.data;
+    if (await deps.isBreached(input.password)) {
+      return privateJson(
+        {
+          error: "Check the highlighted fields",
+          fields: {
+            password:
+              "This password has appeared in a data breach. Choose a different one.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    // Hashed before the transaction, so a slow hash doesn't hold its locks.
+    const hash = await deps.hashPassword(input.password);
+    const done = await db.$transaction(async (tx) => {
+      const userId = await consumeToken(tx, input.token, "password_reset");
+      if (!userId) return false;
+      const updated = await tx.authAccount.updateMany({
+        where: { userId, providerId: "credential" },
+        data: { password: hash },
+      });
+      if (updated.count !== 1) {
+        throw new Error("The account has no credential to reset");
+      }
+      await tx.authSession.deleteMany({ where: { userId } });
+      const user = await tx.user.update({
+        where: { id: userId },
+        data: { emailVerified: true },
+        select: { email: true },
+      });
+      await cancelPendingEmail(tx, { userId, kind: "password_reset" });
+      await enqueueEmail(tx, deps.emailSecret(), {
+        kind: "password_changed",
+        dedupeKey: `password_changed:${userId}:${crypto.randomUUID()}`,
+        userId,
+        message: passwordChangedEmail(user.email, deps.appUrl()),
+      });
+      await tx.platformAuditEvent.create({
+        data: {
+          actorKind: "user",
+          userId,
+          action: "account.password_reset",
+        },
+      });
+      return true;
+    });
+    if (!done) {
+      return privateJson(
+        {
+          error: "This link is invalid or has expired.",
+          code: "token_invalid",
+        },
+        { status: 400 },
+      );
+    }
+    deps.dispatch();
+    return privateJson({ status: "reset" });
   });
 }
