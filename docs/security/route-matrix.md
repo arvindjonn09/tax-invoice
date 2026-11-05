@@ -96,6 +96,7 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 | `/api/my/work/[id]/evidence` | GET | `evidence.submit_assigned` | owner, employee, subcontractor |
 | `/api/my/work/[id]/evidence` | POST | `evidence.submit_assigned` | owner, employee, subcontractor |
 | `/api/my/work/[id]/submit` | POST | `evidence.submit_assigned` | owner, employee, subcontractor |
+| `/api/onboarding/company` | POST | — | public (see route-policy.test.ts) |
 | `/api/quotes` | GET | `quote.read` | owner, manager, accountant |
 | `/api/quotes` | POST | `quote.write` | owner, manager |
 | `/api/quotes/[id]` | DELETE | `quote.write` | owner, manager |
@@ -117,6 +118,7 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 | `/api/reports/gst/periods` | POST | `gst_settings.update` | owner, accountant |
 | `/api/reports/gst/periods/[id]/amend` | POST | `gst_settings.update` | owner, accountant |
 | `/api/reports/profitability` | GET | `job.profit.read` | owner, manager, accountant |
+| `/api/session/company` | POST | — | public (see route-policy.test.ts) |
 | `/api/supplier-credits/[id]` | GET | `bill.read` | owner, manager, accountant |
 | `/api/supplier-credits/[id]/void` | POST | `bill.write` | owner, accountant |
 | `/api/supplier-payments` | GET | `payment.read` | owner, manager, accountant |
