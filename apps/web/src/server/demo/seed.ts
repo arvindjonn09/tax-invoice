@@ -1,5 +1,7 @@
 import type { Role } from "@jobflow/authz";
+import { hashPassword } from "better-auth/crypto";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
+import { MIN_PASSWORD_LENGTH } from "../auth/config";
 import { createCredentialUser } from "../auth/credentials";
 
 /** Fixed id so re-running the seed finds, rather than duplicates, the demo company. */
@@ -121,5 +123,38 @@ export async function seedDemo(
       }
     }
     return result;
+  });
+}
+
+/**
+ * Apply a new password to the seeded demo accounts and sign them out (#268).
+ * Touches only the fixed demo emails, and never runs in production.
+ */
+export async function setDemoPassword(
+  db: PrismaClient,
+  options: { password: string; env: SeedEnvironment },
+): Promise<{ updatedUsers: number; endedSessions: number }> {
+  const { password, env } = options;
+  if (env.NODE_ENV === "production" || env.APP_ENV === "production") {
+    throw new Error("Demo passwords can't be changed in production");
+  }
+  if (password.length < MIN_PASSWORD_LENGTH || password.length > 128) {
+    throw new RangeError(
+      `DEMO_PASSWORD must be ${MIN_PASSWORD_LENGTH}-128 characters`,
+    );
+  }
+  const hash = await hashPassword(password);
+  return db.$transaction(async (tx) => {
+    const users = await tx.user.findMany({
+      where: { email: { in: DEMO_USERS.map((demo) => demo.email) } },
+      select: { id: true },
+    });
+    const userId = { in: users.map((user) => user.id) };
+    const updated = await tx.authAccount.updateMany({
+      where: { userId, providerId: "credential" },
+      data: { password: hash },
+    });
+    const ended = await tx.authSession.deleteMany({ where: { userId } });
+    return { updatedUsers: updated.count, endedSessions: ended.count };
   });
 }
