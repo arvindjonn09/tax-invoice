@@ -15,6 +15,14 @@ const PUBLIC_ROUTES: Record<string, string> = {
     "readiness probe; returns only ready/not ready, no configuration",
   "api/files/[token]/route.ts":
     "signed 5-minute download token minted by /api/documents/[id]/link after authz; HMAC-verified, company-bound, served as a sandboxed attachment",
+  "api/account/sign-up/route.ts":
+    "Public sign-up (ADR 0004 D1): origin/body guards, IP throttle, Turnstile, identical 202 for new and existing emails; creates only an unverified user",
+  "api/account/verify-email/route.ts":
+    "Single-use 256-bit emailed token (digest stored, 24 h) authorizes marking that one address verified; IP throttle",
+  "api/account/verification/resend/route.ts":
+    "Public resend: same 202 whatever the address; IP, per-account and Turnstile limits; never reveals an account",
+  "api/account/verification/resend-mine/route.ts":
+    "Requires a session; acts only on the caller's own unverified account; per-account limits",
   "api/auth/[...all]/route.ts":
     "Better Auth endpoints: sign-in/out and session; they enforce their own origin checks and throttling",
 };

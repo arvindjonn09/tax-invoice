@@ -416,6 +416,38 @@ describe("malware scanning (#136)", () => {
   });
 });
 
+describe("read-only company (#222)", () => {
+  it("still hands out a download link for an existing document", async () => {
+    const uploaded = await upload(uploadRequest("owner", PDF));
+    expect(uploaded.status).toBe(201);
+    const { id } = (await uploaded.json()) as { id: string };
+    await db.company.update({
+      where: { id: companyId },
+      data: {
+        isDemo: false,
+        accessMode: "trial",
+        trialStartedAt: new Date("2019-12-01T00:00:00Z"),
+        trialLastDay: new Date("2020-01-01T00:00:00Z"),
+      },
+    });
+    try {
+      const response = await linkFor("owner", id);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { url: string };
+      expect((await fetchFile(body.url)).status).toBe(200);
+      // A new upload is refused while read-only.
+      const refused = await upload(uploadRequest("owner", PDF));
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toMatchObject({ code: "company_read_only" });
+    } finally {
+      await db.company.update({
+        where: { id: companyId },
+        data: { accessMode: "unrestricted", isDemo: true },
+      });
+    }
+  });
+});
+
 // Real S3-compatible storage: runs where MinIO is up (CI's docker compose).
 const s3 = storeFromEnvironment();
 describe.runIf(s3 instanceof S3Store && process.env.CI)(

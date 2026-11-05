@@ -31,9 +31,7 @@ export function setEmailTransport(next: EmailTransport | undefined): void {
 }
 
 /** Support and reply address shown to users (ADR 0004 D7). */
-export function supportEmail(): string {
-  return process.env.SUPPORT_EMAIL ?? "admin@shivomsangha.com";
-}
+export { supportEmail } from "./addresses";
 
 /**
  * Send queued email after the response is sent ("within 60 s"). Failures stay

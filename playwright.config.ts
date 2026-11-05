@@ -13,6 +13,9 @@ const serverEnv: Record<string, string> =
     ? {
         DATABASE_URL: process.env.DATABASE_URL,
         BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET ?? "",
+        EMAIL_OUTBOX_KEY: process.env.EMAIL_OUTBOX_KEY ?? "",
+        // Never send real email from tests: the console transport logs links.
+        SMTP_HOST: "",
         // Origin checks need the exact origin the browser uses.
         BETTER_AUTH_URL: baseURL,
       }

@@ -361,6 +361,74 @@ describe("invoice PDFs (#48)", () => {
   });
 });
 
+describe("read-only company (#222)", () => {
+  it("still stores and links the PDF of an already-issued invoice", async () => {
+    // Issue without storing the PDF, so the first PDF is made while read-only.
+    const noStore = invoiceHandlers(() => db, {
+      afterIssue: async () => undefined,
+    });
+    const draft = (await (
+      await withPolicy("invoice.write", noStore.create)(
+        call("accountant", "POST", {
+          customerId,
+          lines: [
+            {
+              description: "Synthetic read-only PDF",
+              quantity: "1",
+              unitPriceCents: "100000",
+              taxCode: "TAXABLE_10",
+            },
+          ],
+        }),
+        undefined,
+      )
+    ).json()) as { id: string };
+    const issuedResponse = await withPolicy<One>(
+      "invoice.issue",
+      noStore.issue,
+    )(call("accountant", "POST", { issueDate: "2026-07-15" }), one(draft.id));
+    expect(issuedResponse.status).toBe(200);
+    expect(await db.invoicePdf.count({ where: { invoiceId: draft.id } })).toBe(
+      0,
+    );
+    await db.company.update({
+      where: { id: companyId },
+      data: {
+        isDemo: false,
+        accessMode: "trial",
+        trialStartedAt: new Date("2019-12-01T00:00:00Z"),
+        trialLastDay: new Date("2020-01-01T00:00:00Z"),
+      },
+    });
+    try {
+      // The real route path: the read-only allowlist matches it.
+      const request = new Request(
+        `${ORIGIN}/api/invoices/${draft.id}/pdf`,
+        call("accountant", "POST", {}),
+      );
+      const response = await r().pdf(request, one(draft.id));
+      expect(response.status, await response.clone().text()).toBe(200);
+      expect(
+        await db.invoicePdf.count({ where: { invoiceId: draft.id } }),
+      ).toBe(1);
+      expect(
+        await db.auditEvent.count({
+          where: {
+            companyId,
+            action: "invoice.pdf_stored",
+            targetId: draft.id,
+          },
+        }),
+      ).toBe(1);
+    } finally {
+      await db.company.update({
+        where: { id: companyId },
+        data: { accessMode: "unrestricted", isDemo: true },
+      });
+    }
+  });
+});
+
 describe("issue responds before the PDF is stored (#158)", () => {
   it("schedules storage after the response; running it stores the PDF", async () => {
     const tasks: (() => Promise<unknown>)[] = [];

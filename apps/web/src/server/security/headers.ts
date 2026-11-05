@@ -10,6 +10,8 @@ export type HeaderOptions = {
   development: boolean;
   /** Served over HTTPS: upgrade subresources and send HSTS. */
   https: boolean;
+  /** This page shows the Turnstile widget, which runs in Cloudflare's frame. */
+  turnstile?: boolean;
 };
 
 /** Two years; no `preload` until the production domain is final (#64). */
@@ -19,6 +21,7 @@ export function contentSecurityPolicy({
   nonce,
   development,
   https,
+  turnstile = false,
 }: HeaderOptions): string {
   const directives = [
     "default-src 'self'",
@@ -37,7 +40,9 @@ export function contentSecurityPolicy({
     "base-uri 'self'",
     "form-action 'self'",
     "frame-ancestors 'none'",
-    "frame-src 'none'",
+    turnstile
+      ? "frame-src https://challenges.cloudflare.com"
+      : "frame-src 'none'",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     ...(https ? ["upgrade-insecure-requests"] : []),

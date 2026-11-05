@@ -33,6 +33,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 REVOKE UPDATE, DELETE, TRUNCATE ON audit_events FROM jobflow_app;
 -- #210: platform audit and terms acceptances are append-only too.
 REVOKE UPDATE, DELETE, TRUNCATE ON platform_audit_events, terms_acceptances FROM jobflow_app;
+-- #211: reminders, notices and extension requests are never deleted by the
+-- app (deleting a trial_notifications row would re-arm a reminder, S10 AC2).
+REVOKE DELETE, TRUNCATE ON trial_notifications, user_notices, trial_extension_requests FROM jobflow_app;
 -- Migration bookkeeping belongs to the owner.
 REVOKE ALL ON _prisma_migrations FROM jobflow_app;
 

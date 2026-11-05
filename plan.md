@@ -498,6 +498,10 @@ A deployment and rollback runbook is written in #66.
 
 ## 17. Who builds it: Claude agents and Codex
 
+> **Update, 3 November 2026:** Codex is no longer on the project. Two Claude Code agents, Claude A and Claude B, build
+> and review each other's work. See `AGENTS.md` ("Who does what" and "Merge policy"). The Codex material below is
+> historical.
+
 ### The specialist roles
 Each issue is labelled with the role that owns it. The role instructions are in `.claude/agents/`, and **both Claude
 and Codex follow them**.

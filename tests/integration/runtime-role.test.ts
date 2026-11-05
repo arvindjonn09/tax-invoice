@@ -170,6 +170,30 @@ describe("GST posting privileges (#166)", () => {
     expect(rows).toEqual([]);
   });
 
+  it("never lets the app delete trial reminders, notices or extension requests (#211)", async () => {
+    const rows = await database.client.$queryRaw<
+      { table_name: string; privilege_type: string }[]
+    >`
+      SELECT table_name, privilege_type FROM information_schema.role_table_grants
+      WHERE grantee='jobflow_app' AND table_schema='public'
+        AND table_name IN ('trial_notifications','user_notices','trial_extension_requests')
+      ORDER BY table_name, privilege_type`;
+    expect(
+      rows.filter((row) => ["DELETE", "TRUNCATE"].includes(row.privilege_type)),
+    ).toEqual([]);
+    // They still read, insert and (for notices and decisions) update.
+    for (const table of [
+      "trial_notifications",
+      "user_notices",
+      "trial_extension_requests",
+    ])
+      expect(
+        rows
+          .filter((row) => row.table_name === table)
+          .map((row) => row.privilege_type),
+      ).toEqual(expect.arrayContaining(["INSERT", "SELECT"]));
+  });
+
   it("runtime source writes still create immutable postings on the correct open day", async () => {
     const id = randomUUID();
     await client.query("BEGIN");
