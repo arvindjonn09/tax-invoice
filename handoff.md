@@ -6,6 +6,7 @@ uncommitted.
 
 **Carrying on Claude B's work.** AGENTS.md says never push to the other agent's branch. Two ways to work on these
 PRs instead:
+
 - **(a)** Carry it on your own branch with a superseding PR, as #241 did for #238.
 - **(b)** Leave the PR for Claude B to resume.
 
@@ -13,15 +14,15 @@ If you go with (a), the merge-policy review still has to come from an agent that
 
 ## 1. State at handoff
 
-| PR | Branch @ head | Issue | State | Needs |
-|---|---|---|---|---|
-| #265 | `docs/208-signup-trial-ux` @ `78bca44` | #208 (P0, blocks #223–#226, #228, #232) | Changes requested by Claude A at 78bca44. 2 unresolved Codex threads (`:235`, `:271`). CI green | Section 2.1 |
-| #266 | `feat/259-email-pacing` @ `850e85a` | #259 | Changes requested at 850e85a. 1 unresolved Codex thread. CI green | Section 2.2 |
-| #261 | `feat/136-malware-scan` @ `dadfb57` | #136 | Changes requested at dadfb57. 0 open threads. CI green. **Owner decision needed** on how clamd runs on the live host, and on encrypted PDFs | Section 2.3 |
-| #249 | `feat/217-signup-api` @ `5f23c56` (Claude A's) | #217, #218 | Claude A fixed Claude B's review and asked for a **re-review of 5f23c56** | Claude B's re-review, or another independent one |
-| #250 | `feat/220-onboarding` @ `7579c49` (Claude A's) | #220 | Claude A is fixing Claude B's review | Re-review when posted |
-| #254 | `feat/252-admin-console` @ `8cfd1f4` (Claude A's) | #252 | **Waiting on the owner:** Claude B's High finding (no TOTP, no Access, one shared password), options a, b or c | Owner decision |
-| #264 | Claude A's threat model @ `a20e44c` | #207 | Not yet reviewed by Claude B | Independent review |
+| PR   | Branch @ head                                     | Issue                                   | State                                                                                                                                       | Needs                                            |
+| ---- | ------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| #265 | `docs/208-signup-trial-ux` @ `78bca44`            | #208 (P0, blocks #223–#226, #228, #232) | Changes requested by Claude A at 78bca44. 2 unresolved Codex threads (`:235`, `:271`). CI green                                             | Section 2.1                                      |
+| #266 | `feat/259-email-pacing` @ `850e85a`               | #259                                    | Changes requested at 850e85a. 1 unresolved Codex thread. CI green                                                                           | Section 2.2                                      |
+| #261 | `feat/136-malware-scan` @ `dadfb57`               | #136                                    | Changes requested at dadfb57. 0 open threads. CI green. **Owner decision needed** on how clamd runs on the live host, and on encrypted PDFs | Section 2.3                                      |
+| #249 | `feat/217-signup-api` @ `5f23c56` (Claude A's)    | #217, #218                              | Claude A fixed Claude B's review and asked for a **re-review of 5f23c56**                                                                   | Claude B's re-review, or another independent one |
+| #250 | `feat/220-onboarding` @ `7579c49` (Claude A's)    | #220                                    | Claude A is fixing Claude B's review                                                                                                        | Re-review when posted                            |
+| #254 | `feat/252-admin-console` @ `8cfd1f4` (Claude A's) | #252                                    | **Waiting on the owner:** Claude B's High finding (no TOTP, no Access, one shared password), options a, b or c                              | Owner decision                                   |
+| #264 | Claude A's threat model @ `a20e44c`               | #207                                    | Not yet reviewed by Claude B                                                                                                                | Independent review                               |
 
 Merged today: #239, #243, #255, #256, #257 and #262.
 
@@ -30,6 +31,7 @@ Merged today: #239, #243, #255, #256, #257 and #262.
 ### 2.1 #265: sign-up, trial and operator UX spec (`docs/design/signup-trial.md`)
 
 This is the top priority. It unblocks all the M6 UI issues. Claude A's review at 78bca44:
+
 1. **P1, chooser (`:235`):** only owner, manager and accountant rows show trial text. Workers see "Read-only" when the
    company is read-only, and nothing otherwise (S8 AC2). Answer Codex thread `:271` too: extension history is
    owner-only.
@@ -61,6 +63,7 @@ This is the top priority. It unblocks all the M6 UI issues. Claude A's review at
 ### 2.2 #266: email pacing (#259)
 
 Claude A's review at 850e85a:
+
 1. **High: one row can stall the queue.** A persistent 4xx uses no attempt, every row moves to the same `until`, and
    the UUID tie-break re-picks the same row.
    - Put the refused row behind the others.
@@ -123,7 +126,7 @@ Claude A's review at dadfb57. The digest is from Claude A:
 ## 3. Other open items Claude A assigned to Claude B (not started)
 
 - **#65, smoke run:**
-  1. #262 is merged, so dispatch *Actions → Staging smoke test* and record the result on #65.
+  1. #262 is merged, so dispatch _Actions → Staging smoke test_ and record the result on #65.
   2. The signed-in part needs the owner to create the `staging` GitHub Environment (main only) with `SMOKE_EMAIL` and
      `SMOKE_PASSWORD`. Steps are in `docs/ops/staging.md`.
   3. Until then, run with **"Fail if the signed-in workflow can't run" unticked** and report signed-in as SKIPPED.
