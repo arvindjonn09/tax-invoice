@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
 // #136: synthetic PDFs for the real-clamd contract tests. Hand-built so the
@@ -94,67 +94,16 @@ export function pdfWithAttachment(payload: Buffer): Uint8Array {
   );
 }
 
-const PADDING = Buffer.from(
-  "28bf4e5e4e758a4164004e56fffa01082e2e00b6d0683e802f0ca9fe6453697a",
-  "hex",
-);
-
-function rc4(key: Buffer, data: Buffer): Buffer {
-  const s = Array.from({ length: 256 }, (_, i) => i);
-  let j = 0;
-  for (let i = 0; i < 256; i += 1) {
-    j = (j + s[i]! + key[i % key.length]!) & 255;
-    [s[i], s[j]] = [s[j]!, s[i]!];
-  }
-  const out = Buffer.alloc(data.length);
-  let i = 0;
-  j = 0;
-  for (let n = 0; n < data.length; n += 1) {
-    i = (i + 1) & 255;
-    j = (j + s[i]!) & 255;
-    [s[i], s[j]] = [s[j]!, s[i]!];
-    out[n] = data[n]! ^ s[(s[i]! + s[j]!) & 255]!;
-  }
-  return out;
-}
-
-const md5 = (...parts: Buffer[]) =>
-  createHash("md5").update(Buffer.concat(parts)).digest();
-const pad = (password: string) =>
-  Buffer.concat([Buffer.from(password, "latin1"), PADDING]).subarray(0, 32);
-
 /**
- * A password-protected PDF (Standard security handler, V1/R2, RC4 40-bit)
- * whose user password is not empty, so no reader or scanner can open it
- * without the password.
+ * A password-protected PDF (AES-256, a non-empty user password), so nothing
+ * can open it without the password. Committed as a ready-made binary rather
+ * than built here, so no password-hashing code lives in the tests; see
+ * tests/fixtures/pdf/README.md for how it was made.
  */
-export function passwordProtectedPdf(
-  userPassword = "synthetic-user-pass",
-  ownerPassword = "synthetic-owner-pass",
-): Uint8Array {
-  const id = md5(Buffer.from("jobflow-test-fixture"));
-  const owner = rc4(md5(pad(ownerPassword)).subarray(0, 5), pad(userPassword));
-  const permissions = -4;
-  const p = Buffer.alloc(4);
-  p.writeInt32LE(permissions);
-  const key = md5(pad(userPassword), owner, p, id).subarray(0, 5);
-  const user = rc4(key, PADDING);
-  // The content is encrypted with the object key, as the handler requires.
-  const objectKey = md5(key, Buffer.from([4, 0, 0, 0, 0])).subarray(0, 10);
-  const content = rc4(
-    objectKey,
-    text("BT /F1 12 Tf 72 720 Td (Synthetic receipt) Tj ET"),
-  );
-  const objects = onePage(content);
-  objects.push(
-    text(
-      `<< /Filter /Standard /V 1 /R 2 /O <${owner.toString("hex")}> /U <${user.toString("hex")}> /P ${permissions} >>`,
-    ),
-  );
+export function passwordProtectedPdf(): Uint8Array {
   return new Uint8Array(
-    assemble(
-      objects,
-      `/Encrypt 5 0 R /ID [<${id.toString("hex")}> <${id.toString("hex")}>] `,
+    readFileSync(
+      new URL("../fixtures/pdf/password-protected.pdf", import.meta.url),
     ),
   );
 }
