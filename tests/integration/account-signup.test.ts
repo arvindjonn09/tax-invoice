@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
 import {
   type AccountDependencies,
+  resendMine,
   resendVerification,
   signUp,
   verifyEmail,
@@ -10,13 +11,15 @@ import {
   PRIVACY_VERSION,
   TERMS_VERSION,
 } from "../../apps/web/src/server/account/terms";
-import { createAuth } from "../../apps/web/src/server/auth/config";
-import { isVerified } from "../../apps/web/src/server/auth/actor";
+import { type Auth, createAuth } from "../../apps/web/src/server/auth/config";
+import { isVerified, resolveActor } from "../../apps/web/src/server/auth/actor";
+import { createWithPolicy } from "../../apps/web/src/server/authz/policy";
 import { decryptPayload } from "../../apps/web/src/server/email/crypto";
 import {
   type CommittedDatabase,
   withCommittedDatabase,
 } from "../helpers/committed-database";
+import { syntheticFactory } from "../helpers/factories";
 
 // #217/#218: public sign-up, email verification and resend (ADR 0004 D1).
 const ORIGIN = "http://localhost:3000";
@@ -26,6 +29,7 @@ let client: PrismaClient;
 let breached = false;
 let turnstileOk = true;
 let production = false;
+let hashed = 0;
 
 beforeAll(async () => {
   database = await withCommittedDatabase();
@@ -47,6 +51,11 @@ const deps: AccountDependencies = {
   emailSecret: () => SECRET,
   production: () => production,
   dispatch: () => {},
+  defer: (work) => work(),
+  hashPassword: async () => {
+    hashed += 1;
+    return "hashed";
+  },
   isBreached: async () => breached,
   verifyTurnstile: async () => turnstileOk,
 };
@@ -357,11 +366,76 @@ describe("verification", () => {
       post("/api/account/verify-email", { token: fresh }),
     );
     expect(ok.status).toBe(200);
-    // Verified accounts get nothing more; the minute limit also applies.
-    await resendVerification(deps)(
-      post("/api/account/verification/resend", { email: "resend@example.com" }),
+  });
+
+  it("sends a verified account nothing, with the same response", async () => {
+    const factory = syntheticFactory(0x2491);
+    const user = {
+      ...factory.user(),
+      email: "already.verified@example.com",
+      emailVerified: true,
+    };
+    await client.user.create({ data: user });
+    const response = await resendVerification(deps)(
+      post("/api/account/verification/resend", { email: user.email }),
     );
-    expect((await emailsFor("resend@example.com")).length).toBe(2);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ status: "check-email" });
+    expect(await emailsFor(user.email)).toEqual([]);
+  });
+
+  it("spends the hashing work on an existing account (S2 AC4)", async () => {
+    const email = "hash.check@example.com";
+    await signUp(deps)(post("/api/account/sign-up", form(email)));
+    hashed = 0;
+    const response = await signUp(deps)(
+      post("/api/account/sign-up", form(email)),
+    );
+    expect(response.status).toBe(202);
+    expect(hashed).toBe(1);
+  });
+
+  it("keeps the public resend out of the account holder's allowance", async () => {
+    const email = "own.allowance@example.com";
+    await signUp(deps)(post("/api/account/sign-up", form(email)));
+    const user = await client.user.findUniqueOrThrow({ where: { email } });
+    const session = { user: { id: user.id }, session: {} };
+    const own: AccountDependencies = {
+      ...deps,
+      auth: () => ({ api: { getSession: async () => session } }) as never,
+    };
+    // Strangers use up the public day limit...
+    const now = BigInt(Date.now());
+    await client.$executeRaw`
+      INSERT INTO auth_rate_limits (key, count, last_request)
+      VALUES (${`jobflow:verify:resend:public:day:${user.id}`}, 5, ${now})`;
+    const publicResend = await emailsFor(email);
+    await resendVerification(deps)(
+      post("/api/account/verification/resend", { email }),
+    );
+    expect((await emailsFor(email)).length).toBe(publicResend.length);
+    // ...and the holder can still send one, then hears the real wait.
+    const mine = await resendMine(own)(
+      post("/api/account/verification/resend-mine", {}),
+    );
+    expect(mine.status).toBe(202);
+    await client.$executeRaw`
+      UPDATE auth_rate_limits SET count = 5, last_request = ${
+        now - BigInt(3600_000)
+      }
+      WHERE key = ${`jobflow:verify:resend:mine:day:${user.id}`}`;
+    await client.$executeRaw`
+      DELETE FROM auth_rate_limits
+      WHERE key = ${`jobflow:verify:resend:mine:minute:${user.id}`}`;
+    const refused = await resendMine(own)(
+      post("/api/account/verification/resend-mine", {}),
+    );
+    expect(refused.status).toBe(429);
+    const { retryAfterSeconds } = (await refused.json()) as {
+      retryAfterSeconds: number;
+    };
+    expect(retryAfterSeconds).toBeGreaterThan(82_000);
+    expect(retryAfterSeconds).toBeLessThanOrEqual(82_800);
   });
 });
 
@@ -394,5 +468,59 @@ describe("verified-session gating", () => {
         { APP_ENV: "production" },
       ),
     ).toBe(false);
+    // Other reserved-TLD addresses get no exemption.
+    expect(
+      isVerified(
+        { email: "staff@company.test", emailVerified: false },
+        { APP_ENV: "staging" },
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses an unverified member at the gate, before any membership query", async () => {
+    const factory = syntheticFactory(0x2492);
+    const user = {
+      ...factory.user(),
+      email: "unverified.member@example.com",
+      emailVerified: false,
+    };
+    const company = { ...factory.company(user.id), isDemo: false };
+    await client.user.create({ data: user });
+    await client.$transaction(async (tx) => {
+      await tx.company.create({ data: company });
+      await tx.membership.create({
+        data: factory.membership(company.id, user.id),
+      });
+    });
+    const auth = {
+      api: {
+        getSession: async () => ({
+          user: { id: user.id, email: user.email, emailVerified: false },
+          session: { id: "s", activeCompanyId: company.id },
+        }),
+      },
+    } as unknown as Auth;
+    let queries = 0;
+    const counting = new Proxy(client, {
+      get(target, property, receiver) {
+        queries += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    expect(await resolveActor(auth, counting, new Headers())).toEqual({
+      status: "unverified",
+      userId: user.id,
+      email: user.email,
+    });
+    expect(queries).toBe(0);
+    const route = createWithPolicy({
+      auth: () => auth,
+      db: () => client,
+      trustedOrigins: () => [ORIGIN],
+    })("company.read", async () => new Response("reached"));
+    const refused = await route(new Request(`${ORIGIN}/api/company`), {
+      params: Promise.resolve({}),
+    });
+    expect(refused.status).toBe(403);
   });
 });

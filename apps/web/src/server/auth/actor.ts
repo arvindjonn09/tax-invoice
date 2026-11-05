@@ -109,13 +109,13 @@ export async function resolveActor(
   };
 }
 
-/** Reserved TLDs (RFC 2606/6761) can never receive email. */
-const UNDELIVERABLE_EMAIL = /\.(test|example|invalid|localhost)$/i;
+/** The test suite's identities; a reserved TLD that can never receive email. */
+const TEST_EMAIL = /@jobflow\.invalid$/i;
 
 /**
- * Verified email is required for every account (S3 AC6). Synthetic demo and
- * test identities on reserved TLDs can't receive email, so they are exempt
- * outside production only; production sign-up refuses those domains.
+ * Verified email is required for every account (S3 AC6). Only the seeded demo
+ * and test-suite identities are exempt, and only outside production, because
+ * they can't receive email. Other reserved-TLD addresses get no exemption.
  */
 export function isVerified(
   user: { email: string; emailVerified: boolean },
@@ -123,7 +123,7 @@ export function isVerified(
 ): boolean {
   if (user.emailVerified) return true;
   return (
-    (DEMO_EMAIL.test(user.email) || UNDELIVERABLE_EMAIL.test(user.email)) &&
+    (DEMO_EMAIL.test(user.email) || TEST_EMAIL.test(user.email)) &&
     !isProductionEnvironment(env)
   );
 }

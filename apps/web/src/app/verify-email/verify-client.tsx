@@ -1,11 +1,13 @@
 "use client";
 import Link from "next/link";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Turnstile } from "@/components/turnstile";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 type State =
-  | { kind: "checking" }
+  | { kind: "loading" }
+  | { kind: "confirm"; token: string }
+  | { kind: "checking"; token: string }
   | { kind: "verified" }
   | { kind: "invalid" }
   | { kind: "resend" }
@@ -13,40 +15,48 @@ type State =
   | { kind: "error"; message: string };
 
 /**
- * Reads the token from the URL fragment (never sent to servers or logs),
- * removes it from the address bar, then confirms it with the API (S3).
+ * Reads the token from the URL fragment (never sent to servers or logs) and
+ * removes it from the address bar (S3). The token is spent only when the person
+ * presses the button, so a mail scanner that runs scripts can't verify an
+ * address for someone who signed up with it.
  */
 export function VerifyEmail({
   turnstileSiteKey,
 }: {
   turnstileSiteKey: string | null;
 }) {
-  const [state, setState] = useState<State>({ kind: "checking" });
+  const [state, setState] = useState<State>({ kind: "loading" });
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
+  const tokenRead = useRef(false);
+
   useEffect(() => {
+    // Strict Mode runs this twice, and the first run removes the fragment.
+    if (tokenRead.current) return;
+    tokenRead.current = true;
     const token = new URLSearchParams(window.location.hash.slice(1)).get(
       "token",
     );
     window.history.replaceState(null, "", window.location.pathname);
-    async function check(): Promise<State> {
-      if (!token) return { kind: "resend" };
-      const response = await fetch("/api/account/verify-email", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token }),
-      }).catch(() => undefined);
-      if (!response) {
-        return {
-          kind: "error",
-          message: "Check your connection and try again.",
-        };
-      }
-      return { kind: response.ok ? "verified" : "invalid" };
-    }
-    void check().then(setState);
+    queueMicrotask(() =>
+      setState(token ? { kind: "confirm", token } : { kind: "resend" }),
+    );
   }, []);
+
+  async function onConfirm(token: string) {
+    setState({ kind: "checking", token });
+    const response = await fetch("/api/account/verify-email", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token }),
+    }).catch(() => undefined);
+    setState(
+      !response
+        ? { kind: "error", message: "Check your connection and try again." }
+        : { kind: response.ok ? "verified" : "invalid" },
+    );
+  }
 
   async function onResend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -74,8 +84,22 @@ export function VerifyEmail({
     );
   }
 
-  if (state.kind === "checking") {
+  if (state.kind === "loading") {
     return <p role="status">Checking your link…</p>;
+  }
+  if (state.kind === "confirm" || state.kind === "checking") {
+    return (
+      <div className="space-y-4">
+        <p>Press the button to confirm this email address is yours.</p>
+        <Button
+          type="button"
+          disabled={state.kind === "checking"}
+          onClick={() => void onConfirm(state.token)}
+        >
+          {state.kind === "checking" ? "Confirming…" : "Confirm my email"}
+        </Button>
+      </div>
+    );
   }
   if (state.kind === "verified") {
     return (
