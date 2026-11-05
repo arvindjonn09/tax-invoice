@@ -1,0 +1,50 @@
+name: Staging smoke test
+# #65: run by hand (Actions → Staging smoke test → Run workflow) after a
+# deploy. Read-only checks always; the signed-in synthetic workflow runs only
+# when the SMOKE_EMAIL and SMOKE_PASSWORD secrets name a synthetic owner of a
+# demo-flagged company (or SMOKE_COMPANY_ID). The secrets live in the
+# `staging` GitHub Environment, which the owner restricts to the main branch,
+# so a run from any other branch gets no credentials.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Environment to test"
+        type: choice
+        required: true
+        options:
+          - "https://jobflow.shivomsangha.com"
+      require_signed_in:
+        description: "Fail if the signed-in workflow can't run"
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: staging-smoke
+  cancel-in-progress: false
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Smoke-test the environment
+        run: pnpm test:smoke
+        env:
+          SMOKE_BASE_URL: ${{ inputs.base_url }}
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+          SMOKE_COMPANY_ID: ${{ secrets.SMOKE_COMPANY_ID }}
+          SMOKE_REQUIRE_SIGNED_IN: ${{ inputs.require_signed_in && '1' || '' }}
+      # No artifact is uploaded: the repository is public (see the config).

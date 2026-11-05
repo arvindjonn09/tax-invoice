@@ -15,6 +15,7 @@
     "test": "vitest run --project unit",
     "test:integration": "node scripts/database/test-runner.mjs",
     "test:e2e": "node scripts/database/e2e-runner.mjs",
+    "test:smoke": "playwright test -c playwright.smoke.config.ts",
     "audit:prod": "node scripts/audit-production.mjs",
     "db:env": "node scripts/database/create-local-env.mjs",
     "db:generate": "node scripts/database/cli.mjs generate",
