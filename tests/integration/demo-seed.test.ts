@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
 import { createAuth } from "../../apps/web/src/server/auth/config";
+import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
 import {
   DEMO_COMPANY_ID,
   DEMO_USERS,
   assertDemoSeedAllowed,
   seedDemo,
+  setDemoPassword,
 } from "../../apps/web/src/server/demo/seed";
 import { randomBytes } from "node:crypto";
 import {
@@ -118,5 +120,90 @@ describe("seedDemo", () => {
       );
     expect((await signIn(false)).status).toBe(200);
     expect((await signIn(true)).status).toBe(403);
+  });
+});
+
+describe("setDemoPassword", () => {
+  const env = { NODE_ENV: "development" };
+  const NEW_PASSWORD = "another synthetic password";
+  const signIn = (email: string, password: string, ip: string) =>
+    createAuth({
+      db,
+      secret: randomBytes(32).toString("hex"),
+      baseURL: ORIGIN,
+      production: false,
+    }).handler(
+      new Request(`${ORIGIN}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: ORIGIN,
+          "x-forwarded-for": ip,
+        },
+        body: JSON.stringify({ email, password }),
+      }),
+    );
+
+  it.each([{ NODE_ENV: "production" }, { APP_ENV: "production" }])(
+    "refuses %j and changes nothing",
+    async (production) => {
+      const before = await db.authAccount.findMany({
+        orderBy: { id: "asc" },
+        select: { password: true },
+      });
+      await expect(
+        setDemoPassword(db, { password: NEW_PASSWORD, env: production }),
+      ).rejects.toThrow("production");
+      expect(
+        await db.authAccount.findMany({
+          orderBy: { id: "asc" },
+          select: { password: true },
+        }),
+      ).toEqual(before);
+    },
+  );
+
+  it.each(["too short", "x".repeat(129)])(
+    "refuses a password of the wrong length",
+    async (password) => {
+      await expect(setDemoPassword(db, { password, env })).rejects.toThrow(
+        "12-128",
+      );
+    },
+  );
+
+  it("changes every demo password, ends demo sessions and leaves other users alone", async () => {
+    const other = await createCredentialUser(db, {
+      email: "someone-else@jobflow.invalid",
+      name: "Someone Else",
+      password: PASSWORD,
+    });
+    const otherBefore = await db.authAccount.findFirstOrThrow({
+      where: { userId: other.id },
+      select: { password: true },
+    });
+    expect(
+      (await signIn("demo-owner@example.test", PASSWORD, "192.0.2.10")).status,
+    ).toBe(200);
+    expect((await signIn(other.email, PASSWORD, "192.0.2.11")).status).toBe(
+      200,
+    );
+
+    const result = await setDemoPassword(db, { password: NEW_PASSWORD, env });
+
+    expect(result.updatedUsers).toBe(DEMO_USERS.length);
+    expect(result.endedSessions).toBeGreaterThan(0);
+    for (const [index, user] of DEMO_USERS.entries()) {
+      const ip = `192.0.2.${20 + index}`;
+      expect((await signIn(user.email, PASSWORD, ip)).status).toBe(401);
+      expect((await signIn(user.email, NEW_PASSWORD, ip)).status).toBe(200);
+    }
+    expect(
+      await db.authAccount.findFirstOrThrow({
+        where: { userId: other.id },
+        select: { password: true },
+      }),
+    ).toEqual(otherBefore);
+    expect(await db.authSession.count({ where: { userId: other.id } })).toBe(1);
   });
 });
