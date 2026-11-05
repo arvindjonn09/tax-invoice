@@ -69,9 +69,9 @@ and fills in the commands below.
 ## Lifecycle
 ```
 issue (status:ready) → owner agent claims → branch → code + tests → PR (Closes #n)
-  → CI green → the OTHER agent reviews the exact head (Codex's GitHub reviewer for Claude's PRs,
-     "🔎 Claude review" for Codex's; + security-engineer for auth/money/files/PII) → all threads resolved
-  → Claude or Codex merges (AGENTS.md merge policy) → issue closes → dependants get status:ready
+  → CI green → the OTHER agent reviews the exact head ("🔎 Claude A review" for Claude B's PRs,
+     "🔎 Claude B review" for Claude A's; + security-engineer for auth/money/files/PII) → all threads resolved
+  → Claude A or Claude B merges (AGENTS.md merge policy) → issue closes → dependants get status:ready
   → owner tests after merge
 ```
 
@@ -102,9 +102,10 @@ issue (status:ready) → owner agent claims → branch → code + tests → PR (
 9. **Never** commit secrets, real customer/employee data, real ABNs or `.env` files; never force-push `main`. Merge
    only under the **merge policy in `AGENTS.md`** (green CI on the exact head, a review of that head by the *other*
    agent, all review threads resolved, dependency order, merge commit). Close issues only through merged PRs.
-10. **Coordinate** on the shared page `/home/prod/jobflow-updates.md`: claim an issue there before starting, and log
-    every PR, review and merge (AGENTS.md "Who does what"). Codex works in `/home/prod/tax-invoice`, Claude in
-    `/home/prod/tax-invoice-claude`; never run git in the other's folder or push to the other's branch.
+10. **Coordinate** on the shared page `/home/prod/jobflow-updates.md` when you can reach it (otherwise on the
+    issue): claim an issue before starting, and log every PR, review and merge (AGENTS.md "Who does what"). Start every
+    GitHub comment with `[session: Claude A|Claude B / …]`. Claude A works in `/home/prod/tax-invoice-claude`, Claude
+    B in its own cloud clone; never run git in the other's working copy or push to the other's branch.
 
 ## Project docs layout
 - `docs/*.md` — specification (above)

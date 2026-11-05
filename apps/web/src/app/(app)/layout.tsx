@@ -21,6 +21,7 @@ export default async function SignedInLayout({
     await headers(),
   );
   if (resolution.status === "signed-out") redirect("/login");
+  if (resolution.status === "unverified") redirect("/verify-email/pending");
   if (resolution.status !== "active") {
     return (
       <main className="foundation">

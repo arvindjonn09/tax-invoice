@@ -1,0 +1,10 @@
+[
+  {
+    "rule": "js/insufficient-password-hash",
+    "path": "apps/web/src/server/security/pwned.ts",
+    "reason": "Pwned Passwords k-anonymity range API requires SHA-1. The hash is never stored or compared for authentication; only its first 5 hex characters leave the server. Passwords are stored with scrypt (ADR 0003).",
+    "approvedBy": "owner (arvindjonn09)",
+    "approvedOn": "2026-11-03",
+    "issue": "#217"
+  }
+]

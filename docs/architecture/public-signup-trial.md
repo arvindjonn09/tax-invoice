@@ -32,7 +32,7 @@ Server modules (all in `apps/web/src/server/`):
 | `trial/` | `trialAccess` service (status, extend, set mode, requests), reminders |
 | `operator/` | `withOperator`, `requireOperator`, operator projections, CLI commands |
 | `security/turnstile.ts`, `security/pwned.ts` | External checks |
-| `authz/read-only.ts` | `READ_ONLY_ALLOWED`, `ReadOnlyExemption`, `requireWritableActor` |
+| `authz/read-only.ts` | `READ_ONLY_ALLOWED`, `allowedWhileReadOnly`, `isCompanyReadOnlyError` |
 
 Pure date logic is in `packages/domain/src/trial.ts`.
 

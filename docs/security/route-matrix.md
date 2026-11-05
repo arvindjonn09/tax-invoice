@@ -4,6 +4,10 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 
 | Route | Method | Permission | Roles |
 |---|---|---|---|
+| `/api/account/sign-up` | POST | — | public (see route-policy.test.ts) |
+| `/api/account/verification/resend` | POST | — | public (see route-policy.test.ts) |
+| `/api/account/verification/resend-mine` | POST | — | public (see route-policy.test.ts) |
+| `/api/account/verify-email` | POST | — | public (see route-policy.test.ts) |
 | `/api/auth/[...all]` | GET | — | public (see route-policy.test.ts) |
 | `/api/auth/[...all]` | POST | — | public (see route-policy.test.ts) |
 | `/api/bill-submissions` | GET | `bill.read` | owner, manager, accountant |
@@ -23,6 +27,7 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 | `/api/company/gst` | PATCH | `gst_settings.update` | owner, accountant |
 | `/api/company/gst/registrations` | POST | `gst_settings.update` | owner, accountant |
 | `/api/company/gst/registrations/[id]` | PATCH | `gst_settings.update` | owner, accountant |
+| `/api/company/trial` | GET | `company.read` | owner, manager, accountant, employee, subcontractor |
 | `/api/contractors` | GET | `contractor.read` | owner, manager, accountant |
 | `/api/contractors` | POST | `contractor.write` | owner, manager |
 | `/api/contractors/[id]` | GET | `contractor.read` | owner, manager, accountant |

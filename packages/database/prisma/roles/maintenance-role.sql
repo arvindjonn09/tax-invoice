@@ -10,17 +10,19 @@ GRANT SELECT, DELETE ON documents TO jobflow_maintenance;
 GRANT SELECT, INSERT ON audit_events TO jobflow_maintenance;
 GRANT SELECT, INSERT, UPDATE, DELETE ON document_delete_retries TO jobflow_maintenance;
 GRANT EXECUTE ON FUNCTION jobflow_lock_document_for_cleanup(uuid,uuid) TO jobflow_maintenance;
--- The attachment check reads only the FK and company columns, never the
--- full financial/employee record. New attachment tables are covered on deploy.
+-- The attachment check reads only each foreign key's own columns (the
+-- document column and the column paired with documents.company_id: company_id
+-- in most tables, companies.id for the logo, #211), never the full
+-- financial/employee record. New attachment tables are covered on deploy.
 DO $$ DECLARE r record; BEGIN
  FOR r IN
-  SELECT DISTINCT c.conrelid::regclass AS tbl, a.attname AS col
+  SELECT c.conrelid::regclass AS tbl, string_agg(quote_ident(a.attname), ',') AS cols
   FROM pg_constraint c
-  CROSS JOIN LATERAL unnest(c.conkey,c.confkey) AS k(child,parent)
+  CROSS JOIN LATERAL unnest(c.conkey) AS k(child)
   JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.child
-  JOIN pg_attribute p ON p.attrelid=c.confrelid AND p.attnum=k.parent
-  WHERE c.contype='f' AND c.confrelid='documents'::regclass AND p.attname='id'
+  WHERE c.contype='f' AND c.confrelid='documents'::regclass
+  GROUP BY c.oid, c.conrelid
  LOOP
-  EXECUTE format('GRANT SELECT (company_id,%I) ON %s TO jobflow_maintenance',r.col,r.tbl);
+  EXECUTE format('GRANT SELECT (%s) ON %s TO jobflow_maintenance',r.cols,r.tbl);
  END LOOP;
 END $$;

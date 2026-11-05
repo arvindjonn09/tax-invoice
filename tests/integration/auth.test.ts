@@ -368,3 +368,34 @@ it("uses Secure cookies for an HTTPS origin even outside production", async () =
     /__Secure-jobflow\.session_token=.*; Secure/i,
   );
 });
+
+describe("sign-in throttle behind Cloudflare (#217)", () => {
+  it("ignores a rotated X-Forwarded-For when CLIENT_IP_HEADER is configured", async () => {
+    const instance = createAuth({
+      db,
+      secret: SECRET,
+      baseURL: ORIGIN,
+      production: false,
+      clientIpHeader: "cf-connecting-ip",
+    });
+    const attempt = (n: number) =>
+      instance.handler(
+        new Request(`${ORIGIN}/api/auth/sign-in/email`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            origin: ORIGIN,
+            "x-forwarded-for": `203.0.113.${n}`,
+            "cf-connecting-ip": "198.51.100.200",
+          },
+          body: JSON.stringify({ email: emails.owner, password: "wrong" }),
+        }),
+      );
+    const statuses: number[] = [];
+    for (let n = 1; n <= SIGN_IN_MAX_ATTEMPTS + 2; n += 1) {
+      statuses.push((await attempt(n)).status);
+    }
+    expect(statuses.slice(0, SIGN_IN_MAX_ATTEMPTS)).not.toContain(429);
+    expect(statuses.slice(SIGN_IN_MAX_ATTEMPTS)).toEqual([429, 429]);
+  });
+});
