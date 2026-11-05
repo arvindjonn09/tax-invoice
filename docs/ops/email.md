@@ -34,9 +34,9 @@ before trial reminders and notices, however old those are.
   - A successful send resets the doubling.
   - The refused email uses **none of its 8 attempts**. It goes behind the others, so the next try is a different
     email.
-  - After `MAX_RATE_LIMITED_PER_ROW` (8) throttling replies, a row's further 4xx replies count as ordinary attempts.
-    It stops pausing the queue and can end `failed`. A block always pauses, whatever the count. **Owner decision
-    pending** on that cap.
+  - An email that meets **5** throttling or block replies (`MAX_RATE_LIMITED_PER_ROW`) is marked `failed`, with its
+    payload deleted, so one stuck email can't keep pausing the queue (owner decision, 5 November 2026). The log line
+    carries `markedFailed: true`. A manual resend is a separate follow-up.
   - Logged at **error** as `email.rate_limited` or `email.provider_blocked`: outbox id, kind and error class only,
     never an address or the reply text.
 

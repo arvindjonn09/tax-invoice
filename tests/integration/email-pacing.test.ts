@@ -338,40 +338,52 @@ describe("throttling and block replies", () => {
     ).toBe(0);
   });
 
-  it("stops letting one row pause the queue after its throttling cap, so it can fail normally", async () => {
-    await queue("verify_email", 1);
-    await client.emailOutbox.update({
-      where: { dedupeKey: "verify_email:1" },
-      data: { rateLimitedCount: MAX_RATE_LIMITED_PER_ROW },
-    });
-    const result = await dispatchOutbox(
-      client,
-      refusing(450, "Mailbox busy"),
-      SECRET,
-      {
-        now: () => new Date(soon()),
-      },
-    );
-    expect(result).toMatchObject({ failed: 1, rateLimited: false });
-    expect(await pausedUntil()).toBeNull();
-    expect((await row("verify_email:1")).attempts).toBe(1);
-    expect(MAX_ATTEMPTS).toBe(8);
-  });
+  it.each([
+    [421, "Try later"],
+    [554, "5.1.8 Email Outgoing Blocked"],
+  ])(
+    "marks a row failed on its 5th throttling or block reply (owner decision), still pausing the provider (%i)",
+    async (code, text) => {
+      expect(MAX_RATE_LIMITED_PER_ROW).toBe(5);
+      await queue("verify_email", 1);
+      await client.emailOutbox.update({
+        where: { dedupeKey: "verify_email:1" },
+        data: { rateLimitedCount: MAX_RATE_LIMITED_PER_ROW - 1 },
+      });
+      const result = await dispatchOutbox(
+        client,
+        refusing(code, text),
+        SECRET,
+        { now: () => new Date(soon()) },
+      );
+      expect(result).toMatchObject({ failed: 1, rateLimited: true });
+      expect(await row("verify_email:1")).toMatchObject({
+        status: "failed",
+        attempts: 0,
+        rateLimitedCount: MAX_RATE_LIMITED_PER_ROW,
+        payloadCiphertext: null,
+      });
+      expect(await pausedUntil()).not.toBeNull();
+      expect(
+        JSON.parse(logs.find((l) => l.includes("markedFailed"))!),
+      ).toMatchObject({ level: "error", rateLimitedCount: 5 });
+    },
+  );
 
-  it("always pauses on a block, whatever the row's count", async () => {
+  it("keeps a row pending on its 4th throttling reply", async () => {
     await queue("verify_email", 1);
     await client.emailOutbox.update({
       where: { dedupeKey: "verify_email:1" },
-      data: { rateLimitedCount: MAX_RATE_LIMITED_PER_ROW },
+      data: { rateLimitedCount: MAX_RATE_LIMITED_PER_ROW - 2 },
     });
-    const result = await dispatchOutbox(
-      client,
-      refusing(554, "5.1.8 Email Outgoing Blocked"),
-      SECRET,
-      { now: () => new Date(soon()) },
-    );
-    expect(result).toMatchObject({ failed: 0, rateLimited: true });
-    expect((await row("verify_email:1")).attempts).toBe(0);
+    await dispatchOutbox(client, refusing(421, "Try later"), SECRET, {
+      now: () => new Date(soon()),
+    });
+    expect(await row("verify_email:1")).toMatchObject({
+      status: "pending",
+      rateLimitedCount: MAX_RATE_LIMITED_PER_ROW - 1,
+    });
+    expect(MAX_ATTEMPTS).toBe(8);
   });
 
   it("still counts a permanent 554 as a failed attempt", async () => {

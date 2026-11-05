@@ -24,11 +24,11 @@ export const MAX_PAUSE_MS = 4 * HOUR_MS;
 /** Zoho's "outgoing blocked" lasts up to an hour, so never wait less. */
 export const BLOCKED_PAUSE_MS = HOUR_MS;
 /**
- * A row that keeps meeting throttling replies stops pausing the queue after
- * this many: from then on its 4xx replies count as ordinary attempts, so it
- * can end `failed` like any other (owner decision pending on #266).
+ * A row that meets this many throttling or block replies is marked `failed`
+ * (owner decision, 5 November 2026), so one stuck email can't keep pausing
+ * the queue. A manual resend is a separate follow-up.
  */
-export const MAX_RATE_LIMITED_PER_ROW = 8;
+export const MAX_RATE_LIMITED_PER_ROW = 5;
 /** One lock serialises claims across dispatchers, so the cap is exact. */
 const PACING_LOCK_KEY = 259_001;
 
@@ -232,8 +232,8 @@ async function claimOne(
  * stay pending), account emails first, and an address suppressed after it
  * was queued is never sent to. A throttling or block reply sets a
  * provider-wide pause (doubling per repeat, at least an hour for a block),
- * puts that row behind the others and uses no attempt, until the row has
- * met MAX_RATE_LIMITED_PER_ROW of them.
+ * puts that row behind the others and uses no attempt; the row is marked
+ * `failed` once it has met MAX_RATE_LIMITED_PER_ROW of them.
  */
 export async function dispatchOutbox(
   db: PrismaClient,
@@ -320,15 +320,13 @@ export async function dispatchOutbox(
       sent += 1;
     } catch (error) {
       const kind = classifySendError(error);
-      // A block is account-wide, never this row's fault, so it always pauses.
-      if (
-        kind === "blocked" ||
-        (kind === "throttled" &&
-          row.rateLimitedCount < MAX_RATE_LIMITED_PER_ROW)
-      ) {
-        // Not this message's fault: no attempt used, never `failed` here.
-        // The pause lives in email_dispatch_state, so every row waits,
-        // including ones queued during it; this row goes behind the others.
+      if (kind !== "other") {
+        // The provider is throttling or blocking: no attempt is used. The
+        // pause lives in email_dispatch_state, so every row waits, including
+        // ones queued during it; this row goes behind the others, or is
+        // marked `failed` once it has met MAX_RATE_LIMITED_PER_ROW of these.
+        const hits = row.rateLimitedCount + 1;
+        const capped = hits >= MAX_RATE_LIMITED_PER_ROW;
         const at = now();
         const until = await db.$transaction(async (tx) => {
           const state = await tx.emailDispatchState.update({
@@ -345,13 +343,13 @@ export async function dispatchOutbox(
           await tx.emailOutbox.update({
             where: { id },
             data: {
-              status: "pending",
-              rateLimitedCount: { increment: 1 },
+              status: capped ? "failed" : "pending",
+              rateLimitedCount: hits,
               nextAttemptAt: new Date(
-                pausedUntil.getTime() +
-                  RATE_LIMIT_PAUSE_MS * (row.rateLimitedCount + 1),
+                pausedUntil.getTime() + RATE_LIMIT_PAUSE_MS * hits,
               ),
               lastError: errorClass(error),
+              ...(capped ? { payloadCiphertext: null } : {}),
             },
           });
           return pausedUntil;
@@ -366,8 +364,11 @@ export async function dispatchOutbox(
             transport: transport.name,
             error: errorClass(error),
             pausedUntil: until.toISOString(),
+            rateLimitedCount: hits,
+            ...(capped ? { markedFailed: true } : {}),
           },
         );
+        if (capped) failed += 1;
         rateLimited = true;
         break;
       }
@@ -389,7 +390,6 @@ export async function dispatchOutbox(
         attempts,
         transport: transport.name,
         error: errorClass(error),
-        ...(kind !== "other" ? { throttledRowCapped: true } : {}),
       });
     }
   }
