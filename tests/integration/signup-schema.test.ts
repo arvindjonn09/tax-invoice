@@ -115,6 +115,15 @@ describe("trial access state", () => {
 });
 
 describe("actor-aware company audit", () => {
+  // The trial tests above leave this company expired; since #211 an expired
+  // trial company refuses audited writes at commit, so restore full access.
+  beforeAll(async () => {
+    await client.company.update({
+      where: { id: companyId },
+      data: { accessMode: "unrestricted" },
+    });
+  });
+
   it("requires a member for member events and none for system events", async () => {
     await expect(
       client.auditEvent.create({

@@ -3393,6 +3393,66 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
     expect((await runExport(f.actor, "profitability", range)).status).toBe(200);
   });
 
+  it("still exports and records refusals while the company is read-only (#222)", async () => {
+    const f = await fixture(true, "cash");
+    for (const [kind, date] of [
+      ["receipt", "2026-08-01"],
+      ["refund", "2026-09-01"],
+      ["receipt", "2026-07-20"],
+    ] as const)
+      await db.$transaction(async (tx) => {
+        const receipt = await tx.customerReceipt.create({
+          data: {
+            companyId: f.company.id,
+            customerId: f.customer.id,
+            kind,
+            receivedOn: new Date(date),
+            amountCents: 275000n,
+            method: "card",
+            createdBy: f.user.id,
+            idempotencyKey: randomUUID(),
+            requestHash: "c".repeat(64),
+          },
+        });
+        await tx.receiptAllocation.create({
+          data: {
+            companyId: f.company.id,
+            receiptId: receipt.id,
+            invoiceId: f.invoice.id,
+            amountCents: 275000n,
+            gstAttributedCents: kind === "refund" ? -25000n : 25000n,
+          },
+        });
+      });
+    await db.company.update({
+      where: { id: f.company.id },
+      data: {
+        isDemo: false,
+        accessMode: "trial",
+        trialStartedAt: new Date("2019-12-01T00:00:00Z"),
+        trialLastDay: new Date("2020-01-01T00:00:00Z"),
+      },
+    });
+    const range = "from=2026-07-01&to=2026-09-30";
+    // The refusal is still recorded (report.export_refused).
+    expect((await runExport(f.actor, "gst-summary", range)).status).toBe(409);
+    // A complete export still succeeds (report.exported).
+    expect((await runExport(f.actor, "profitability", range)).status).toBe(200);
+    expect(
+      await db.auditEvent.findMany({
+        where: {
+          companyId: f.company.id,
+          action: { startsWith: "report.export" },
+        },
+        select: { action: true },
+        orderBy: { createdAt: "asc" },
+      }),
+    ).toEqual([
+      { action: "report.export_refused" },
+      { action: "report.exported" },
+    ]);
+  });
+
   it("exports profitability for one job, exactly as the filtered report", async () => {
     const f = await fixture(true, "non_cash");
     const other = await db.job.create({

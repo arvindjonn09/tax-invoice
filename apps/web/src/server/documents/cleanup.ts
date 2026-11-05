@@ -10,6 +10,8 @@ import type { ObjectStore } from "./store";
  * Attached documents are never touched: every table that references
  * `documents` is read from the database catalog, so a new one is covered
  * without changing this code, and the foreign keys refuse the delete anyway.
+ * Company logos (#211) are never deleted, even once replaced: sent quotes and
+ * issued invoices keep pointing at the logo current when they were sent.
  */
 export const UNATTACHED_GRACE_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -18,16 +20,23 @@ const KNOWN_REFERENCES = [
   "invoice_pdfs.document_id",
   "supplier_bills.document_id",
   "work_evidence.document_id",
+  "companies.logo_document_id",
 ];
 
-type Reference = { tbl: string; col: string };
+/** `companyCol` is the referencing column matched to documents.company_id. */
+type Reference = { tbl: string; col: string; companyCol: string | null };
 
 /** Every (table, document column) whose foreign key references documents. */
 export async function documentReferences(
   db: PrismaClient,
 ): Promise<Reference[]> {
   return db.$queryRaw<Reference[]>`
-    SELECT c.conrelid::regclass::text AS tbl, quote_ident(a.attname) AS col
+    SELECT c.conrelid::regclass::text AS tbl, quote_ident(a.attname) AS col,
+      (SELECT quote_ident(a2.attname)
+       FROM unnest(c.conkey, c.confkey) AS k2(child, parent)
+       JOIN pg_attribute a2 ON a2.attrelid = c.conrelid AND a2.attnum = k2.child
+       JOIN pg_attribute p2 ON p2.attrelid = c.confrelid AND p2.attnum = k2.parent
+       WHERE p2.attname = 'company_id') AS "companyCol"
     FROM pg_constraint c
     CROSS JOIN LATERAL unnest(c.conkey, c.confkey) AS k(child, parent)
     JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.child
@@ -46,8 +55,12 @@ function attachedSql(references: Reference[]): string {
   return [
     ...references.map(
       // Identifiers come from the catalog, already quoted by PostgreSQL.
-      ({ tbl, col }) =>
-        `EXISTS (SELECT 1 FROM ${tbl} r WHERE r.${col} = d.id AND r.company_id = d.company_id)`,
+      // The company column comes from the foreign key itself: most tables
+      // call it company_id, but companies.logo_document_id pairs with id.
+      ({ tbl, col, companyCol }) =>
+        `EXISTS (SELECT 1 FROM ${tbl} r WHERE r.${col} = d.id${
+          companyCol ? ` AND r.${companyCol} = d.company_id` : ""
+        })`,
     ),
     // Only the document-reference keys, never free text a user typed.
     // Audit changes are stored as {field: {before, after}}; `.**` matches
@@ -103,7 +116,7 @@ export async function cleanUnattachedDocuments(
     { id: string; company_id: string }[]
   >(
     `SELECT d.id, d.company_id FROM documents d
-     WHERE d.created_at < $1 AND NOT (${attached})
+     WHERE d.created_at < $1 AND d.kind::text <> 'company_logo' AND NOT (${attached})
      ORDER BY d.created_at, d.id LIMIT $2`,
     cutoff,
     limit,
@@ -213,7 +226,8 @@ export async function cleanUnattachedDocuments(
           }[]
         >(
           `SELECT d.id, d.company_id, d.kind::text AS kind, d.size_bytes, d.object_key, d.created_by, d.created_at
-         FROM documents d WHERE d.id = $1::uuid AND d.created_at < $2 AND NOT (${attached})`,
+         FROM documents d WHERE d.id = $1::uuid AND d.created_at < $2
+           AND d.kind::text <> 'company_logo' AND NOT (${attached})`,
           id,
           cutoff,
         );
@@ -233,6 +247,9 @@ export async function cleanUnattachedDocuments(
           },
         });
         await tx.document.delete({ where: { id: row.id } });
+        // Housekeeping keeps running while a company is read-only (S9 AC7):
+        // the commit-time guard admits only document.unattached_deleted here.
+        await tx.$executeRaw`SELECT set_config('jobflow.read_only_exemption', 'housekeeping', true)`;
         await tx.auditEvent.create({
           data: {
             companyId: row.company_id,

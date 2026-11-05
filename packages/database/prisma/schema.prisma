@@ -25,26 +25,29 @@ enum IdempotencyState {
 }
 
 model User {
-  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email         String        @unique @db.VarChar(320)
-  name          String?       @db.VarChar(200)
-  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy     String?       @map("created_by") @db.Uuid
-  creator       User?         @relation("UserCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  createdUsers  User[]        @relation("UserCreator")
-  memberships   Membership[]
+  id                 String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email              String                  @unique @db.VarChar(320)
+  name               String?                 @db.VarChar(200)
+  createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy          String?                 @map("created_by") @db.Uuid
+  creator            User?                   @relation("UserCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdUsers       User[]                  @relation("UserCreator")
+  memberships        Membership[]
   // Better Auth (#13): identity fields and credential/session records.
-  emailVerified Boolean       @default(false) @map("email_verified")
-  image         String?       @db.VarChar(2048)
-  sessions      AuthSession[]
-  accounts      AuthAccount[]
+  emailVerified      Boolean                 @default(false) @map("email_verified")
+  image              String?                 @db.VarChar(2048)
+  sessions           AuthSession[]
+  accounts           AuthAccount[]
   // Public sign-up (#210).
   accountTokens      AccountToken[]
   termsAcceptances   TermsAcceptance[]
   emails             EmailOutbox[]
   platformEvents     PlatformAuditEvent[]
-  selfServiceCompany Company?             @relation("SelfServiceCompany")
+  selfServiceCompany Company?                @relation("SelfServiceCompany")
+  // Trial notices and extension decisions (#211).
+  notices            UserNotice[]
+  extensionDecisions TrialExtensionRequest[] @relation("ExtensionDecider")
 
   @@index([createdBy])
   @@map("users")
@@ -116,48 +119,61 @@ model AuthRateLimit {
 }
 
 model Company {
-  documentDeleteRetries DocumentDeleteRetry[]
-  id                    String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name                  String                   @db.VarChar(200)
-  isDemo                Boolean                  @default(false) @map("is_demo")
-  legalName             String?                  @map("legal_name") @db.VarChar(200)
+  documentDeleteRetries     DocumentDeleteRetry[]
+  id                        String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                      String                   @db.VarChar(200)
+  isDemo                    Boolean                  @default(false) @map("is_demo")
+  legalName                 String?                  @map("legal_name") @db.VarChar(200)
   /// 11 digits, checksum-validated by the application (#25).
-  abn                   String?                  @db.Char(11)
-  addressLine1          String?                  @map("address_line1") @db.VarChar(200)
-  addressLine2          String?                  @map("address_line2") @db.VarChar(200)
-  suburb                String?                  @db.VarChar(100)
-  state                 String?                  @db.VarChar(3)
-  postcode              String?                  @db.Char(4)
-  invoicePrefix         String                   @default("INV-") @map("invoice_prefix") @db.VarChar(10)
-  jobPrefix             String                   @default("JOB-") @map("job_prefix") @db.VarChar(10)
-  basPeriod             BasReportingPeriod       @default(quarterly) @map("bas_period")
+  abn                       String?                  @db.Char(11)
+  addressLine1              String?                  @map("address_line1") @db.VarChar(200)
+  addressLine2              String?                  @map("address_line2") @db.VarChar(200)
+  suburb                    String?                  @db.VarChar(100)
+  state                     String?                  @db.VarChar(3)
+  postcode                  String?                  @db.Char(4)
+  invoicePrefix             String                   @default("INV-") @map("invoice_prefix") @db.VarChar(10)
+  jobPrefix                 String                   @default("JOB-") @map("job_prefix") @db.VarChar(10)
+  basPeriod                 BasReportingPeriod       @default(quarterly) @map("bas_period")
   /// ADR 0004 D2: trial companies come only from self-service onboarding (#210).
-  accessMode            CompanyAccessMode        @default(unrestricted) @map("access_mode")
-  trialStartedAt        DateTime?                @map("trial_started_at") @db.Timestamptz(3)
+  accessMode                CompanyAccessMode        @default(unrestricted) @map("access_mode")
+  trialStartedAt            DateTime?                @map("trial_started_at") @db.Timestamptz(3)
   /// Last full day of the trial in Australia/Sydney.
-  trialLastDay          DateTime?                @map("trial_last_day") @db.Date
+  trialLastDay              DateTime?                @map("trial_last_day") @db.Date
   /// Derived by the companies_read_only_from trigger; never written by the app.
-  readOnlyFrom          DateTime?                @map("read_only_from") @db.Timestamptz(3)
-  trialExtensionCount   Int                      @default(0) @map("trial_extension_count")
-  selfServiceOwnerId    String?                  @unique @map("self_service_owner_id") @db.Uuid
-  selfServiceRequestKey String?                  @map("self_service_request_key") @db.VarChar(100)
-  selfServiceOwner      User?                    @relation("SelfServiceCompany", fields: [selfServiceOwnerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  emails                EmailOutbox[]
-  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt             DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy             String                   @map("created_by") @db.Uuid
+  readOnlyFrom              DateTime?                @map("read_only_from") @db.Timestamptz(3)
+  trialExtensionCount       Int                      @default(0) @map("trial_extension_count")
+  selfServiceOwnerId        String?                  @unique @map("self_service_owner_id") @db.Uuid
+  selfServiceRequestKey     String?                  @map("self_service_request_key") @db.VarChar(100)
+  selfServiceOwner          User?                    @relation("SelfServiceCompany", fields: [selfServiceOwnerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  emails                    EmailOutbox[]
+  // Profile extras (#211, S6). Formats are checked in Zod.
+  phone                     String?                  @db.VarChar(20)
+  businessEmail             String?                  @map("business_email") @db.VarChar(320)
+  /// CHECK companies_website_scheme: http(s) only.
+  website                   String?                  @db.VarChar(200)
+  about                     String?                  @db.VarChar(1000)
+  /// A company_logo document of this company (companies_logo_kind trigger).
+  logoDocumentId            String?                  @map("logo_document_id") @db.Uuid
+  logo                      Document?                @relation("CompanyLogo", fields: [id, logoDocumentId], references: [companyId, id], onDelete: NoAction, onUpdate: NoAction, map: "companies_logo_document_fkey")
+  setupChecklistDismissedAt DateTime?                @map("setup_checklist_dismissed_at") @db.Timestamptz(3)
+  trialNotifications        TrialNotification[]
+  notices                   UserNotice[]
+  extensionRequests         TrialExtensionRequest[]
+  createdAt                 DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy                 String                   @map("created_by") @db.Uuid
   // Migration defers this FK until commit so company + first owner can be atomic.
-  creator               Membership               @relation("CompanyCreator", fields: [id, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
-  memberships           Membership[]             @relation("CompanyMemberships")
-  auditEvents           AuditEvent[]
-  idempotencyKeys       IdempotencyKey[]
-  authSessions          AuthSession[]
-  gstRegistrations      CompanyGstRegistration[]
-  employees             Employee[]
-  customers             Customer[]
-  numberSequences       NumberSequence[]
-  documents             Document[]
-  contractors           Contractor[]
+  creator                   Membership               @relation("CompanyCreator", fields: [id, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  memberships               Membership[]             @relation("CompanyMemberships")
+  auditEvents               AuditEvent[]
+  idempotencyKeys           IdempotencyKey[]
+  authSessions              AuthSession[]
+  gstRegistrations          CompanyGstRegistration[]
+  employees                 Employee[]
+  customers                 Customer[]
+  numberSequences           NumberSequence[]
+  documents                 Document[]
+  contractors               Contractor[]
 
   userInvitations          UserInvitation[]
   defaultExpenseSettlement ExpenseSettlement @default(paid_at_purchase) @map("default_expense_settlement")
@@ -226,6 +242,7 @@ model Membership {
   createdMemberships    Membership[]             @relation("MembershipCreator")
   createdCompanies      Company[]                @relation("CompanyCreator")
   auditEvents           AuditEvent[]
+  extensionRequests     TrialExtensionRequest[]  @relation("ExtensionRequester")
   idempotencyKeys       IdempotencyKey[]
   gstRegistrations      CompanyGstRegistration[]
   employeesCreated      Employee[]               @relation("EmployeeCreator")
@@ -284,8 +301,8 @@ model Membership {
 }
 
 model AuditEvent {
-  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId  String     @map("company_id") @db.Uuid
+  id         String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId  String         @map("company_id") @db.Uuid
   /// Null for system and operator events (audit_events_actor CHECK).
   createdBy  String?        @map("created_by") @db.Uuid
   actorKind  AuditActorKind @default(member) @map("actor_kind")
@@ -608,6 +625,8 @@ enum DocumentKind {
   photo
   tax_invoice
   other
+  /// #211: a company's logo; never removed by documents:cleanup.
+  company_logo
 
   @@map("document_kind")
 }
@@ -636,6 +655,7 @@ model Document {
   supplierCredit SupplierCredit?
   billSubmission SubcontractorBillSubmission?
   billEvidence   SupplierBillEvidence?
+  logoOf         Company[]                    @relation("CompanyLogo")
 
   @@unique([companyId, id])
   @@index([companyId, createdBy])
@@ -1212,6 +1232,8 @@ model Quote {
   decidedAt          DateTime?         @map("decided_at") @db.Timestamptz(3)
   decidedBy          String?           @map("decided_by") @db.Uuid
   decisionNote       String?           @map("decision_note") @db.VarChar(500)
+  /// S7: supplier details set when sent; frozen by jobflow_guard_quote (#211).
+  supplierSnapshot   Json?             @map("supplier_snapshot")
   createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
   createdBy          String            @map("created_by") @db.Uuid
@@ -1856,4 +1878,80 @@ model PlatformAuditEvent {
   @@index([userId, createdAt])
   @@index([action, createdAt])
   @@map("platform_audit_events")
+}
+
+// ---- Trial reminders, notices and extension requests (#211, ADR 0004) ----
+
+enum TrialThreshold {
+  d7
+  d3
+  d1
+  ended
+
+  @@map("trial_threshold")
+}
+
+enum ExtensionRequestStatus {
+  pending
+  approved
+  declined
+  closed
+
+  @@map("extension_request_status")
+}
+
+/// One reminder threshold sent for a company's current last day (S10).
+model TrialNotification {
+  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId    String         @map("company_id") @db.Uuid
+  trialLastDay DateTime       @map("trial_last_day") @db.Date
+  threshold    TrialThreshold
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  company      Company        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, trialLastDay, threshold])
+  @@map("trial_notifications")
+}
+
+/// A one-time notice a user dismissed. companyId null = account-level.
+/// Unique (user, company, key) with NULLS NOT DISTINCT (in SQL).
+model UserNotice {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  companyId   String?   @map("company_id") @db.Uuid
+  noticeKey   String    @map("notice_key") @db.VarChar(100)
+  dismissedAt DateTime? @map("dismissed_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  user        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  company     Company?  @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([userId, companyId, noticeKey])
+  @@map("user_notices")
+}
+
+/// An owner's request for more trial time, decided once (S14). One pending
+/// request per company (partial unique index in SQL); decided rows are
+/// immutable (trigger). decidedBy becomes a platform_operators FK in #230.
+model TrialExtensionRequest {
+  id               String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId        String                 @map("company_id") @db.Uuid
+  requestedBy      String                 @map("requested_by") @db.Uuid
+  message          String?                @db.VarChar(1000)
+  lastDayAtRequest DateTime               @map("last_day_at_request") @db.Date
+  status           ExtensionRequestStatus @default(pending)
+  decidedAt        DateTime?              @map("decided_at") @db.Timestamptz(3)
+  decidedBy        String?                @map("decided_by") @db.Uuid
+  extensionDays    Int?                   @map("extension_days")
+  decisionNote     String?                @map("decision_note") @db.VarChar(500)
+  newLastDay       DateTime?              @map("new_last_day") @db.Date
+  /// direct_extension | made_unrestricted, when status = closed.
+  closedReason     String?                @map("closed_reason") @db.VarChar(30)
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  company          Company                @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "trial_extension_requests_company_id_fkey")
+  requester        Membership             @relation("ExtensionRequester", fields: [companyId, requestedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction, map: "trial_extension_requests_requester_fkey")
+  decider          User?                  @relation("ExtensionDecider", fields: [decidedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([status, createdAt])
+  @@index([companyId, createdAt])
+  @@map("trial_extension_requests")
 }

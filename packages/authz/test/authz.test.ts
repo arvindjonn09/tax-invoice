@@ -86,6 +86,22 @@ describe("policy matrix", () => {
   });
 });
 
+describe("trial permissions (#221)", () => {
+  it("shows the trial status to owner, manager and accountant only", () => {
+    expect(ROLES.filter((role) => can(role, "trial.read"))).toEqual([
+      "owner",
+      "manager",
+      "accountant",
+    ]);
+  });
+
+  it("lets only the owner request an extension", () => {
+    expect(
+      ROLES.filter((role) => can(role, "trial.request_extension")),
+    ).toEqual(["owner"]);
+  });
+});
+
 describe("guards", () => {
   it("returns 401 without an actor and 403 without the permission", () => {
     expect(() => requirePermission(null, "company.read")).toThrowError(
