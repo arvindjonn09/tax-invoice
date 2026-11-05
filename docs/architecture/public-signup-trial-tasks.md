@@ -258,7 +258,7 @@ the ADR 0004 D1 deploy-order rule.
 - **Acceptance criteria:**
   - The adapter for the T2-chosen provider implements `EmailTransport`. Its dependency is pinned and licence-checked.
   - `EMAIL_FROM`, `EMAIL_REPLY_TO` and `SUPPORT_EMAIL` default to `admin@shivomsangha.com` (Zoho SMTP, ADR 0004
-    D7). `OPERATOR_NOTIFY_EMAIL` is required wherever S14 is enabled (owner confirms the address).
+    D7). `OPERATOR_NOTIFY_EMAIL` is `admin@shivomsangha.com` (owner, 4 November 2026) and is required wherever S14 is enabled.
   - `withWebhook` exists (ADR 0004 D2), and `route-policy.test.ts` allows it only under `app/api/webhooks/**`.
   - `POST /api/webhooks/email` uses it, once a provider that signs callbacks is in use (Zoho SMTP has none):
     - It verifies the provider signature over the raw body, with no origin check.
