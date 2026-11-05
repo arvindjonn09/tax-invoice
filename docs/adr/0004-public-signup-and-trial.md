@@ -150,7 +150,8 @@ Enforcement has two layers, and the database layer is authoritative.
    - `withPolicy` refuses every unsafe method (POST/PUT/PATCH/DELETE) for a read-only company with
      `403 { code: "company_read_only" }`. The only exception is a route registered in `READ_ONLY_ALLOWED`
      (`apps/web/src/server/authz/read-only.ts`, `"METHOD /api/path" → reason`).
-   - Server actions call `requireWritableActor()`.
+   - Server actions that write company data must refuse a read-only company too. None exists yet (the only server
+     action is sign-out), so the helper is added with the first one.
    - Safe methods are never blocked.
 2. **Database guard (authoritative, uses database time at commit).**
    - A `DEFERRABLE INITIALLY DEFERRED` constraint trigger on `audit_events` runs

@@ -410,7 +410,8 @@ export function exportHandlers(db: () => PrismaClient) {
         });
         return out;
       },
-      { isolationLevel: "RepeatableRead" },
+      // Exports stay available while read-only (S9 AC2).
+      { isolationLevel: "RepeatableRead", readOnlyExemption: "export" },
     );
     if (result instanceof z.ZodError) return invalid(result);
     if (result instanceof IncompleteGst)
