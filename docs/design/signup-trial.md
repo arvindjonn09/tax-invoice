@@ -53,7 +53,8 @@ These apply to every screen below unless the screen says otherwise.
   not every second.
 - **Generic failure (5xx or network):** "Something went wrong. Try again." with the button re-enabled. Typed values are
   kept. (The error shape is `{ error, code?, fields? }`; there's no reference ID to show.)
-- **Success that ends the flow:** a dedicated success state (a new `h1` in the same card, focus moved to it), never a
+- **Success that ends the flow:** a dedicated success state (a new heading in the same card: an `h2` under the page's
+  `h1`, as on `/signup` and `/verify-email`, or the `h1` itself when the card has none; focus moved to it), never a
   toast.
 
 ### Turnstile (S2 AC8, ADR 0004 D8)
@@ -148,12 +149,12 @@ email"**, never on page load. That way a mail scanner that runs scripts can't ve
 | State | Content | Next |
 |---|---|---|
 | Reading the link | "Checking your link…" with `role="status"` (one frame, usually unseen) | none |
-| Pre-click | h1 "Verify your email" · "Press the button to confirm this email address is yours." · primary **"Confirm my email"** | Focus on the button |
+| Pre-click | Page h1 "Verify your email" (it stays for every state below) · "Press the button to confirm this email address is yours." · primary **"Confirm my email"** | Focus on the button |
 | Pending | The button reads "Confirming…" and is `aria-disabled`; a second press does nothing | none |
-| `verified` or `already-verified` (200) | h1 "Email confirmed" · "Thanks. Sign in to set up your business." · primary "Continue" (→ `/login`, or the S1 routing if already signed in). Both statuses look the same, so the page doesn't reveal whether the link had been used | Focus on the h1 |
-| `token_invalid` (400) | h1 "This link is invalid or has expired" (`role="alert"`) · the public resend form (§5) | Focus on the h1 |
-| No token in the URL | The public resend form (§5) without the error line | none |
-| Network error | "Check your connection and try again." with the button enabled again | none |
+| `verified` or `already-verified` (200) | h2 "Email verified" · "Thanks. Sign in to set up your business." · primary "Continue" (→ `/login`, or the S1 routing if already signed in). Both statuses look the same, so the page doesn't reveal whether the link had been used | Focus on the h2 |
+| `token_invalid` (400) | Alert (`role="alert"`) "This link is invalid or has expired." · h2 "Get a new verification link" · the public resend form (§5) | Focus on the alert |
+| No token in the URL | h2 "Get a new verification link" · the public resend form (§5), without the alert | none |
+| Network error | Alert "Check your connection and try again." and the **"Confirm my email" button stays**, enabled again, because the token hasn't been spent (it's still held in memory) | Focus on the alert |
 
 ### 4. Pending verification · `/verify-email/pending` (signed in, unverified)
 
@@ -164,7 +165,7 @@ email"**, never on page load. That way a mail scanner that runs scripts can't ve
 | Primary | "Resend email" (account resend; no Turnstile, because the session is the proof) |
 | Secondary | "Sign out" (a button styled as a link) |
 | Success | Status: "A new link is on its way. Check your inbox and spam folder." |
-| Throttled | 202 with `retryAfterSeconds`: "You can request another link in N minutes." (or "in N hours" from 90 minutes up). The 1-a-minute and 5-a-day limits (S3 AC5) are both expressed through that one wait; the page doesn't tell them apart. Below the status, always: "Still stuck? Email {SUPPORT_EMAIL}." |
+| Throttled | **429** with `retryAfterSeconds` in the body and a `Retry-After` header (as `resend-mine` returns): "You can request another link in N minutes." (or "in N hours" from 90 minutes up). The 1-a-minute and 5-a-day limits (S3 AC5) are both expressed through that one wait; the page doesn't tell them apart. Below the status, always: "Still stuck? Email {SUPPORT_EMAIL}." |
 
 ### 5. Public resend · within `/verify-email` (invalid link) and linked from "Check your email"
 
@@ -206,7 +207,7 @@ Card width is 32rem. A stepper text above the h1 reads "Step 1 of 2" (no clickab
 | Optional | **Legal name (optional)**, help "If it differs from your business name." · address: Street address, Address line 2, Suburb, **State** (select of the 8 codes), Postcode (4 digits) |
 | Primary | "Create my business and start the free trial" → "Setting up your business…" |
 | Field errors | Business name: "Enter your business name" / "Use 200 characters or fewer". GST question: "Choose whether you're registered for GST". ABN: "Enter your ABN" (when registered) / "Enter an 11-digit ABN" / "This ABN isn't valid. Check the digits." Date: "Enter the date your GST registration started". Basis: "Choose cash or accruals". Postcode: "Enter a 4-digit postcode". The server's `fields` messages are shown as sent when they differ. |
-| `self_service_limit` | Replace the form: h1 "You already have a company" · "Each account can create one company itself. Email {SUPPORT_EMAIL} to set up another." · "Go to your company" (S5 AC5). The same screen answers a second tab after the first created the company (#250 returns 409 with that company), so nobody is told to contact support about their own new company. |
+| `self_service_limit` (409) | **With `alreadyMember: true`** (a second tab after the first created the company, or a stale page): no screen, the form goes straight to `/home`, where the company now is. **Without it** (the user created a company but is no longer an active member of it): replace the form with h1 "You've already set up a company" · "Each account can create one company itself. Email {SUPPORT_EMAIL} to set up another." · "Sign out" (S5 AC5). |
 | Leaving | Nothing is saved before submit; no browser storage (S5 AC8). |
 | Success | → `/onboarding/details` (step 2). The session's company is set. |
 
@@ -296,13 +297,14 @@ The approved and declined messages are delivered by the one-time notices below, 
 
 A notice is a dismissible `role="status"` panel at the top of the app's main content (below the trial banner), shown
 once per user, company and key. Dismissing it calls `POST /api/notices/dismiss` with `{ noticeKey, companyId }` and
-moves focus to the page h1. It's also treated as seen if the user simply navigates on, so it never comes back for that
-key. Owners only, and never for demo or unrestricted companies.
+moves focus to the page h1. **Threshold notices** (`trial.threshold.*`) are also treated as seen once shown, so moving to
+another page retires them. **Extension notices** (`trial.extended:*`, `trial.declined:*`) show on every page load until
+dismissed (S14 AC9). Owners only, and never for demo or unrestricted companies.
 
 | Key (`notice_key`, ≤ 100 chars) | When | Copy |
 |---|---|---|
 | `trial.threshold.7:<lastDay>` | First owner sign-in with 4–7 days left | "Your trial ends on 1 Dec 2026. Request an extension in Settings → Trial, or email {SUPPORT_EMAIL}." · action "Request extension" |
-| `trial.threshold.3:<lastDay>` | First sign-in with 2–3 days left | "3 days left in your trial. After 1 Dec 2026 your company becomes read-only." · same action |
+| `trial.threshold.3:<lastDay>` | First sign-in with 2–3 days left | "N days left in your trial. After 1 Dec 2026 your company becomes read-only." (N is 2 or 3) · same action |
 | `trial.threshold.1:<lastDay>` | First sign-in on the last day | "Today is the last day of your trial. Your company becomes read-only from 12:00 am tomorrow (Sydney time)." · same action |
 | `trial.threshold.ended:<lastDay>` | First sign-in once read-only | "Your trial ended on 1 Dec 2026. You can still view and export your records. Request an extension to keep working." · same action |
 | `trial.extended:<newLastDay>` | After an approval or a direct extension | "Your trial was extended to 15 Dec 2026." |
@@ -368,12 +370,13 @@ The sign-in card then changes in place (no new route, so `next` is kept):
 | Element | Spec |
 |---|---|
 | Title | h2 "Enter your authentication code" (focus moves here) · "Open your authenticator app and enter the 6-digit code for JobFlow." |
-| Field | "Authentication code": `inputmode="numeric"`, `autocomplete="one-time-code"`, `maxlength` 6, paste allowed; spaces are stripped |
+| Field | "Authentication code": `inputmode="numeric"`, `autocomplete="one-time-code"`, paste allowed. Spaces and dashes are stripped **as the value changes**, and only then is it held to 6 digits, so a pasted "123 456" becomes "123456". No `maxlength` attribute, which would cut the paste before stripping |
 | Primary | "Verify" → "Verifying…" |
 | Secondary | "Use a backup code instead": swaps the field for "Backup code" (text, `autocomplete="off"`), with "Use your authenticator app" to swap back · "Cancel and sign out" (returns to the sign-in form) |
 | Wrong code | "That code didn't work. Check your app and try the newest code." (field error and summary; the field is cleared) |
 | Wrong backup code | "That backup code didn't work. Each code works once." |
 | Throttled | Better Auth 429 with `X-Retry-After`: "Too many attempts. You can try again in N minutes." The field stays filled; the button is disabled until then. |
+| No Access session | `/login` isn't behind Cloudflare Access but `/api/auth/two-factor/*` is (ADR D5), so an operator without an Access session gets an Access page or redirect instead of JSON from Verify. The step treats any non-JSON or 401/403 reply from that call as: "Your operator sign-in needs Cloudflare Access first. Open {APP_URL}/operator to sign in to Access, then sign in here again." (inferred from D5; check on the host, #232) |
 | Expired step | Better Auth's pending two-factor cookie lasts a few minutes: "Your sign-in timed out. Sign in again." and the password form returns |
 | Success | → `next` (only `/operator…` paths for an operator) or `/operator` |
 | Lost device | A muted line under the form: "Lost your device? Ask for a new enrolment code on the server (`pnpm operator enrol-code --user <id>`), then set up two-factor again at /operator/mfa. Until then, the CLI does every operator task." No self-service recovery exists, by design. |
@@ -451,7 +454,7 @@ The design system's rules apply in full. In addition, for these screens:
 - **Focus:**
   - it's always visible (the `focus-ring` token, 3:1) and never covered by the top bar or banner (2.4.11);
   - after a failed submit it goes to the error summary;
-  - after a success state, to its h1;
+  - after a success state, to its heading;
   - after a dialog closes, back to the button that opened it.
 - **Errors:**
   - every error is text, linked to its field (`aria-describedby` + `aria-invalid`) and listed in the summary;
@@ -485,8 +488,8 @@ The design system's rules apply in full. In addition, for these screens:
 
 ## Differences from the current build
 
-What the open PRs build at the time of writing (`main` has none of these screens yet), and what this spec changes. The
-requirements' wording wins.
+What `main` (at `85ba5b8`, with #249 merged) and the open #250 build, and what this spec changes. The requirements'
+wording wins. #224 resolves the rows marked **to fix**.
 
 | Where (PR, file) | Built there | Change to |
 |---|---|---|
@@ -495,12 +498,14 @@ requirements' wording wins.
 | Trial banner, expired, owner (#250) | "Your free trial has ended." | "Trial ended 1 Dec 2026 · Read-only" plus the banner text above |
 | Trial banner, expired, workers (#250) | "This company's free trial has ended." + "Contact your company owner." | "This company's account is read-only. Contact your owner." (S8 AC2) |
 | Warning phase (#250) | Same bar, warning colours | "N days remaining · Trial expires on 1 Dec 2026", plus the dismissible banner with Request extension (owner) |
-| Sign-up success (#249, `signup-form.tsx`) | h2 "Check your email" · "We've sent a link to verify your address. Open it within 24 hours, then sign in…" | Keep the in-place h2. Lead with S2 AC1's "Check your email to verify your address", then the address and expiry (§2) |
+| Sign-up success (main, `signup-form.tsx`) | h2 "Check your email" · "We've sent a link to verify your address. Open it within 24 hours, then sign in…" | Keep the in-place h2. Lead with S2 AC1's "Check your email to verify your address", then the address and expiry (§2) |
 | Sign-up route (architecture lists `/signup/check-email`) | Built in place on `/signup` | **Accepted deviation:** in place, so the email never travels in a URL. The architecture's route list should drop `/signup/check-email` |
-| Verify link (#249, `verify-client.tsx`) | "Confirm my email" button; token spent on press | Matches §3. **Deviation from S3 AC2** ("opening the link verifies"): one press, against mail-scanner pre-account hijack |
-| Verify pending (#249) | h1 "Check your email" | Matches §4 (adopted) |
-| Sign-in throttle (#249/main, `login-form.tsx`) | "Too many sign-in attempts. Wait a minute and try again." | Use `X-Retry-After`: "You can try again in N minutes." |
-| Onboarding (#250) | h1 "Set up your business"; basis select "Choose…" | Matches; add "Step 1 of 2" and the invitee hint if missing |
+| Verify link (main, `verify-client.tsx`) | "Confirm my email" button; token spent on press; h2 "Email verified"; invalid as an alert plus h2 | Matches §3, whose headings now follow the build. **Deviation from S3 AC2** ("opening the link verifies"): one press, against mail-scanner pre-account hijack |
+| Verify network error (main, `verify-client.tsx`) | The button goes and the resend form shows | **To fix:** keep the button with an alert (§3), because the token is still unspent |
+| Resend throttle (main, `account/handlers.ts`, `verify-client.tsx`) | 429 with `retryAfterSeconds` and `Retry-After`; the page says "Too many requests. Try again later." | **To fix:** show the wait, "You can request another link in N minutes." (§4) |
+| Verify pending (main) | h1 "Check your email" | Matches §4 (adopted) |
+| Sign-in throttle (main, `login-form.tsx`) | "Too many sign-in attempts. Wait a minute and try again." | Use `X-Retry-After`: "You can try again in N minutes." |
+| Onboarding (#250) | h1 "Set up your business"; basis select "Choose…"; a 409 with `alreadyMember` goes to `/home` | Matches §8; add "Step 1 of 2" if missing |
 | Chooser (#250, `choose-company/page.tsx`) | "Open {name}" | Add role, role-gated trial text, "Create a company" and "Sign out" (§11) |
 
 Items not built yet:
