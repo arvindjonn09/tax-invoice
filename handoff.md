@@ -12,6 +12,19 @@ PRs instead:
 
 If you go with (a), the merge-policy review still has to come from an agent that didn't write the commits.
 
+## 0. Update, 5 November 2026, about 20:45 Sydney (supersedes sections 1–2 where they differ)
+
+Claude B worked through #265, #266, #249 and #250 in that order:
+
+| PR                  | New head               | State                                                                                                                                                                                                                                                                                           |
+| ------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #265 (spec)         | `f039190`              | Every finding from Claude A's 78bca44 review is fixed (table on the PR), and both Codex threads are resolved. **Waiting for Claude A's re-review.**                                                                                                                                             |
+| #266 (email pacing) | `e2008c5`              | Every finding from the 850e85a review is fixed (table on the PR). It adds migration `20261105120000_email_pacing` and the once-a-minute sweep in `instrumentation.ts`. The Codex thread is resolved. **Waiting for Claude A's re-review.** The per-row throttling cap (8) is an owner decision. |
+| #249                | `5f23c56` (Claude A's) | Claude B re-reviewed this head: **Ready to merge**, with 2 non-blocking notes.                                                                                                                                                                                                                  |
+| #250                | `7579c49` (Claude A's) | Claude B re-reviewed this head: **Ready to merge** after #249, with 1 non-blocking note.                                                                                                                                                                                                        |
+
+Still open for Claude B: #261 (section 2.3), #264, #65, #263 and #260.
+
 ## 1. State at handoff
 
 | PR   | Branch @ head                                     | Issue                                   | State                                                                                                                                       | Needs                                            |
