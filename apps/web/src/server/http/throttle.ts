@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import { HttpError } from "./guards";
 
@@ -58,11 +59,20 @@ export async function throttle(
   }
 }
 
-/** First X-Forwarded-For hop (set by the trusted reverse proxy, #64). */
-export function clientIp(headers: Headers): string | null {
-  return (
-    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    headers.get("x-real-ip") ||
-    null
-  );
+/**
+ * The client's address for throttling. CLIENT_IP_HEADER names the one header
+ * the trusted proxy sets (`cf-connecting-ip` behind a Cloudflare Tunnel, where
+ * X-Forwarded-For keeps whatever the client sent). Without it, the first
+ * X-Forwarded-For hop, which nginx overwrites (#64). Anything that isn't an IP
+ * address is ignored, so it can't create arbitrary throttle keys.
+ */
+export function clientIp(
+  headers: Headers,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | null {
+  const raw = env.CLIENT_IP_HEADER
+    ? headers.get(env.CLIENT_IP_HEADER)
+    : headers.get("x-forwarded-for")?.split(",")[0] || headers.get("x-real-ip");
+  const ip = raw?.trim();
+  return ip && isIP(ip) ? ip : null;
 }

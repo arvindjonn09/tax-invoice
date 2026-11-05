@@ -1,6 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createNonce, securityHeaders } from "@/server/security/headers";
 
+/** The only pages allowed to frame Cloudflare's challenge. */
+const TURNSTILE_PAGES = new Set(["/signup", "/verify-email"]);
+
 /**
  * Security headers and a per-request CSP nonce for every page and API
  * response (#71). Next.js reads the nonce from the request's CSP header and
@@ -15,6 +18,9 @@ export function proxy(request: NextRequest) {
     https:
       request.nextUrl.protocol === "https:" ||
       (process.env.BETTER_AUTH_URL ?? "").startsWith("https:"),
+    turnstile:
+      Boolean(process.env.TURNSTILE_SITE_KEY) &&
+      TURNSTILE_PAGES.has(request.nextUrl.pathname),
   });
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);

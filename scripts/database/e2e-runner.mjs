@@ -43,6 +43,8 @@ async function main() {
         // A throwaway signing secret per run unless one is configured.
         BETTER_AUTH_SECRET:
           isolated.BETTER_AUTH_SECRET ?? randomBytes(32).toString("hex"),
+        EMAIL_OUTBOX_KEY:
+          isolated.EMAIL_OUTBOX_KEY ?? randomBytes(32).toString("hex"),
       }),
     // withIsolatedDatabase replaces DATABASE_URL with the throwaway database;
     // the development database is only used to check the two differ.
