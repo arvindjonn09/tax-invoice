@@ -7,6 +7,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
 import { addressDigest } from "../../apps/web/src/server/email/crypto";
@@ -386,6 +387,97 @@ describe("throttling and block replies", () => {
     expect(MAX_ATTEMPTS).toBe(8);
   });
 
+  it("never shortens a pause another dispatcher set (a 421 after a 5.1.8)", async () => {
+    await queue("verify_email", 1);
+    const now = soon();
+    const block = new Date(now + BLOCKED_PAUSE_MS);
+    await client.emailDispatchState.update({
+      where: { id: 1 },
+      data: { pausedUntil: block, pauseStreak: 0 },
+    });
+    // The row was claimed before the block landed; its own reply is a 421.
+    await client.emailOutbox.update({
+      where: { dedupeKey: "verify_email:1" },
+      data: { status: "sending", nextAttemptAt: new Date(now - 1000) },
+    });
+    await client.emailDispatchState.update({
+      where: { id: 1 },
+      data: { pausedUntil: new Date(now - 1) },
+    });
+    const racing: EmailTransport = {
+      name: "racing",
+      send: async () => {
+        // The concurrent block lands while this send is in flight.
+        await client.emailDispatchState.update({
+          where: { id: 1 },
+          data: { pausedUntil: block },
+        });
+        throw Object.assign(new Error("try later"), {
+          responseCode: 421,
+          response: "421 Try later",
+        });
+      },
+    };
+    await dispatchOutbox(client, racing, SECRET, { now: () => new Date(now) });
+    expect((await pausedUntil())?.getTime()).toBe(block.getTime());
+  });
+
+  it("holds a stale `sending` row during a pause", async () => {
+    await queue("verify_email", 1);
+    const now = soon();
+    await client.emailOutbox.update({
+      where: { dedupeKey: "verify_email:1" },
+      data: { status: "sending", nextAttemptAt: new Date(now - 60_000) },
+    });
+    await client.emailDispatchState.update({
+      where: { id: 1 },
+      data: { pausedUntil: new Date(now + RATE_LIMIT_PAUSE_MS) },
+    });
+    const transport = new MemoryTransport();
+    expect(
+      await dispatchOutbox(client, transport, SECRET, {
+        now: () => new Date(now),
+      }),
+    ).toMatchObject({ sent: 0, paused: true });
+    expect(transport.sent).toEqual([]);
+    expect((await row("verify_email:1")).status).toBe("sending");
+  });
+
+  it("keeps a delivered email `sent` even if resetting the backoff fails", async () => {
+    await queue("verify_email", 1);
+    await client.emailDispatchState.update({
+      where: { id: 1 },
+      data: { pauseStreak: 2 },
+    });
+    const spy = vi
+      .spyOn(client.emailDispatchState, "updateMany")
+      .mockRejectedValueOnce(new Error("database blip"));
+    const transport = new MemoryTransport();
+    const result = await dispatchOutbox(client, transport, SECRET, {
+      now: () => new Date(soon()),
+    });
+    spy.mockRestore();
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
+    expect(transport.sent).toHaveLength(1);
+    expect((await row("verify_email:1")).status).toBe("sent");
+  });
+
+  it("gives an email that never reaches SMTP its place under the cap back", async () => {
+    for (let n = 1; n <= 3; n += 1) {
+      await queue("trial_reminder", n);
+      await suppressAddress(client, SECRET, to(n), "bounce", "aj");
+    }
+    await queue("verify_email", 9);
+    const transport = new MemoryTransport();
+    const result = await dispatchOutbox(client, transport, SECRET, {
+      maxPerHour: 3,
+      now: () => new Date(soon()),
+    });
+    expect(transport.sent.map((m) => m.to)).toEqual([to(9)]);
+    expect(result).toMatchObject({ sent: 1 });
+    expect(await client.emailSendAttempt.count()).toBe(1);
+  });
+
   it("still counts a permanent 554 as a failed attempt", async () => {
     await queue("verify_email", 1);
     const result = await dispatchOutbox(
@@ -421,7 +513,10 @@ describe("suppression list", () => {
       changed: false,
     });
     const events = await client.platformAuditEvent.findMany({
-      where: { action: { in: ["email.suppressed", "email.unsuppressed"] } },
+      where: {
+        action: { in: ["email.suppressed", "email.unsuppressed"] },
+        metadata: { path: ["addressHash"], equals: hash },
+      },
       orderBy: { createdAt: "asc" },
     });
     expect(events.map((event) => event.action)).toEqual([

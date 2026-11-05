@@ -9,13 +9,18 @@ password-reset emails. So the outbox dispatcher paces itself.
 **Cap.** It makes at most `EMAIL_MAX_PER_HOUR` SMTP attempts in any rolling hour.
 - The default is **40**. A value that isn't a whole number from 1, including `0`, logs `email.config_invalid` and
   uses 40.
-- Every attempt is counted (sent, failed or throttled) in `email_send_attempts`, which is pruned after two hours.
+- Every SMTP attempt is counted (sent, failed or throttled) in `email_send_attempts`, which is pruned after two hours.
+  An email cancelled before SMTP (suppressed, or with no payload) gives its place back.
+- **Known gap:** the attempts table starts empty when this first deploys, so in the first hour up to twice the cap could
+  go out, counting what the old code sent. Keep `EMAIL_MAX_PER_HOUR` at 40 or below, under Zoho's lowest limit, so that
+  stays safe.
 - Claims are serialised with a Postgres advisory lock, so several app processes together still stay under the cap.
 - Emails beyond the cap stay `pending`.
 
 **Sweep.** Every production app process dispatches the outbox once a minute (`instrumentation.ts`), so held-back
 email goes out on a quiet site too.
 - `EMAIL_SWEEP=off` turns it off; `EMAIL_SWEEP=on` turns it on in development.
+- A lasting fault, such as missing SMTP settings, logs `email.sweep_failed` once, then every 60th failed sweep (hourly).
 - A sweep never overlaps the previous one in the same process.
 
 **Account emails first.** `verify_email`, `account_exists`, `password_reset` and `password_changed` are claimed
@@ -28,7 +33,8 @@ before trial reminders and notices, however old those are.
   - Zoho's `554 5.1.8 Email Outgoing Blocked`, or "account blocked", is a **block**.
   - Other 5xx replies are ordinary failures, including "corporate policy", "Content moderated" and "generate NDR".
 - What happens:
-  - **Every dispatcher pauses.** The pause is stored in `email_dispatch_state`, so emails queued during it wait too.
+  - **Every dispatcher pauses.** The pause is stored in `email_dispatch_state`, so emails queued during it, and stale
+    `sending` rows, wait too. A pause is only ever extended: a later 421 never shortens a block another send set.
   - The pause is 15 minutes, doubling for each throttling reply in a row (30, 60, 120), capped at 4 hours. A block
     waits at least an hour.
   - A successful send resets the doubling.
@@ -36,7 +42,8 @@ before trial reminders and notices, however old those are.
     email.
   - An email that meets **5** throttling or block replies (`MAX_RATE_LIMITED_PER_ROW`) is marked `failed`, with its
     payload deleted, so one stuck email can't keep pausing the queue (owner decision, 5 November 2026). The log line
-    carries `markedFailed: true`. A manual resend is a separate follow-up.
+    carries `markedFailed: true`. That log line is the only alert for now; a manual resend and an outbound operator
+    alert are #270.
   - Logged at **error** as `email.rate_limited` or `email.provider_blocked`: outbox id, kind and error class only,
     never an address or the reply text.
 

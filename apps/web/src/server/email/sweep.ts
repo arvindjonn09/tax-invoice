@@ -6,6 +6,8 @@ import { log, safeError } from "../log";
 // may each run one; claims are serialised by the outbox's advisory lock.
 
 export const SWEEP_INTERVAL_MS = 60_000;
+/** Log a run of failed sweeps on the 1st, 61st, 121st… failure. */
+export const FAILURE_LOG_EVERY = 60;
 
 type Sweep = () => Promise<unknown>;
 
@@ -34,13 +36,24 @@ export function startEmailSweep(
 ): () => void {
   if (state.__jobflowEmailSweep) return () => undefined;
   let running = false;
+  let failures = 0;
   const timer = setInterval(() => {
     if (running) return; // a slow sweep is never overlapped by the next
     running = true;
     sweep()
-      .catch((error: unknown) =>
-        log("error", "email.sweep_failed", { error: safeError(error) }),
-      )
+      .then(() => {
+        failures = 0;
+      })
+      .catch((error: unknown) => {
+        // A lasting fault (no SMTP settings, say) logs once, then hourly
+        // at the default interval, not every minute per process.
+        if (failures % FAILURE_LOG_EVERY === 0)
+          log("error", "email.sweep_failed", {
+            error: safeError(error),
+            consecutiveFailures: failures + 1,
+          });
+        failures += 1;
+      })
       .finally(() => {
         running = false;
       });

@@ -171,7 +171,7 @@ function errorClass(error: unknown): string {
 }
 
 type Claim =
-  | { kind: "row"; id: string }
+  | { kind: "row"; id: string; attemptId: bigint }
   | { kind: "none" }
   | { kind: "paced" }
   | { kind: "paused"; until: Date };
@@ -213,11 +213,12 @@ async function claimOne(
       RETURNING id`;
     const id = rows[0]?.id;
     if (!id) return { kind: "none" } as const;
-    await tx.$executeRaw`INSERT INTO email_send_attempts (attempted_at) VALUES (${now})`;
+    const [attempt] = await tx.$queryRaw<{ id: bigint }[]>`
+      INSERT INTO email_send_attempts (attempted_at) VALUES (${now}) RETURNING id`;
     await tx.$executeRaw`
       DELETE FROM email_send_attempts
       WHERE attempted_at < ${new Date(now.getTime() - 2 * HOUR_MS)}`;
-    return { kind: "row", id } as const;
+    return { kind: "row", id, attemptId: attempt!.id } as const;
   });
 }
 
@@ -267,7 +268,11 @@ export async function dispatchOutbox(
       break;
     }
     if (claim.kind === "none") break;
-    const { id } = claim;
+    const { id, attemptId } = claim;
+    // An email that never reaches SMTP gives its place under the cap back.
+    const refund = () =>
+      db.emailSendAttempt.deleteMany({ where: { id: attemptId } });
+    let delivered = false;
     const row = await db.emailOutbox.findUnique({
       where: { id },
       select: {
@@ -282,6 +287,7 @@ export async function dispatchOutbox(
         where: { id },
         data: { status: "cancelled", payloadCiphertext: null },
       });
+      await refund();
       continue;
     }
     const attempts = row.attempts + 1;
@@ -297,6 +303,7 @@ export async function dispatchOutbox(
           where: { id },
           data: { status: "cancelled", payloadCiphertext: null },
         });
+        await refund();
         log("info", "email.suppressed", { outboxId: id, kind: row.kind });
         continue;
       }
@@ -312,11 +319,7 @@ export async function dispatchOutbox(
           lastError: null,
         },
       });
-      // A send went through: the next throttling reply starts the backoff again.
-      await db.emailDispatchState.updateMany({
-        where: { id: 1, pauseStreak: { gt: 0 } },
-        data: { pauseStreak: 0, updatedAt: now() },
-      });
+      delivered = true;
       sent += 1;
     } catch (error) {
       const kind = classifySendError(error);
@@ -333,8 +336,14 @@ export async function dispatchOutbox(
             where: { id: 1 },
             data: { pauseStreak: { increment: 1 }, updatedAt: at },
           });
+          // Only ever extend: a 421 must not shorten a 5.1.8 block that a
+          // concurrent dispatcher set. The row lock from the update above
+          // serialises writers, so this read is current.
           const pausedUntil = new Date(
-            at.getTime() + pauseMs(state.pauseStreak, kind),
+            Math.max(
+              state.pausedUntil?.getTime() ?? 0,
+              at.getTime() + pauseMs(state.pauseStreak, kind),
+            ),
           );
           await tx.emailDispatchState.update({
             where: { id: 1 },
@@ -391,6 +400,19 @@ export async function dispatchOutbox(
         transport: transport.name,
         error: errorClass(error),
       });
+    }
+    if (delivered) {
+      // A send went through, so the next throttling reply starts the backoff
+      // again. Outside the send's try: the email is already delivered, and
+      // a failure here must never make it look unsent.
+      try {
+        await db.emailDispatchState.updateMany({
+          where: { id: 1, pauseStreak: { gt: 0 } },
+          data: { pauseStreak: 0, updatedAt: now() },
+        });
+      } catch (error) {
+        log("warn", "email.streak_reset_failed", { error: errorClass(error) });
+      }
     }
   }
   return { sent, failed, paced, paused, rateLimited };

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { setLogSink } from "../../apps/web/src/server/log";
 import {
+  FAILURE_LOG_EVERY,
   startEmailSweep,
   sweepEnabled,
 } from "../../apps/web/src/server/email/sweep";
@@ -39,6 +41,24 @@ describe("startEmailSweep", () => {
     expect(runs).toBeGreaterThanOrEqual(2);
     expect(runs).toBeLessThanOrEqual(5);
     expect(overlapped).toBe(false);
+  });
+
+  it("logs a lasting fault once, not on every failed sweep", async () => {
+    const lines: string[] = [];
+    const restore = setLogSink((line) => lines.push(line));
+    let runs = 0;
+    stop = startEmailSweep(async () => {
+      runs += 1;
+      throw new Error("SMTP is not configured");
+    }, 5);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    stop();
+    restore();
+    expect(runs).toBeGreaterThan(3);
+    expect(runs).toBeLessThan(FAILURE_LOG_EVERY);
+    expect(lines.filter((l) => l.includes("email.sweep_failed"))).toHaveLength(
+      1,
+    );
   });
 
   it("keeps sweeping after a failed sweep", async () => {
