@@ -390,7 +390,8 @@ the ADR 0004 D1 deploy-order rule.
   - `withPolicy` refuses unsafe methods for a read-only company with 403 `{ code: "company_read_only" }`, unless the
     route is in `READ_ONLY_ALLOWED` with a reason.
     - The database error `jobflow_company_read_only` maps to the same response.
-    - Server actions use `requireWritableActor()`.
+    - Server actions that write company data must refuse a read-only company (none exists yet; add the check with
+      the first one).
   - `withAudit` accepts `readOnlyExemption`. Handlers pass it only for the cases in ADR 0004 D4:
     - membership deactivation without a role change;
     - invitation revoke;

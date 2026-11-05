@@ -15,33 +15,17 @@ import {
   requireBodyWithin,
   requireTrustedOrigin,
 } from "../http/guards";
+import { hasDatabaseError } from "../http/database-errors";
 import { log, safeError } from "../log";
+import {
+  READ_ONLY_RESPONSE,
+  allowedWhileReadOnly,
+  isCompanyReadOnlyError,
+} from "./read-only";
 
 /** PostgreSQL and Prisma adapter errors must carry the actual SQLSTATE. */
 export function isLockedPeriodError(error: unknown): boolean {
-  const visited = new WeakSet<object>();
-  const inspect = (value: unknown, depth: number): boolean => {
-    if (!value || typeof value !== "object" || visited.has(value)) return false;
-    visited.add(value);
-    const row = value as Record<string, unknown>;
-    const state = row.code ?? row.originalCode;
-    if (
-      state === "55000" &&
-      [row.message, row.originalMessage].some(
-        (message) =>
-          typeof message === "string" &&
-          message.includes("jobflow_period_locked"),
-      )
-    )
-      return true;
-    // At most five wrapper edges; cycles and unusually deep adapter chains
-    // cannot overflow the stack inside the route's exception handler.
-    if (depth === 5) return false;
-    return [row.meta, row.cause, row.driverAdapterError].some((child) =>
-      inspect(child, depth + 1),
-    );
-  };
-  return inspect(error, 0);
+  return hasDatabaseError(error, "55000", "jobflow_period_locked");
 }
 
 export type PolicyDependencies = {
@@ -125,6 +109,13 @@ export function createWithPolicy(deps: PolicyDependencies) {
           request.headers,
           permission,
         );
+        // ADR 0004 D4: a read-only company can't change anything except
+        // the READ_ONLY_ALLOWED routes. Safe methods are never blocked.
+        if (
+          access.readOnly &&
+          !allowedWhileReadOnly(request.method, new URL(request.url).pathname)
+        )
+          return privateJson(READ_ONLY_RESPONSE, { status: 403 });
         return await handler({ actor, access, request, context });
       } catch (error) {
         if (error instanceof AuthzError || error instanceof HttpError) {
@@ -133,6 +124,9 @@ export function createWithPolicy(deps: PolicyDependencies) {
             { status: error.status },
           );
         }
+        // The commit-time database guard (a write that raced the expiry).
+        if (isCompanyReadOnlyError(error))
+          return privateJson(READ_ONLY_RESPONSE, { status: 403 });
         if (isLockedPeriodError(error))
           return privateJson(
             {

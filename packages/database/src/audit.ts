@@ -55,6 +55,28 @@ function redact(key: string, value: Json): Json {
   return value;
 }
 
+/**
+ * ADR 0004 D4: the read-only exemption keys and the audit actions each admits
+ * while a company is read-only. Mirrors the SQL function
+ * jobflow_read_only_exemption_actions(); a parity test keeps them equal.
+ */
+export const READ_ONLY_EXEMPTION_ACTIONS = {
+  export: ["company.exported", "report.exported", "report.export_refused"],
+  record_rendering: ["invoice.pdf_stored"],
+  /** membership.access_updated only as a pure deactivation (checked in SQL). */
+  access_removal: ["membership.access_updated", "invitation.revoked"],
+  invitation_pre_expiry: ["invitation.accepted"],
+  trial_extension_request: ["trial_extension.requested"],
+  operator: [
+    "trial.extended",
+    "company.access_mode_changed",
+    "trial_extension.approved",
+    "trial_extension.declined",
+  ],
+  housekeeping: ["document.unattached_deleted"],
+} as const satisfies Record<string, readonly string[]>;
+export type ReadOnlyExemption = keyof typeof READ_ONLY_EXEMPTION_ACTIONS;
+
 /** Field-level diff of `before` → `after`, redacted and limited to changed fields. */
 export function auditChanges(
   before: Readonly<Record<string, unknown>> = {},
@@ -111,10 +133,26 @@ function auditMetadata(event: AuditEventInput): Prisma.InputJsonObject {
 export async function withAudit<T>(
   client: PrismaClient,
   work: (tx: Prisma.TransactionClient, audit: AuditRecorder) => Promise<T>,
-  /** e.g. RepeatableRead, so an export reads one snapshot (#56). */
-  options?: { isolationLevel?: Prisma.TransactionIsolationLevel },
+  options?: {
+    /** e.g. RepeatableRead, so an export reads one snapshot (#56). */
+    isolationLevel?: Prisma.TransactionIsolationLevel;
+    /**
+     * ADR 0004 D4: let this transaction commit while the company is
+     * read-only, for the audit actions this key admits (checked by the
+     * database at commit). Transaction-local; never carries over.
+     */
+    readOnlyExemption?: ReadOnlyExemption;
+  },
 ): Promise<T> {
+  const { readOnlyExemption, ...transactionOptions } = options ?? {};
   return client.$transaction(async (tx) => {
+    if (readOnlyExemption !== undefined) {
+      if (!Object.hasOwn(READ_ONLY_EXEMPTION_ACTIONS, readOnlyExemption))
+        throw new RangeError(
+          `Unknown read-only exemption "${readOnlyExemption}"`,
+        );
+      await tx.$executeRaw`SELECT set_config('jobflow.read_only_exemption', ${readOnlyExemption}, true)`;
+    }
     let recorded = 0;
     const audit: AuditRecorder = async (event) => {
       const created = await tx.auditEvent.create({
@@ -135,7 +173,7 @@ export async function withAudit<T>(
       throw new Error("Audited transaction recorded no audit event");
     }
     return result;
-  }, options);
+  }, transactionOptions);
 }
 
 /** Company-scoped audit history, newest first (read-only). */
