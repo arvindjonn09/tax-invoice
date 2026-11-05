@@ -222,6 +222,7 @@ export function parseReply(raw: string): ScanResult {
 }
 
 let ignoredOffLogged = false;
+let unconfiguredLogged = false;
 
 /** APP_ENV values that may switch scanning off with MALWARE_SCAN=off. */
 const MAY_DISABLE = new Set(["development", "test"]);
@@ -261,6 +262,20 @@ export function scannerFromEnvironment(
       appEnv === "staging" ||
       appEnv === "production");
   const host = env.CLAMAV_HOST?.trim();
+  // Not required and not configured: say so once, outside tests, so a
+  // `NODE_ENV=development next start` that scans nothing is never silent.
+  if (
+    !required &&
+    !disabled &&
+    !host &&
+    env.NODE_ENV !== "test" &&
+    !unconfiguredLogged
+  ) {
+    unconfiguredLogged = true;
+    log("warn", "document.scan_not_configured", {
+      reason: "no CLAMAV_HOST: uploads are stored without a malware scan",
+    });
+  }
   if (disabled || !host) return { required, scanner: null, disabled };
   const port = Number(env.CLAMAV_PORT ?? "3310");
   if (!Number.isInteger(port) || port < 1 || port > 65535)

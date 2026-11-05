@@ -105,11 +105,19 @@ const scanUnavailable = () =>
     { status: 503 },
   );
 
-const unscannable = () =>
+/** clamd reports a password-protected file as Heuristics.Encrypted.*. */
+const UNSCANNABLE_MESSAGE = {
+  encrypted:
+    "This file is password-protected, so it couldn't be checked for malware and wasn't saved. Upload a copy without a password.",
+  limits:
+    "This file is too large or complex to check for malware, so it wasn't saved. Try a smaller copy, or save it as a new PDF and upload that.",
+} as const;
+const unscannable = (detection: string) =>
   privateJson(
     {
-      error:
-        "This file couldn't be checked for malware, so it wasn't saved. Password-protected files and files too complex to check are refused. Upload a copy without a password.",
+      error: /^Heuristics\.Encrypted/.test(detection)
+        ? UNSCANNABLE_MESSAGE.encrypted
+        : UNSCANNABLE_MESSAGE.limits,
     },
     { status: 422 },
   );
@@ -254,7 +262,7 @@ export function documentHandlers(deps: DocumentDeps) {
               },
               { status: 422 },
             )
-          : unscannable();
+          : unscannable(result.detection);
       }
     }
     const id = randomUUID();

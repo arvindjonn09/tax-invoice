@@ -115,11 +115,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:generate
-      - name: Start clamd (pinned image, staging clamd.conf)
+      - name: Start clamd (pinned image, staging clamd.conf, hardened as in compose.yml)
         run: |
           image=$(sed -n 's/^    image: \(clamav\/clamav:[^ ]*\)$/\1/p' infra/staging/compose.yml | head -n 1)
           case "$image" in clamav/clamav:*@sha256:*) ;; *) echo "clamav image not pinned" >&2; exit 1 ;; esac
           docker run -d --name clamd -p 127.0.0.1:3310:3310 \
+            --user clamav --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:size=256m,mode=1777 --tmpfs /var/log/clamav:size=16m,mode=1777 \
+            --tmpfs /run/clamav:size=1m,mode=1777 --memory 3g --pids-limit 256 \
             -v "$PWD/infra/staging/clamav/clamd.conf:/etc/clamav/clamd.conf:ro" \
             --entrypoint clamd "$image" --foreground --config-file=/etc/clamav/clamd.conf
           for i in $(seq 1 90); do
@@ -128,10 +131,28 @@ jobs:
           done
           docker logs clamd | tail -n 50
           exit 1
-      - name: Contract tests
-        env:
-          CLAMD_CONTRACT_HOST: 127.0.0.1
-        run: pnpm exec vitest run --project unit tests/unit/clamd-contract.test.ts
+      # One step per case, so a failure names the case without the logs.
+      - name: "Contract: fixtures, PING"
+        env: { CLAMD_CONTRACT_HOST: 127.0.0.1 }
+        run: pnpm exec vitest run --project unit tests/unit/clamd-contract.test.ts -t "fixtures|PING"
+      - name: "Contract: raw EICAR found"
+        env: { CLAMD_CONTRACT_HOST: 127.0.0.1 }
+        run: pnpm exec vitest run --project unit tests/unit/clamd-contract.test.ts -t "sent as-is"
+      - name: "Contract: EICAR attached inside a PDF found"
+        env: { CLAMD_CONTRACT_HOST: 127.0.0.1 }
+        run: pnpm exec vitest run --project unit tests/unit/clamd-contract.test.ts -t "attached inside"
+      - name: "Contract: small PDF clean"
+        env: { CLAMD_CONTRACT_HOST: 127.0.0.1 }
+        run: pnpm exec vitest run --project unit tests/unit/clamd-contract.test.ts -t "well-formed PDF"
+      - name: "Contract: large vector PDF clean"
+        env: { CLAMD_CONTRACT_HOST: 127.0.0.1 }
+        run: pnpm exec vitest run --project unit tests/unit/clamd-contract.test.ts -t "large vector"
+      - name: "Contract: password-protected PDF refused"
+        env: { CLAMD_CONTRACT_HOST: 127.0.0.1 }
+        run: pnpm exec vitest run --project unit tests/unit/clamd-contract.test.ts -t "password-protected"
+      - name: "Contract: over StreamMaxLength unavailable"
+        env: { CLAMD_CONTRACT_HOST: 127.0.0.1 }
+        run: pnpm exec vitest run --project unit tests/unit/clamd-contract.test.ts -t "StreamMaxLength"
       - if: failure()
         run: docker logs clamd 2>&1 | tail -n 100
   gate-regressions:

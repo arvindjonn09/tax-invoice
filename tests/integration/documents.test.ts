@@ -391,7 +391,7 @@ describe("malware scanning (#136)", () => {
     const response = await send(uploadRequest("owner", PDF));
     expect(response.status).toBe(422);
     expect(((await response.json()) as { error: string }).error).toMatch(
-      /couldn't be checked/,
+      /too large or complex to check/,
     );
     expect(own.objects.size).toBe(0);
     expect(await count()).toBe(before);
@@ -408,6 +408,18 @@ describe("malware scanning (#136)", () => {
       ),
     ).toEqual(["infected", "unscannable"]);
     expect(JSON.stringify(events)).not.toMatch(/synthetic receipt|FAKE-CLAMD/);
+  });
+
+  it("tells a password-protected upload apart from an over-limit one", async () => {
+    clamd.mode = "encrypted";
+    const { store: own, upload: send } = scanned(true);
+    const response = await send(uploadRequest("owner", PDF));
+    clamd.mode = "normal";
+    expect(response.status).toBe(422);
+    const { error } = (await response.json()) as { error: string };
+    expect(error).toMatch(/password-protected/);
+    expect(error).not.toMatch(/too large/);
+    expect(own.objects.size).toBe(0);
   });
 
   it("frees the scan slot as soon as the scan ends, before storing", async () => {

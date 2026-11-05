@@ -29,7 +29,7 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
   - If clamd is down, unreachable, busy, slow (45 s overall deadline) or answers unclearly, uploads fail closed with 503 ("File checking isn't available"), and nothing is stored.
 - Each app process runs at most 4 scans at once. The slot is taken before the upload body is read and freed as soon as the scan ends (before storing). An upload waits up to 10 s for a slot, and its body then has 30 s to arrive (503 otherwise).
 - `/api/health/ready` is 503 when scanning is required and clamd doesn't answer PING.
-- `deploy.sh` starts `freshclam` and `clamav` (waiting up to 15 minutes) before the web app, and the web container also waits for clamd to be healthy. clamd waits for freshclam to have a signature database, so the first start can take several minutes.
+- `deploy.sh` starts `freshclam` and `clamav` (waiting up to 15 minutes) before the web app, and the web container also waits for clamd to be healthy. clamd waits for freshclam to be healthy (a signature database is present: the image bundles one, so this is quick), then loads the signatures, which takes about a minute.
 - The image is pinned by digest in `compose.yml` itself (`clamav/clamav:1.4@sha256:8ad6…8052`), so every Compose command works without extra settings.
 - **clamd is the container's only process** (`clamd --foreground`). If a hostile file or memory pressure kills it, the container exits and `restart: unless-stopped` starts it again. freshclam is a separate container, and clamd's `SelfCheck` reloads the signatures it fetches.
 - Both run as the `clamav` user with no capabilities, a read-only root filesystem and size-capped `tmpfs` scratch space (256 MB `/tmp` for clamd). clamd has no route out.
@@ -191,25 +191,46 @@ there. **How clamd runs there is the owner's decision** (Docker is agreed; 5 Nov
 gets 503 and `/api/health/ready` stays 503, so **don't deploy #136 to that host before clamd answers**. Not before the
 6 November demo, either.
 
-The recommended way is one loopback-only container from the same pinned image, plus freshclam:
+**Prerequisite:** Docker Engine installed on that host (it isn't today).
+
+The recommended way is one loopback-only container from the same pinned image, plus freshclam. Set `REPO` to the
+checkout the service runs from (on the pilot host that's `/home/prod/tax-invoice-run`). The clamd.conf path must exist
+as a file, or Docker creates a directory there and clamd won't start.
 
 ```sh
+REPO=/home/prod/tax-invoice-run   # the service's checkout
+test -f "$REPO/infra/staging/clamav/clamd.conf" || { echo "clamd.conf not found under $REPO" >&2; exit 1; }
 IMG=clamav/clamav:1.4@sha256:8ad6197396974726c35d017e50aaaaf4b91745726a04faec8480c203edd98052
+HARDEN="--user clamav --read-only --cap-drop ALL --security-opt no-new-privileges"
 docker volume create jobflow_clamav_db
-docker run -d --name jobflow-freshclam --restart unless-stopped --user clamav --read-only --cap-drop ALL \
+docker run -d --name jobflow-freshclam --restart unless-stopped $HARDEN \
   --tmpfs /tmp --tmpfs /var/log/clamav --tmpfs /run/clamav -v jobflow_clamav_db:/var/lib/clamav \
   --entrypoint freshclam "$IMG" --foreground --daemon --checks=12
-# Once /var/lib/clamav holds main.cvd (docker logs jobflow-freshclam):
-docker run -d --name jobflow-clamd --restart unless-stopped --user clamav --read-only --cap-drop ALL \
+docker run -d --name jobflow-clamd --restart unless-stopped $HARDEN --pids-limit 256 \
   --tmpfs /tmp:size=256m --tmpfs /var/log/clamav --tmpfs /run/clamav -v jobflow_clamav_db:/var/lib/clamav \
-  -v /opt/jobflow/infra/staging/clamav/clamd.conf:/etc/clamav/clamd.conf:ro --memory 3g \
+  -v "$REPO/infra/staging/clamav/clamd.conf:/etc/clamav/clamd.conf:ro" --memory 3g \
   -p 127.0.0.1:3310:3310 --entrypoint clamd "$IMG" --foreground --config-file=/etc/clamav/clamd.conf
 ```
+
+The image ships with the signature database, so clamd starts without waiting for freshclam. freshclam keeps it current,
+and clamd reloads it (`SelfCheck`).
+
+**Outbound traffic:** unlike Compose, where clamd sits on an internal network with no route out, a published port needs
+Docker's default bridge, so this clamd *can* reach the internet. It runs unprivileged, read-only and with no
+capabilities, which limits what a compromised scanner could do. To close the route too, drop its outbound traffic in
+Docker's `DOCKER-USER` chain. Find its address with `docker inspect -f '{{.NetworkSettings.IPAddress}}' jobflow-clamd`,
+then run `iptables -I DOCKER-USER -s <that address> ! -d 127.0.0.1 -j DROP`, and persist the rule the way the host
+persists its firewall.
 
 Then set `CLAMAV_HOST=127.0.0.1` and `CLAMAV_PORT=3310` in the service's environment, restart it, and check:
 - `/api/health/ready` returns 200;
 - a clean PDF uploads;
-- a PDF saved with a password gets 422 "couldn't be checked".
+- a PDF saved with a password gets 422 "password-protected".
 
-This hasn't been run: there's no Docker in Claude B's environment. Re-run the `clamd` container after editing
-`clamd.conf`, because a running clamd doesn't re-read it.
+**Upload timing:** without nginx in front, the app's 30-second body deadline needs about 2.7 Mbit/s for a 10 MB upload,
+and four stalled uploads hold every scan slot. Check whether Cloudflare buffers the request body before it reaches the
+app: upload 10 MB over a throttled connection (for example `curl --limit-rate 100k`) and see if it still succeeds.
+Record the result here.
+
+None of this has been run: there's no Docker in Claude B's environment. Re-run the `jobflow-clamd` container after
+editing `clamd.conf`, because a running clamd doesn't re-read it.

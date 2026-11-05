@@ -28,7 +28,9 @@ export type FakeClamdMode =
   /** One byte of a never-finished reply every 100 ms. */
   | "drip"
   /** Reports the file as over clamd's limits (AlertExceedsMax). */
-  | "limits";
+  | "limits"
+  /** Reports the file as password-protected (AlertEncrypted*). */
+  | "encrypted";
 
 export type FakeClamd = {
   port: number;
@@ -119,13 +121,15 @@ export async function startFakeClamd(): Promise<FakeClamd> {
                 ? "stream: maybe?\0"
                 : mode === "unterminated"
                   ? "stream: OK"
-                  : mode === "limits"
-                    ? "stream: Heuristics.Limits.Exceeded.MaxFileSize FOUND\0"
-                    : file.equals(Buffer.from(EICAR))
-                      ? "stream: Win.Test.EICAR_HDB-1 FOUND\0"
-                      : file.includes(TEST_MARKER)
-                        ? "stream: Jobflow.Test.Marker FOUND\0"
-                        : "stream: OK\0";
+                  : mode === "encrypted"
+                    ? "stream: Heuristics.Encrypted.PDF FOUND\0"
+                    : mode === "limits"
+                      ? "stream: Heuristics.Limits.Exceeded.MaxFileSize FOUND\0"
+                      : file.equals(Buffer.from(EICAR))
+                        ? "stream: Win.Test.EICAR_HDB-1 FOUND\0"
+                        : file.includes(TEST_MARKER)
+                          ? "stream: Jobflow.Test.Marker FOUND\0"
+                          : "stream: OK\0";
           later(state.delayMs, () => {
             done();
             socket.end(reply);
