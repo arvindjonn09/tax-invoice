@@ -39,3 +39,18 @@ export function accountExistsEmail(to: string, appUrl: string): EmailMessage {
     ].join("\n"),
   };
 }
+
+/** No company name or inviter: the invitation's creator chose those (S2 AC9). */
+export function invitedExistingEmail(to: string, appUrl: string): EmailMessage {
+  return {
+    to,
+    subject: "Your JobFlow invitation",
+    text: [
+      "Someone used a JobFlow invitation for this email address, which already has an account.",
+      "",
+      `If it was you, sign in here, then reopen the invitation link: ${appUrl}/login`,
+      "",
+      "If it wasn't you, no action is needed. Your account hasn't changed.",
+    ].join("\n"),
+  };
+}

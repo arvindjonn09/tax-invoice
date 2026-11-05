@@ -207,11 +207,10 @@ implementation task.
   and a repeated ABN aren't blocked, and flagging duplicates is listed as Later in the requirements. Turnstile raises
   cost but doesn't stop paid solvers. Turnstile failing closed means a Cloudflare outage stops sign-up. The
   breached-password check fails open.
-- **Enumeration outside sign-up (T15).** On `main`, `POST /api/invitations/accept` with an invitation's token and no
-  session answers 401 "sign in with the invited email" for an existing account and 400 "enter your name and a password"
-  for a new one. That's limited to trusted owners today; with public sign-up, anyone who verifies and creates a company
-  can invite any address and read the answer. Tracked in #263. Small timing differences can also
-  survive the 50 ms test.
+- **Enumeration outside sign-up (T15).** `POST /api/invitations/accept` gives a caller who hasn't proved control of the
+  address the same answer for an existing and a new account (#263). Small timing differences can also survive the 50 ms
+  test, and the new-account path does more database work than the existing-account one. An owner who chooses the password
+  on their own invitation link holds that unverified account, as with pre-registration in T17.
 - **Scanners and account pre-registration (T17).** The fragment stops scanners that only fetch a URL. `/verify-email`
   spends the token only when "Confirm my email" is pressed (#249), so only a scanner that also clicks could verify the
   address. If an attacker signed up with that address, they would then hold a verified account for it. This is uncertain: no

@@ -19,6 +19,7 @@ import {
 import { syntheticFactory } from "../helpers/factories";
 
 const ORIGIN = "http://127.0.0.1:3000";
+let hashes = 0;
 const PASSWORD = "synthetic password for tests";
 const ROLES = [
   "owner",
@@ -92,6 +93,7 @@ async function invitation(email: string, role = "employee") {
   };
   return {
     id: result.invitation.id,
+    email,
     token: result.invitationPath.split("#")[1]!,
   };
 }
@@ -115,6 +117,14 @@ beforeAll(async () => {
     auth: () => auth,
     db: () => db,
     trustedOrigins: () => [ORIGIN],
+    appUrl: () => ORIGIN,
+    emailSecret: () => "test-outbox-key-0123456789abcdef-0123456789",
+    dispatch: () => {},
+    defer: (work: () => Promise<void>) => work(),
+    hashPassword: async () => {
+      hashes += 1;
+      return "not-used";
+    },
   });
   for (const who of [...ROLES, "outsider", "secondOwner"] as const) {
     userIds[who] = (
@@ -523,7 +533,7 @@ describe("invitations", () => {
         companyId: otherCompanyId,
       }),
     );
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(202);
     const user = await db.user.findUniqueOrThrow({
       where: { email: "joining@jobflow.invalid" },
     });
@@ -568,7 +578,7 @@ describe("invitations", () => {
         ),
       ),
     );
-    expect(responses.map((r) => r.status).sort()).toEqual([200, 400]);
+    expect(responses.map((r) => r.status).sort()).toEqual([202, 400]);
     expect(
       await db.membership.count({
         where: { companyId, user: { email: "race@jobflow.invalid" } },
@@ -598,10 +608,10 @@ describe("invitations", () => {
           }),
         )
       ).status,
-    ).toBe(401);
+    ).toBe(202);
     expect(
       (await accept(request("owner", "POST", { token: issued.token }))).status,
-    ).toBe(401);
+    ).toBe(403);
     const before = await db.authAccount.findFirstOrThrow({
       where: { userId: existing.id },
     });
@@ -693,6 +703,137 @@ describe("invitations", () => {
         )
       ).status,
     ).toBe(400);
+  });
+
+  describe("can't reveal whether the invited address has an account (#263)", () => {
+    const answer = async (response: Response) => ({
+      status: response.status,
+      body: await response.json(),
+    });
+    const details = { name: "Synthetic Person", password: PASSWORD };
+
+    it("answers a signed-out caller identically, with and without details", async () => {
+      const taken = await invitation(
+        `oracle-existing-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      await db.user.create({
+        data: {
+          email: taken.email,
+          name: "Already Here",
+          emailVerified: true,
+        },
+      });
+      const free = await invitation(
+        `oracle-new-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      const empty = (token: string) => accept(request(null, "POST", { token }));
+      expect(await answer(await empty(taken.token))).toEqual(
+        await answer(await empty(free.token)),
+      );
+
+      const before = hashes;
+      const existing = await answer(
+        await accept(request(null, "POST", { token: taken.token, ...details })),
+      );
+      const created = await answer(
+        await accept(request(null, "POST", { token: free.token, ...details })),
+      );
+      expect(existing).toEqual(created);
+      expect(existing).toEqual({
+        status: 202,
+        body: { status: "check-email" },
+      });
+      // Both spend a password hash: createCredentialUser's, or this stand-in.
+      expect(hashes).toBe(before + 1);
+    });
+
+    it("refuses someone signed in as another user identically", async () => {
+      const taken = await invitation(
+        `oracle-signed-in-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      await db.user.create({
+        data: { email: taken.email, name: "Already Here" },
+      });
+      const free = await invitation(
+        `oracle-signed-in-new-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      const asOutsider = (token: string) =>
+        accept(request("outsider", "POST", { token }));
+      const existing = await answer(await asOutsider(taken.token));
+      expect(existing.status).toBe(403);
+      expect(existing).toEqual(await answer(await asOutsider(free.token)));
+    });
+
+    it("grants nothing to the existing account, and emails its next step to the mailbox", async () => {
+      const issued = await invitation(
+        `oracle-email-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      const user = await db.user.create({
+        data: { email: issued.email, name: "Already Here" },
+      });
+      await accept(request(null, "POST", { token: issued.token, ...details }));
+      expect(await db.membership.count({ where: { userId: user.id } })).toBe(0);
+      expect(
+        (
+          await db.userInvitation.findUniqueOrThrow({
+            where: { id: issued.id },
+          })
+        ).acceptedAt,
+      ).toBeNull();
+      expect(await db.authAccount.count({ where: { userId: user.id } })).toBe(
+        0,
+      );
+      expect(
+        await db.emailOutbox.count({
+          where: { userId: user.id, kind: "account_exists" },
+        }),
+      ).toBe(1);
+    });
+
+    it("sends a new account its verification email, and leaves it unverified", async () => {
+      const issued = await invitation(
+        `oracle-verify-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      await accept(request(null, "POST", { token: issued.token, ...details }));
+      const user = await db.user.findUniqueOrThrow({
+        where: { email: issued.email },
+      });
+      expect(user.emailVerified).toBe(false);
+      expect(
+        await db.emailOutbox.count({
+          where: { userId: user.id, kind: "verify_email" },
+        }),
+      ).toBe(1);
+    });
+
+    it("still lets the invited user accept once signed in", async () => {
+      const email = `oracle-signed-in-ok-${crypto.randomUUID()}@jobflow.invalid`;
+      const existing = await createCredentialUser(db, {
+        email,
+        name: "Returning User",
+        password: PASSWORD,
+      });
+      const issued = await invitation(email, "manager");
+      const signedIn = request(null, "POST", { token: issued.token });
+      signedIn.headers.set(
+        "cookie",
+        (await signIn(email)).headers.getSetCookie()[0]!.split(";")[0]!,
+      );
+      const response = await accept(signedIn);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ accepted: true });
+      expect(
+        await db.membership.findUnique({
+          where: { companyId_userId: { companyId, userId: existing.id } },
+        }),
+      ).toMatchObject({ role: "manager", isActive: true });
+    });
   });
 
   it("keeps every pending invitation discoverable and revocable across pages", async () => {

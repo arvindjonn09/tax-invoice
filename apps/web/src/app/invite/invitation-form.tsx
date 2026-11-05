@@ -9,6 +9,7 @@ export function InvitationForm() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  const [checkEmail, setCheckEmail] = useState(false);
   useEffect(() => {
     // Retain only in memory. Never send the bearer token in a URL or Referer.
     if (window.location.hash) token.current = window.location.hash.slice(1);
@@ -37,14 +38,13 @@ export function InvitationForm() {
       };
       if (!response.ok)
         throw new Error(
-          response.status === 401
-            ? "Sign in with your existing invited account, then reopen the original invitation link."
-            : result.fields
-              ? Object.values(result.fields).join(". ")
-              : (result.error ?? "Unable to accept invitation."),
+          result.fields
+            ? Object.values(result.fields).join(". ")
+            : (result.error ?? "Unable to accept invitation."),
         );
       token.current = "";
-      setAccepted(true);
+      if (response.status === 202) setCheckEmail(true);
+      else setAccepted(true);
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -55,6 +55,19 @@ export function InvitationForm() {
       setBusy(false);
     }
   }
+  if (checkEmail)
+    return (
+      <section
+        role="status"
+        className="space-y-4 rounded-lg border bg-card p-6 text-card-foreground"
+      >
+        <h2 className="text-xl font-semibold">Check your email</h2>
+        <p>
+          We&apos;ve sent the next step to the invited address. Follow it to
+          finish joining your team.
+        </p>
+      </section>
+    );
   if (accepted)
     return (
       <section

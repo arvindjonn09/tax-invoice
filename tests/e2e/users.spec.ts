@@ -107,7 +107,7 @@ test("owner invites, recipient joins, owner changes role and deactivates access"
       .fill(PASSWORD);
     await joining.getByRole("button", { name: "Accept invitation" }).click();
     await expect(
-      joining.getByRole("heading", { name: "Invitation accepted" }),
+      joining.getByRole("heading", { name: "Check your email" }),
     ).toBeVisible();
     await expect(joining).toHaveURL(/\/invite$/);
     await login(joining, invitedEmail);
