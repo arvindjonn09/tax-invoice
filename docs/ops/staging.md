@@ -14,23 +14,26 @@ This repository has the configuration. Creating the server, the DNS name, the bu
 | `web` | The Next.js app (`apps/web/Dockerfile`, `runtime` target) | nginx only |
 | `postgres` | PostgreSQL 16 | `web` and `migrate`, on a network with no route out |
 | `migrate` | One-off: `prisma migrate deploy`, then the runtime-role grants | – |
-| `clamav` | ClamAV `clamd` plus `freshclam` (#136): every upload is scanned before it is stored | `web` only, on the internal `scan` network; it has its own outbound network for signature updates |
+| `clamav` | ClamAV `clamd` (#136): every upload is scanned before it is stored | `web` only, on the internal `scan` network, with no route out |
+| `freshclam` | ClamAV signature updates, on the shared `clamav_db` volume | Nothing; its own outbound network reaches the signature mirrors |
 
 Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
 
 **Malware scanning (#136).** The app streams each upload to `clamd` (INSTREAM on port 3310) before storing it.
 
 - An infected file is refused with "flagged as unsafe" (422), and nothing is stored.
-- A file clamd couldn't fully check (over its limits, `AlertExceedsMax`) is refused with "couldn't be checked" (422).
-- Password-protected PDFs and archives are accepted for now. Refusing them is an **owner decision**: set the `AlertEncrypted*` options in `infra/staging/clamav/clamd.conf`.
+- A file clamd couldn't fully check is refused with "couldn't be checked" (422): over its limits (`AlertExceedsMax`), or **password-protected** (owner decision, 5 November 2026: the `AlertEncrypted*` options are `yes`).
 - Each refusal writes the log line `document.malware_rejected` (outcome and `detection`, the clamd detection name) and the audit event `document.malware_rejected`. Neither records the file name or contents.
 - Scanning is **required in every production build** (`NODE_ENV=production`), and whenever `APP_ENV` is `staging` or `production`, whatever the case or spacing.
-  - `MALWARE_SCAN=off` turns it off **only** when `APP_ENV` is `development` or `test`. It's ignored everywhere else, and a warning is logged once.
+  - `MALWARE_SCAN=off` turns it off **only** for `pnpm dev` and tests: not in a production build (so not under `next start` on any host), and only with `APP_ENV` `development` or `test`. Anywhere else it's ignored, and `document.scan_disable_ignored` is logged once.
   - If clamd is down, unreachable, busy, slow (45 s overall deadline) or answers unclearly, uploads fail closed with 503 ("File checking isn't available"), and nothing is stored.
-- Each app process runs at most 4 scans at once. The slot is taken before the upload body is read, and an upload waits up to 10 s for one.
+- Each app process runs at most 4 scans at once. The slot is taken before the upload body is read and freed as soon as the scan ends (before storing). An upload waits up to 10 s for a slot, and its body then has 30 s to arrive (503 otherwise).
 - `/api/health/ready` is 503 when scanning is required and clamd doesn't answer PING.
-- `deploy.sh` starts `clamav` (waiting up to 15 minutes) before the web app, and the web container also waits for it to be healthy. The first start downloads the signature database, which can take several minutes.
-- clamd runs as the `clamav` user (`/init-unprivileged`), with no capabilities, a read-only root filesystem and size-capped `tmpfs` scratch space. It reads `infra/staging/clamav/clamd.conf`.
+- `deploy.sh` starts `freshclam` and `clamav` (waiting up to 15 minutes) before the web app, and the web container also waits for clamd to be healthy. clamd waits for freshclam to have a signature database, so the first start can take several minutes.
+- The image is pinned by digest in `compose.yml` itself (`clamav/clamav:1.4@sha256:8ad6…8052`), so every Compose command works without extra settings.
+- **clamd is the container's only process** (`clamd --foreground`). If a hostile file or memory pressure kills it, the container exits and `restart: unless-stopped` starts it again. freshclam is a separate container, and clamd's `SelfCheck` reloads the signatures it fetches.
+- Both run as the `clamav` user with no capabilities, a read-only root filesystem and size-capped `tmpfs` scratch space (256 MB `/tmp` for clamd). clamd has no route out.
+- clamd reads `infra/staging/clamav/clamd.conf`. Its SHA-256 labels the container, so a deploy that changes the file recreates clamd. A manual `docker compose up` without `deploy.sh` labels it `manual`.
 - `clamd` needs about 1.5 GB of RAM, and up to about 3 GB while signatures reload, so give the host at least **6 GB**.
 - Watch the logs for `document.scan_unavailable`.
 
@@ -50,7 +53,7 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
 ## Health checks
 
 - **`GET /api/health` (liveness):** says the process is up. The image's `HEALTHCHECK` uses it.
-- **`GET /api/health/ready` (readiness):** 200 only when the database answers a query and document storage is configured, otherwise 503. It never says which part failed. Concurrent probes share one result for two seconds to avoid repeated database checks; the response itself is never cached by clients. The deploy smoke test uses it.
+- **`GET /api/health/ready` (readiness):** 200 only when the database answers a query, document storage is configured and, where malware scanning is required, clamd answers PING; otherwise 503. It never says which part failed. Concurrent probes share one result for two seconds to avoid repeated database checks; the response itself is never cached by clients. The deploy smoke test uses it.
 
 ## Logs and alerts
 
@@ -66,9 +69,8 @@ Documents go to an S3-compatible bucket outside the host (`S3_*` in `web.env`).
    - Publish IPv4 only and create no AAAA record until Docker IPv6 is set up. Without it, every IPv6 client reaches nginx from the same bridge address and shares one rate limit.
    - Create a `deploy` user in the `docker` group.
 2. **DNS:** `staging.<domain>` → the server.
-   - **ClamAV image (#136):** in `infra/staging/env/compose.env`, set `CLAMAV_IMAGE` to the digest-pinned image. Get the digest on the host with
-     `docker buildx imagetools inspect clamav/clamav:1.4 --format '{{json .Manifest.Digest}}'` and write it as
-     `CLAMAV_IMAGE=clamav/clamav:1.4@sha256:<digest>`. The deploy gate refuses anything else.
+   - **ClamAV (#136):** nothing to set in `compose.env`: the image is pinned in `compose.yml`. Put `CLAMAV_HOST=clamav`
+     and `CLAMAV_PORT=3310` in `web.env`, and give the host at least 6 GB of RAM.
    - Re-install the gate after this change: `sudo install -o root -g root -m 0755 infra/staging/deploy.sh /usr/local/sbin/jobflow-deploy`.
 3. **Bucket:** a private bucket in `ap-southeast-2`, with public access blocked, default encryption on and versioning on. Create an access key that can reach **this bucket only**.
 4. **Code and secrets on the host:**
@@ -181,3 +183,33 @@ After a deploy, run **Actions → Staging smoke test → Run workflow**, or `SMO
 Until this is done, the job has no credentials and fails with the signed-in check required.
 
 Record each run's result on #65.
+
+## Malware scanning on a host without Compose (#136)
+
+The pilot host runs the app as `jobflow.service` (`next start`) outside Docker, so `CLAMAV_HOST=clamav` doesn't resolve
+there. **How clamd runs there is the owner's decision** (Docker is agreed; 5 November 2026). Until it runs, every upload
+gets 503 and `/api/health/ready` stays 503, so **don't deploy #136 to that host before clamd answers**. Not before the
+6 November demo, either.
+
+The recommended way is one loopback-only container from the same pinned image, plus freshclam:
+
+```sh
+IMG=clamav/clamav:1.4@sha256:8ad6197396974726c35d017e50aaaaf4b91745726a04faec8480c203edd98052
+docker volume create jobflow_clamav_db
+docker run -d --name jobflow-freshclam --restart unless-stopped --user clamav --read-only --cap-drop ALL \
+  --tmpfs /tmp --tmpfs /var/log/clamav --tmpfs /run/clamav -v jobflow_clamav_db:/var/lib/clamav \
+  --entrypoint freshclam "$IMG" --foreground --daemon --checks=12
+# Once /var/lib/clamav holds main.cvd (docker logs jobflow-freshclam):
+docker run -d --name jobflow-clamd --restart unless-stopped --user clamav --read-only --cap-drop ALL \
+  --tmpfs /tmp:size=256m --tmpfs /var/log/clamav --tmpfs /run/clamav -v jobflow_clamav_db:/var/lib/clamav \
+  -v /opt/jobflow/infra/staging/clamav/clamd.conf:/etc/clamav/clamd.conf:ro --memory 3g \
+  -p 127.0.0.1:3310:3310 --entrypoint clamd "$IMG" --foreground --config-file=/etc/clamav/clamd.conf
+```
+
+Then set `CLAMAV_HOST=127.0.0.1` and `CLAMAV_PORT=3310` in the service's environment, restart it, and check:
+- `/api/health/ready` returns 200;
+- a clean PDF uploads;
+- a PDF saved with a password gets 422 "couldn't be checked".
+
+This hasn't been run: there's no Docker in Claude B's environment. Re-run the `clamd` container after editing
+`clamd.conf`, because a running clamd doesn't re-read it.

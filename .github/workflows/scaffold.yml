@@ -99,6 +99,41 @@ jobs:
         run: pnpm audit:prod
       - name: Audit all dependencies without exceptions
         run: pnpm audit --audit-level high
+  # #136: the upload scanner client against real clamd, from the same pinned
+  # image and clamd.conf as staging (signatures are bundled in the image).
+  clamav-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - name: Start clamd (pinned image, staging clamd.conf)
+        run: |
+          image=$(sed -n 's/^    image: \(clamav\/clamav:[^ ]*\)$/\1/p' infra/staging/compose.yml | head -n 1)
+          case "$image" in clamav/clamav:*@sha256:*) ;; *) echo "clamav image not pinned" >&2; exit 1 ;; esac
+          docker run -d --name clamd -p 127.0.0.1:3310:3310 \
+            -v "$PWD/infra/staging/clamav/clamd.conf:/etc/clamav/clamd.conf:ro" \
+            --entrypoint clamd "$image" --foreground --config-file=/etc/clamav/clamd.conf
+          for i in $(seq 1 90); do
+            if printf 'zPING\0' | timeout 3 nc 127.0.0.1 3310 2>/dev/null | grep -q PONG; then exit 0; fi
+            sleep 5
+          done
+          docker logs clamd | tail -n 50
+          exit 1
+      - name: Contract tests
+        env:
+          CLAMD_CONTRACT_HOST: 127.0.0.1
+        run: pnpm exec vitest run --project unit tests/unit/clamd-contract.test.ts
+      - if: failure()
+        run: docker logs clamd 2>&1 | tail -n 100
   gate-regressions:
     runs-on: ubuntu-latest
     timeout-minutes: 15

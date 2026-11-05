@@ -109,12 +109,34 @@ const unscannable = () =>
   privateJson(
     {
       error:
-        "This file couldn't be checked for malware, so it wasn't saved. Upload a different copy, such as a PDF that isn't password-protected.",
+        "This file couldn't be checked for malware, so it wasn't saved. Password-protected files and files too complex to check are refused. Upload a copy without a password.",
     },
     { status: 422 },
   );
 
 let disabledLogged = false;
+
+/** How long an upload body may take to arrive once a scan slot is held. */
+export const BODY_DEADLINE_MS = 30_000;
+
+/** Reject with 503 when `work` doesn't settle in time. */
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new HttpError(503, "The upload took too long. Try again.")),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function documentHandlers(deps: DocumentDeps) {
   const upload: PolicyHandler<unknown> = async (context) => {
@@ -148,7 +170,7 @@ export function documentHandlers(deps: DocumentDeps) {
       }
     }
     try {
-      return await receive(context, store, scanning);
+      return await receive(context, store, scanning, () => release?.());
     } finally {
       release?.();
     }
@@ -158,8 +180,14 @@ export function documentHandlers(deps: DocumentDeps) {
     { actor, request }: Parameters<PolicyHandler<unknown>>[0],
     store: ObjectStore,
     scanning: Scanning,
+    releaseSlot: () => void,
   ) => {
-    const form = await readMultipart(request, UPLOAD_BODY_LIMIT);
+    // The scan slot is held from before the body is read, so a stalled
+    // upload can't hold it for ever: the body has a deadline of its own.
+    const form = await withDeadline(
+      readMultipart(request, UPLOAD_BODY_LIMIT),
+      BODY_DEADLINE_MS,
+    );
     const file = form.get("file");
     const kind = Kind.safeParse(form.get("kind"));
     if (!(file instanceof File))
@@ -186,12 +214,15 @@ export function documentHandlers(deps: DocumentDeps) {
       try {
         result = await scanning.scanner.scan(bytes);
       } catch (error) {
+        releaseSlot();
         log("error", "document.scan_unavailable", {
           reason:
             error instanceof ScannerUnavailable ? error.reason : "unknown",
         });
         return scanUnavailable();
       }
+      // The slot is for clamd only; storing and the database don't need it.
+      releaseSlot();
       if (result.status !== "clean") {
         // No file name or contents: only who, and what clamd reported. Logs
         // rotate, so the audit trail keeps it too.

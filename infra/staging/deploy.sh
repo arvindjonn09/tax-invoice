@@ -21,12 +21,6 @@ esac
 [ "${#SHA}" -eq 40 ] || { echo "invalid commit" >&2; exit 64; }
 
 cd "$REPO"
-# #136: the ClamAV image must be pinned by digest (compose.env is host-only).
-CLAMAV_IMAGE=$(sed -n 's/^CLAMAV_IMAGE=//p' infra/staging/env/compose.env | tail -n 1)
-if ! printf '%s\n' "$CLAMAV_IMAGE" | grep -Eq '^clamav/clamav:[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$'; then
-  echo "CLAMAV_IMAGE in compose.env must be clamav/clamav:<tag>@sha256:<digest>" >&2
-  exit 66
-fi
 git fetch --quiet origin main
 if [ "$SHA" != "$(git rev-parse origin/main)" ]; then
   # A newer main commit has its own deploy; this one is superseded.
@@ -52,7 +46,10 @@ compose run --rm migrate
 # Malware scanning (#136) before the app: `--no-deps` below would never start
 # it, and the app refuses uploads without it. The first start downloads the
 # signature database, hence the long wait. A changed image is rolled out here.
-compose up -d --wait --wait-timeout 900 clamav
+# The clamd.conf hash labels the container, so a config change recreates it.
+CLAMD_CONF_SHA=$(sha256sum infra/staging/clamav/clamd.conf | cut -c1-64)
+export CLAMD_CONF_SHA
+compose up -d --wait --wait-timeout 900 freshclam clamav
 compose up -d --no-deps --wait --wait-timeout 300 web
 # Recreate nginx so it re-renders its templates and picks up the new web
 # container (its upstream also re-resolves, but a fresh start is certain).

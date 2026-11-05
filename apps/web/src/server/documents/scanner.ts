@@ -1,4 +1,5 @@
 import { connect } from "node:net";
+import { log } from "../log";
 
 // #136: every upload is scanned for malware before it is stored (owner
 // decision 5 November 2026: ClamAV). The scanner speaks clamd's INSTREAM
@@ -220,6 +221,8 @@ export function parseReply(raw: string): ScanResult {
   throw new ScannerUnavailable("unexpected reply");
 }
 
+let ignoredOffLogged = false;
+
 /** APP_ENV values that may switch scanning off with MALWARE_SCAN=off. */
 const MAY_DISABLE = new Set(["development", "test"]);
 
@@ -227,23 +230,31 @@ export type Scanning = {
   /** Uploads are refused unless a scanner gives a clear answer. */
   required: boolean;
   scanner: MalwareScanner | null;
-  /** MALWARE_SCAN=off was honoured (development and test only). */
+  /** MALWARE_SCAN=off was honoured (`pnpm dev` and tests only). */
   disabled: boolean;
 };
 
 /**
- * Scanning is required whenever NODE_ENV=production (every built app) or
- * APP_ENV is staging or production, so a missing or broken scanner refuses
- * uploads. Only `MALWARE_SCAN=off` with APP_ENV development or test turns it
- * off; on any other APP_ENV the switch is ignored. Outside production builds
- * (CI, `pnpm dev`) the scanner is used when CLAMAV_HOST is set.
+ * Scanning is required whenever NODE_ENV=production (every built app, so
+ * `next start` on any host) or APP_ENV is staging or production, so a missing
+ * or broken scanner refuses uploads. `MALWARE_SCAN=off` is honoured only
+ * outside production builds and only with APP_ENV development or test, i.e.
+ * `pnpm dev` and tests; anywhere else it is ignored and that is logged once.
+ * Outside production builds the scanner is used when CLAMAV_HOST is set.
  */
 export function scannerFromEnvironment(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): Scanning {
   const appEnv = env.APP_ENV?.trim().toLowerCase() ?? "";
+  const wantsOff = env.MALWARE_SCAN?.trim().toLowerCase() === "off";
   const disabled =
-    env.MALWARE_SCAN?.trim().toLowerCase() === "off" && MAY_DISABLE.has(appEnv);
+    wantsOff && env.NODE_ENV !== "production" && MAY_DISABLE.has(appEnv);
+  if (wantsOff && !disabled && !ignoredOffLogged) {
+    ignoredOffLogged = true;
+    log("warn", "document.scan_disable_ignored", {
+      reason: "MALWARE_SCAN=off is only honoured by pnpm dev and tests",
+    });
+  }
   const required =
     !disabled &&
     (env.NODE_ENV === "production" ||

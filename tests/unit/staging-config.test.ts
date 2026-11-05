@@ -43,7 +43,6 @@ describe("staging Compose (#64)", () => {
     for (const [, image] of compose.matchAll(/image: (\S+)/g)) {
       if (image!.startsWith("jobflow-")) continue; // locally built release image
       // #136: set on the host, digest-pinned; the deploy gate enforces it.
-      if (image!.startsWith("${CLAMAV_IMAGE:?")) continue;
       expect(image).toMatch(/:[\w.-]+@sha256:[a-f0-9]{64}$/);
     }
     expect(dockerfile).toMatch(
@@ -61,59 +60,88 @@ describe("malware scanning service (#136)", () => {
     new URL("../../infra/staging/deploy.sh", import.meta.url),
     "utf8",
   );
-  const example = readFileSync(
-    new URL("../../infra/staging/env/compose.env.example", import.meta.url),
-    "utf8",
-  );
   const web = readFileSync(
     new URL("../../infra/staging/env/web.env.example", import.meta.url),
     "utf8",
   );
   const block = compose.slice(
     compose.indexOf("\n  clamav:\n"),
+    compose.indexOf("\n  freshclam:\n"),
+  );
+  const fresh = compose.slice(
+    compose.indexOf("\n  freshclam:\n"),
     compose.indexOf("\n  nginx:\n"),
   );
+  const PINNED =
+    "clamav/clamav:1.4@sha256:8ad6197396974726c35d017e50aaaaf4b91745726a04faec8480c203edd98052";
 
-  it("runs clamd from a required, digest-pinned image the deploy gate checks", () => {
-    expect(block).toMatch(/image: \$\{CLAMAV_IMAGE:\?/);
-    expect(example).toMatch(/^CLAMAV_IMAGE=clamav\/clamav:[\w.-]+@sha256:/m);
-    expect(deploy).toContain(
-      "^clamav/clamav:[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$",
-    );
-    // The check runs before anything is fetched or built.
-    expect(deploy.indexOf("CLAMAV_IMAGE")).toBeLessThan(
-      deploy.indexOf("git fetch"),
-    );
+  it("pins clamd and freshclam to the same image digest in compose.yml", () => {
+    expect(block).toContain(`image: ${PINNED}`);
+    expect(fresh).toContain(`image: ${PINNED}`);
+    // No variable, so every Compose command works without --env-file.
+    expect(compose).not.toMatch(/CLAMAV_IMAGE/);
+    expect(deploy).not.toMatch(/CLAMAV_IMAGE/);
   });
 
-  it("keeps clamd private: no published port, its own networks", () => {
+  it("runs clamd as the container's only process, freshclam beside it", () => {
+    expect(block).toMatch(/entrypoint: \["clamd"\]/);
+    expect(block).toMatch(
+      /command: \["--foreground", "--config-file=\/etc\/clamav\/clamd.conf"\]/,
+    );
+    expect(block).toMatch(/restart: unless-stopped/);
+    expect(block).toMatch(/freshclam:\n\s+condition: service_healthy/);
+    expect(fresh).toMatch(/entrypoint: \["freshclam"\]/);
+    expect(fresh).toContain("clamav_db:/var/lib/clamav");
+    expect(read("infra/staging/clamav/clamd.conf")).toMatch(/^SelfCheck \d+$/m);
+  });
+
+  it("keeps clamd private: no published port and no route out", () => {
     expect(block).not.toMatch(/^\s+ports:/m);
-    expect(block).toMatch(/networks: \[scan, clamav_updates\]/);
+    expect(block).toMatch(/networks: \[scan\]/);
+    expect(fresh).toMatch(/networks: \[clamav_updates\]/);
     expect(compose).toMatch(/ {2}scan:\n {4}internal: true/);
     expect(block).toMatch(/no-new-privileges:true/);
   });
 
-  it("runs clamd unprivileged, read-only, with no capabilities", () => {
-    expect(block).toMatch(/^ {4}user: clamav$/m);
-    expect(block).toMatch(/entrypoint: \["\/init-unprivileged"\]/);
-    expect(block).toMatch(/cap_drop: \[ALL\]/);
-    expect(block).toMatch(/read_only: true/);
-    expect(block).toMatch(/- \/tmp:size=\d+m/);
+  it("runs both unprivileged, read-only, with no capabilities", () => {
+    for (const service of [block, fresh]) {
+      expect(service).toMatch(/^ {4}user: clamav$/m);
+      expect(service).toMatch(/cap_drop: \[ALL\]/);
+      expect(service).toMatch(/read_only: true/);
+      expect(service).toMatch(/no-new-privileges:true/);
+    }
+    expect(block).toMatch(/- \/tmp:size=256m/);
   });
 
-  it("mounts a clamd.conf that never lets an over-limit file pass as clean", () => {
+  it("mounts a clamd.conf that refuses over-limit and encrypted files", () => {
     expect(block).toContain("./clamav/clamd.conf:/etc/clamav/clamd.conf:ro");
     const conf = read("infra/staging/clamav/clamd.conf");
     expect(conf).toMatch(/^AlertExceedsMax yes$/m);
     expect(conf).toMatch(/^TCPSocket 3310$/m);
     // Uploads are at most 10 MB: clamd must accept the whole stream.
     expect(conf).toMatch(/^StreamMaxLength 12M$/m);
-    // Encrypted files: an owner decision, recorded explicitly either way.
-    expect(conf).toMatch(/^AlertEncrypted (yes|no)$/m);
+    // Owner decision, 5 November 2026: password-protected files are refused.
+    expect(conf).toMatch(/^AlertEncrypted yes$/m);
+    expect(conf).toMatch(/^AlertEncryptedArchive yes$/m);
+    expect(conf).toMatch(/^AlertEncryptedDoc yes$/m);
   });
 
-  it("starts clamd before the web app on every deploy", () => {
-    const start = deploy.indexOf("up -d --wait --wait-timeout 900 clamav");
+  it("recreates clamd when clamd.conf changes", () => {
+    expect(block).toMatch(
+      /jobflow\.clamd-conf-sha256: \$\{CLAMD_CONF_SHA:-manual\}/,
+    );
+    const hash = deploy.indexOf(
+      "CLAMD_CONF_SHA=$(sha256sum infra/staging/clamav/clamd.conf",
+    );
+    expect(hash).toBeGreaterThan(-1);
+    expect(deploy).toMatch(/^export CLAMD_CONF_SHA$/m);
+    expect(hash).toBeLessThan(deploy.indexOf("freshclam clamav"));
+  });
+
+  it("starts freshclam and clamd before the web app on every deploy", () => {
+    const start = deploy.indexOf(
+      "up -d --wait --wait-timeout 900 freshclam clamav",
+    );
     expect(start).toBeGreaterThan(deploy.indexOf("run --rm migrate"));
     expect(start).toBeLessThan(
       deploy.indexOf("up -d --no-deps --wait --wait-timeout 300 web"),

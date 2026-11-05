@@ -2,9 +2,15 @@ import { type AddressInfo, createServer, type Server } from "node:net";
 
 /**
  * A minimal clamd for tests (#136): speaks INSTREAM and PING, reassembles the
- * chunks and reports the EICAR test string as infected. `mode` simulates
+ * chunks and reports the EICAR test file as infected only when the stream is
+ * exactly that file (real clamd's Win.Test.EICAR_HDB-1 is a hash of the whole
+ * content). Uploads must be a real PDF or image to reach the scanner, so
+ * app-level tests use TEST_MARKER, a fake-only signature. `mode` simulates
  * failures and protocol violations.
  */
+/** Only this fake reports it (as Jobflow.Test.Marker); real clamd won't. */
+export const TEST_MARKER = "JOBFLOW-FAKE-CLAMD-TEST-MARKER-7f3c";
+
 export const EICAR =
   "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 
@@ -115,9 +121,11 @@ export async function startFakeClamd(): Promise<FakeClamd> {
                   ? "stream: OK"
                   : mode === "limits"
                     ? "stream: Heuristics.Limits.Exceeded.MaxFileSize FOUND\0"
-                    : file.includes(EICAR)
+                    : file.equals(Buffer.from(EICAR))
                       ? "stream: Win.Test.EICAR_HDB-1 FOUND\0"
-                      : "stream: OK\0";
+                      : file.includes(TEST_MARKER)
+                        ? "stream: Jobflow.Test.Marker FOUND\0"
+                        : "stream: OK\0";
           later(state.delayMs, () => {
             done();
             socket.end(reply);
