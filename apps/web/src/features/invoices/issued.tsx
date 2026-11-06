@@ -188,6 +188,7 @@ export function IssuedInvoice({
               ) : null,
             )}
           </section>
+          <IssuedDetails invoice={invoice} />
           <section
             aria-labelledby="lines-heading"
             className="space-y-3 rounded-lg border bg-card p-6"
@@ -317,5 +318,39 @@ export function IssuedInvoice({
         </form>
       </dialog>
     </>
+  );
+}
+
+/**
+ * Issue date, due date and the customer's reference, as on the PDF (#306).
+ * Rows appear only when there's something to show.
+ */
+export function IssuedDetails({
+  invoice,
+}: {
+  invoice: Pick<Invoice, "issueDate" | "dueOn" | "customerReference">;
+}) {
+  const rows = [
+    ["Issue date", invoice.issueDate ? day(invoice.issueDate) : null],
+    ["Due date", invoice.dueOn ? day(invoice.dueOn) : null],
+    ["Customer reference / PO number", invoice.customerReference],
+  ].filter((row): row is [string, string] => Boolean(row[1]));
+  if (!rows.length) return null;
+  return (
+    <section
+      aria-label="Invoice details"
+      className="rounded-lg border bg-card p-6 [overflow-wrap:anywhere]"
+    >
+      <dl className="grid gap-4 sm:grid-cols-3">
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dt className="text-sm font-semibold uppercase text-muted-foreground">
+              {label}
+            </dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 }
