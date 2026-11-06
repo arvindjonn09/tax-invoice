@@ -1,6 +1,10 @@
 "use client";
 import { useState } from "react";
-import { nextStatuses, transitionProblem } from "@jobflow/domain";
+import {
+  nextStatuses,
+  transitionProblem,
+  usualNextStatus,
+} from "@jobflow/domain";
 import {
   Field,
   TextField,
@@ -16,6 +20,9 @@ export function StatusForm({ job, saved }: { job: Job; saved: () => void }) {
   const options = nextStatuses(job.status).filter(
     (value) => transitionProblem(job.status, value) === null,
   );
+  // #301: pre-select the usual forward step, never a backward or Cancelled
+  // one; with no clear next step the person must choose.
+  const suggested = usualNextStatus(job.status);
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [message, setMessage] = useState<Message>(null);
@@ -30,7 +37,8 @@ export function StatusForm({ job, saved }: { job: Job; saved: () => void }) {
         event.preventDefault();
         if (busy) return;
         const form = new FormData(event.currentTarget);
-        const to = String(form.get("to"));
+        const to = String(form.get("to") ?? "");
+        if (!to) return;
         if (
           ["closed", "cancelled"].includes(to) &&
           !window.confirm(
@@ -60,7 +68,17 @@ export function StatusForm({ job, saved }: { job: Job; saved: () => void }) {
         <legend className="sr-only">Change job status</legend>
         <Field id="job-next-status" label="Next status">
           {(control) => (
-            <select {...control} name="to" defaultValue={options[0]}>
+            <select
+              {...control}
+              name="to"
+              required
+              defaultValue={
+                suggested && options.includes(suggested) ? suggested : ""
+              }
+            >
+              <option value="" disabled>
+                Choose a status
+              </option>
               {options.map((value) => (
                 <option key={value} value={value}>
                   {statusLabel(value)}
