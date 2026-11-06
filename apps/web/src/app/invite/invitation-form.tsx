@@ -63,8 +63,8 @@ export function InvitationForm() {
       >
         <h2 className="text-xl font-semibold">Check your email</h2>
         <p>
-          We&apos;ve sent the next step to the invited address. Follow it to
-          finish joining your team.
+          We&apos;ve sent the next step to the invited address. Follow it, sign
+          in, then reopen your invitation link to join your team.
         </p>
       </section>
     );
@@ -87,8 +87,8 @@ export function InvitationForm() {
       className="space-y-4 rounded-lg border bg-card p-6 text-card-foreground"
     >
       <p>
-        New here? Enter your name and choose a password. Already have a JobFlow
-        account?{" "}
+        New here? Enter your name and choose a password, then confirm your email
+        and reopen this link to join. Already have a JobFlow account?{" "}
         <Link className="underline" href="/login">
           Sign in
         </Link>

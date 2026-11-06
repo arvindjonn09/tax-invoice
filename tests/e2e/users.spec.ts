@@ -110,10 +110,19 @@ test("owner invites, recipient joins, owner changes role and deactivates access"
       joining.getByRole("heading", { name: "Check your email" }),
     ).toBeVisible();
     await expect(joining).toHaveURL(/\/invite$/);
-    await login(joining, invitedEmail);
-    const newUser = await db.user.findUniqueOrThrow({
+    await expect
+      .poll(() => db.user.count({ where: { email: invitedEmail } }))
+      .toBe(1);
+    const newUser = await db.user.update({
       where: { email: invitedEmail },
+      data: { emailVerified: true },
     });
+    await login(joining, invitedEmail);
+    await joining.goto(invitationUrl);
+    await joining.getByRole("button", { name: "Accept invitation" }).click();
+    await expect(
+      joining.getByRole("heading", { name: "Invitation accepted" }),
+    ).toBeVisible();
     expect(
       await db.membership.findUnique({
         where: { companyId_userId: { companyId, userId: newUser.id } },

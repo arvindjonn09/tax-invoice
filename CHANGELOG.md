@@ -6,7 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
-- Accepting an invitation no longer reveals whether an email address has an account; the next step goes to that mailbox ([#263](https://github.com/arvindjonn09/tax-invoice/issues/263)).
+- Accepting an invitation no longer reveals whether an email address has an account. People now confirm their email and sign in before they join a company ([#263](https://github.com/arvindjonn09/tax-invoice/issues/263)).
 - A bill's tax invoice that arrives later moves its claimable GST from job cost to GST credits on the day it's held, without editing the bill (#142).
 - Accessibility sweep: every screen for every role passes axe (WCAG 2.2 AA) and reflows at 360, 768 and 1440 px in both themes, with a keyboard skip-link check (#60).
 - Pre-production security audit with a generated route permission matrix kept in step with the code by CI; the static design samples are not served in production (#61).

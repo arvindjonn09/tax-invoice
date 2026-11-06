@@ -117,7 +117,7 @@ beforeAll(async () => {
     emailSecret: () => "test-outbox-key-0123456789abcdef-0123456789",
     dispatch: () => {},
     defer: (work: () => Promise<void>) => work(),
-    hashPassword: async () => "not-used",
+    isBreached: async () => false,
   });
   for (const who of ["owner", "employee"])
     ids[who] = (

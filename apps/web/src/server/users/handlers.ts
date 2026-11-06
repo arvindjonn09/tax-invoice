@@ -13,6 +13,7 @@ import { createCredentialUser } from "../auth/credentials";
 import { privateJson, type PolicyHandler } from "../authz/policy";
 import { READ_ONLY_RESPONSE, isCompanyReadOnlyError } from "../authz/read-only";
 import { invalid, jsonOrNull } from "../company/handlers";
+import { isUniqueViolation } from "../db/locks";
 import { enqueueEmail } from "../email/outbox";
 import {
   HttpError,
@@ -351,7 +352,20 @@ export function userHandlers(db: () => PrismaClient) {
 
 class CompanyReadOnly extends Error {}
 /** A signed-out caller named an address that already has an account. */
-class ExistingAccount extends Error {}
+/**
+ * A signed-out caller passed every invitation check: roll back, answer the
+ * same in every case, and let the mailbox decide what happens next.
+ */
+class MailboxNextStep extends Error {
+  constructor(
+    readonly email: string,
+    readonly name: string,
+    readonly password: string,
+    readonly createdBy: string,
+  ) {
+    super("Continue by email");
+  }
+}
 
 /** The same 202 for a new and an existing account (#263). */
 const checkEmail = () =>
@@ -372,45 +386,89 @@ export function acceptInvitation(
     | "emailSecret"
     | "dispatch"
     | "defer"
-    | "hashPassword"
+    | "isBreached"
   >,
 ) {
-  /** After the response, so its cost can't be timed. Capped like sign-up (S2). */
-  const notifyExisting = (email: string) =>
+  /** Capped like sign-up (S2). */
+  const notifyExisting = async (owner: { id: string; email: string }) => {
+    const db = deps.db();
+    const key = `invite:existing:day:${owner.id}`;
+    if ((await hit(db, key, { windowSeconds: 86_400, max: 3 })) > 3) return;
+    const hour = Math.floor(Date.now() / 3_600_000);
+    await db
+      .$transaction(async (tx) => {
+        await enqueueEmail(tx, deps.emailSecret(), {
+          kind: "account_exists",
+          dedupeKey: `invite_existing:${owner.id}:${hour}`,
+          userId: owner.id,
+          message: invitedExistingEmail(owner.email, deps.appUrl()),
+        });
+        await tx.platformAuditEvent.create({
+          data: {
+            actorKind: "anonymous",
+            userId: owner.id,
+            action: "account.invited_existing",
+          },
+        });
+      })
+      // A concurrent request already queued this hour's email.
+      .catch((error: unknown) => {
+        if (!isUniqueViolation(error)) throw error;
+      });
+    deps.dispatch();
+  };
+  /**
+   * After the response, so its cost can't be timed. Nothing here touches the
+   * company: no membership, no company audit event and no change to the
+   * invitation, so what the owner can read is the same in both cases.
+   */
+  const continueByEmail = ({
+    email,
+    name,
+    password,
+    createdBy,
+  }: MailboxNextStep) =>
     deps.defer(async () => {
       const db = deps.db();
-      const owner = await db.user.findUniqueOrThrow({
+      const select = { id: true, email: true } as const;
+      const existing = await db.user.findUnique({
         where: { email },
-        select: { id: true, email: true },
+        select,
       });
-      const key = `invite:existing:day:${owner.id}`;
-      if ((await hit(db, key, { windowSeconds: 86_400, max: 3 })) > 3) return;
-      const hour = Math.floor(Date.now() / 3_600_000);
-      await db
-        .$transaction(async (tx) => {
+      if (existing) return notifyExisting(existing);
+      try {
+        await db.$transaction(async (tx) => {
+          const user = await createCredentialUser(tx, {
+            email,
+            name,
+            password,
+            createdBy,
+          });
+          const token = await issueToken(tx, user.id, "email_verification");
           await enqueueEmail(tx, deps.emailSecret(), {
-            kind: "account_exists",
-            dedupeKey: `invite_existing:${owner.id}:${hour}`,
-            userId: owner.id,
-            message: invitedExistingEmail(owner.email, deps.appUrl()),
+            kind: "verify_email",
+            dedupeKey: `verify_email:${user.id}:invitation`,
+            userId: user.id,
+            message: verificationEmail(user.email, deps.appUrl(), token),
           });
           await tx.platformAuditEvent.create({
             data: {
               actorKind: "anonymous",
-              userId: owner.id,
-              action: "account.invited_existing",
+              userId: user.id,
+              action: "account.invited_new",
             },
           });
-        })
-        // A concurrent request already queued this hour's email.
-        .catch((error: unknown) => {
-          if ((error as { code?: string } | null)?.code !== "P2002")
-            throw error;
         });
-      deps.dispatch();
+        deps.dispatch();
+      } catch (error) {
+        // A concurrent request for this address created the account first.
+        if (!isUniqueViolation(error)) throw error;
+        await notifyExisting(
+          await db.user.findUniqueOrThrow({ where: { email }, select }),
+        );
+      }
     });
   return async (request: Request): Promise<Response> => {
-    let invitedEmail: string | null = null;
     try {
       requireTrustedOrigin(request, deps.trustedOrigins());
       requireBodyWithin(request, 4096);
@@ -437,11 +495,9 @@ export function acceptInvitation(
           400,
           "This invitation is invalid or no longer available.",
         );
-      invitedEmail = candidate.email;
       const session = await deps
         .auth()
         .api.getSession({ headers: request.headers });
-      let created = false;
       await withAudit(
         db,
         async (tx, audit) => {
@@ -483,57 +539,49 @@ export function acceptInvitation(
               400,
               "This invitation is invalid or no longer available.",
             );
-          let user = await tx.user.findUnique({
-            where: { email: invitation.email },
-          });
-          if (session) {
-            // The same refusal whether or not the invited address has an account.
-            if (session.user.id !== user?.id)
-              throw new HttpError(
-                403,
-                "This invitation is for a different email address. Sign out, or sign in with that address, then return to this invitation.",
-              );
-            if (
-              await tx.membership.findUnique({
-                where: {
-                  companyId_userId: {
-                    companyId: invitation.companyId,
-                    userId: user.id,
-                  },
-                },
-              })
-            )
-              throw new HttpError(
-                409,
-                "A membership already exists. Ask the owner to edit your access.",
-              );
-          } else {
+          if (!session) {
             const { name, password } = parsed.data;
             if (!name || !password)
               throw new HttpError(
                 400,
                 "Enter your name and a password of 12–128 characters. If you already have a JobFlow account, sign in first, then reopen this invitation.",
               );
-            if (user) {
-              // Spend the same hashing work as a new account.
-              await deps.hashPassword(password);
-              throw new ExistingAccount();
-            }
-            user = await createCredentialUser(tx, {
-              email: invitation.email,
+            throw new MailboxNextStep(
+              invitation.email,
               name,
               password,
-              createdBy: invitation.createdBy,
-            });
-            created = true;
-            const token = await issueToken(tx, user.id, "email_verification");
-            await enqueueEmail(tx, deps.emailSecret(), {
-              kind: "verify_email",
-              dedupeKey: `verify_email:${user.id}:invitation`,
-              userId: user.id,
-              message: verificationEmail(user.email, deps.appUrl(), token),
-            });
+              invitation.createdBy,
+            );
           }
+          // Only a signed-in holder of a confirmed mailbox can join a company.
+          const user = await tx.user.findUnique({
+            where: { email: invitation.email },
+          });
+          // The same refusal whether or not the invited address has an account.
+          if (session.user.id !== user?.id)
+            throw new HttpError(
+              403,
+              "This invitation is for a different email address. Sign out, or sign in with that address, then return to this invitation.",
+            );
+          if (!user.emailVerified)
+            throw new HttpError(
+              403,
+              "Confirm your email address first, then reopen this invitation.",
+            );
+          if (
+            await tx.membership.findUnique({
+              where: {
+                companyId_userId: {
+                  companyId: invitation.companyId,
+                  userId: user.id,
+                },
+              },
+            })
+          )
+            throw new HttpError(
+              409,
+              "A membership already exists. Ask the owner to edit your access.",
+            );
           const member = await tx.membership.create({
             data: {
               companyId: invitation.companyId,
@@ -561,32 +609,28 @@ export function acceptInvitation(
         },
         { readOnlyExemption: "invitation_pre_expiry" },
       );
-      if (created) {
-        deps.dispatch();
-        return checkEmail();
-      }
       return privateJson({ accepted: true });
     } catch (error) {
-      if (error instanceof ExistingAccount && invitedEmail) {
-        await notifyExisting(invitedEmail);
+      if (error instanceof MailboxNextStep) {
+        // Depends only on the password, so it says nothing about the address.
+        if (await deps.isBreached(error.password))
+          return privateJson(
+            {
+              error: "Check the highlighted fields",
+              fields: {
+                password:
+                  "This password has appeared in a data breach. Choose a different one.",
+              },
+            },
+            { status: 400 },
+          );
+        await continueByEmail(error);
         return checkEmail();
       }
       if (error instanceof CompanyReadOnly || isCompanyReadOnlyError(error))
         return privateJson(READ_ONLY_RESPONSE, { status: 403 });
       if (error instanceof HttpError)
         return privateJson({ error: error.message }, { status: error.status });
-      // Cross-company concurrent invitations may race creating the global user:
-      // the loser now names an existing account, so it gets that same answer.
-      if (
-        invitedEmail &&
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === "P2002"
-      ) {
-        await notifyExisting(invitedEmail);
-        return checkEmail();
-      }
       const reference = crypto.randomUUID();
       log("error", "invitation.accept_failed", { reference });
       return privateJson(
