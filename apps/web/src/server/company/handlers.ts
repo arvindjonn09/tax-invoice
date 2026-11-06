@@ -67,6 +67,8 @@ const prefix = z
   .trim()
   .regex(/^[A-Za-z0-9-]{1,10}$/, "Use 1–10 letters, digits or hyphens");
 
+const UNPRINTABLE = /[\p{Cf}\u2028\u2029]|[^\P{Cc}\n\r]/gu;
+
 /** Blank clears the field; anything else must pass `schema`. */
 const clearable = <Output>(schema: z.ZodType<Output, string>) =>
   z.preprocess(
@@ -79,7 +81,9 @@ const website = z
   .string()
   .max(200, "Use at most 200 characters")
   .refine((value) => {
-    if (!/^https?:\/\//i.test(value)) return false;
+    // new URL() drops tabs and newlines, but the stored text would keep them.
+    if (!/^https?:\/\//i.test(value) || /[\s\p{Cc}\p{Cf}]/u.test(value))
+      return false;
     try {
       const url = new URL(value);
       return Boolean(url.hostname) && !url.username && !url.password;
@@ -141,7 +145,13 @@ export const UpdateCompany = z
     ),
     website: clearable(website),
     // Plain text with line breaks; shown as text, never rendered as HTML.
-    about: optionalText(1000),
+    // Printed on quotes, so control and bidi characters go (not \n or \r).
+    about: z
+      .string()
+      .max(2000)
+      .nullable()
+      .transform((value) => value?.replace(UNPRINTABLE, "") ?? null)
+      .pipe(optionalText(1000)),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, "Nothing to update");

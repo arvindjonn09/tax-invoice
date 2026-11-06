@@ -220,6 +220,14 @@ describe("company profile extras (#227)", () => {
     expect(JSON.stringify(event.metadata)).not.toContain("office@");
   });
 
+  it("removes control and bidi characters from about, keeping line breaks", async () => {
+    const response = await patchCompany("owner", {
+      about: "One\u202e\u0007\u200b line\nTwo\u2028",
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ about: "One line\nTwo" });
+  });
+
   it("clears a field with a blank value", async () => {
     await patchCompany("owner", { phone: "02 5550 0100" });
     const response = await patchCompany("owner", {
@@ -248,6 +256,10 @@ describe("company profile extras (#227)", () => {
     [{ website: "ftp://sample.invalid" }, "website"],
     [{ website: "sample.invalid" }, "website"],
     [{ website: "https://" }, "website"],
+    [{ website: "https://exa\nmple.invalid" }, "website"],
+    [{ website: "https://exa\tmple.invalid" }, "website"],
+    [{ website: "https://sample.invalid/a b" }, "website"],
+    [{ website: "https://sample.invalid/\u202e" }, "website"],
     [{ website: "https://user:pass@sample.invalid" }, "website"],
     [{ website: `https://sample.invalid/${"a".repeat(200)}` }, "website"],
     [{ about: "a".repeat(1001) }, "about"],

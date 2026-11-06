@@ -158,9 +158,17 @@ function cleanJpeg(file: Buffer): LogoCheck {
       kept.push(file.subarray(offset, scanEnd));
       offset = scanEnd;
     } else if (marker === 0xe0) {
-      // Only the JFIF header, which sets the pixel density.
-      if (file.toString("latin1", offset + 4, offset + 9) === "JFIF\0")
-        kept.push(file.subarray(offset, end));
+      // Only the JFIF header, which sets the pixel density, rebuilt without
+      // its thumbnail or anything else its length could carry.
+      if (
+        end >= offset + 18 &&
+        file.toString("latin1", offset + 4, offset + 9) === "JFIF\0"
+      ) {
+        const header = Buffer.from(file.subarray(offset, offset + 18));
+        header.writeUInt16BE(16, 2);
+        header.writeUInt16BE(0, 16);
+        kept.push(header);
+      }
       offset = end;
     } else if (marker === 0xfe || (marker >= 0xe1 && marker <= 0xef)) {
       offset = end; // Comments and EXIF, XMP, ICC and other metadata.

@@ -181,6 +181,34 @@ describe("logo checks: JPEG (#227)", () => {
     expect(latin1(result.bytes)).toContain("JFIF");
   });
 
+  it("rebuilds the JFIF header without its thumbnail", () => {
+    const thumbnail = Buffer.concat([
+      Buffer.from("JFIF\0\x01\x01\0\0\x01\0\x01\x02\x02", "latin1"),
+      secret,
+    ]);
+    const file = Buffer.concat([
+      SOI,
+      jpegSegment(0xe0, thumbnail),
+      QUANT,
+      sof(),
+      HUFFMAN,
+      SCAN,
+      EOI,
+    ]);
+    const result = cleanLogo(file);
+    if ("refused" in result) throw new Error("refused");
+    expect(Buffer.from(result.bytes).equals(jpeg())).toBe(true);
+  });
+
+  it("removes a JFIF header too short to be real", () => {
+    const short = jpegSegment(0xe0, Buffer.from("JFIF\0", "latin1"));
+    const result = cleanLogo(
+      Buffer.concat([SOI, short, QUANT, sof(), HUFFMAN, SCAN, EOI]),
+    );
+    if ("refused" in result) throw new Error("refused");
+    expect(latin1(result.bytes)).not.toContain("JFIF");
+  });
+
   it("reads a progressive image with several scans and skips fill bytes", () => {
     const progressive = jpegSegment(
       0xc2,
