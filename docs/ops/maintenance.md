@@ -39,6 +39,17 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3299/api/health   # e
 
 Then switch the tunnel: in the Cloudflare dashboard, under **Zero Trust → Networks → Tunnels**, change the public hostname's service from `http://localhost:3300` to `http://localhost:3299`. To undo this, change it back. The app itself isn't affected.
 
+Check that the tunnel goes through nginx, because pointing it at 3300 would bypass the page:
+
+```sh
+touch /var/lib/jobflow-maintenance/on
+curl -sI https://jobflow.shivomsangha.com/ | head -1   # expect 503
+rm -f /var/lib/jobflow-maintenance/on
+curl -sI https://jobflow.shivomsangha.com/ | head -1   # expect 200 or a redirect
+```
+
+nginx holds an upload on disk before passing it to the app, so keep at least a few hundred MB free on the system disk.
+
 ## Deploy
 
 Check first, as in [deployment.md](deployment.md#before-you-deploy): `main` is green on the exact commit, the migrations are understood, and a backup has been taken. The owner approves each deploy. Then, as `prod`:
