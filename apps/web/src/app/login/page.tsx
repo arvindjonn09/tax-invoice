@@ -12,7 +12,10 @@ export default function LoginPage() {
       <section className="rounded-lg border bg-card p-6 text-card-foreground">
         <LoginForm />
         <p>
-          <Link href="/forgot-password" className="text-link underline">
+          <Link
+            href="/forgot-password"
+            className="inline-flex min-h-11 items-center text-link underline"
+          >
             Forgot your password?
           </Link>
         </p>

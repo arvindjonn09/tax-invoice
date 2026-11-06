@@ -78,7 +78,10 @@ export function ForgotForm({
           If an account exists for <strong>{state.email}</strong>, we&apos;ve
           sent a link to reset your password. It expires in 1 hour.
         </p>
-        <Link className="text-link underline" href="/login">
+        <Link
+          className="inline-flex min-h-11 items-center text-link underline"
+          href="/login"
+        >
           Back to sign in
         </Link>
       </div>
@@ -121,7 +124,10 @@ export function ForgotForm({
         {state.kind === "pending" ? "Sending…" : "Send reset link"}
       </Button>
       <p>
-        <Link className="text-link underline" href="/login">
+        <Link
+          className="inline-flex min-h-11 items-center text-link underline"
+          href="/login"
+        >
           Back to sign in
         </Link>
       </p>
