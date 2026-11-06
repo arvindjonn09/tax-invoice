@@ -9,13 +9,11 @@ export async function quoteDay(companyId: string) {
     where: { companyId },
     orderBy: { startsOn: "asc" },
   });
-  const status = gstStatusOn(
-    rows.map((row) => ({
-      startsOn: toDay(row.startsOn),
-      endsOn: row.endsOn ? toDay(row.endsOn) : null,
-      basis: row.basis,
-    })),
-    today,
-  );
-  return { today, registeredToday: status.registered };
+  const periods = rows.map((row) => ({
+    startsOn: toDay(row.startsOn),
+    endsOn: row.endsOn ? toDay(row.endsOn) : null,
+    basis: row.basis,
+  }));
+  const status = gstStatusOn(periods, today);
+  return { today, registeredToday: status.registered, periods };
 }
