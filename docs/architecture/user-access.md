@@ -40,17 +40,19 @@ access until acceptance.
   It enforces trusted origin, a streaming 4 KiB JSON limit, shared database IP
   throttling, token validity/expiry and a still-active owner inviter. It locks the
   company row like every administrative write and consumes the invitation with
-  the new membership and audit event in one transaction. Failed acceptance leaves
-  neither an account nor a membership behind.
-- A new user supplies name and a 12–128-character password, hashed using the
-  established Better Auth helper. An existing email requires a signed-in session
-  for that exact account; a token never resets someone else's password. Existing
-  memberships, including inactive ones, require explicit owner access editing
-  rather than invitation-based reactivation. Concurrent new accounts across
-  companies receive a safe conflict and can retry after signing in.
+  the new membership and audit event in one transaction.
+- Joining a company needs a signed-in session for the invited address with a
+  confirmed email (#263). A signed-out caller supplies only a name and gets
+  the same 202 in every case. After the response, a new address gets an account
+  with an unknown password and a set-password email, and an existing one gets an
+  email saying to sign in. The company's data doesn't change, so the owner can't
+  tell which happened. The person then sets their password, which confirms their
+  email, signs in and reopens the link. A token never resets someone else's
+  password. Existing memberships, including inactive ones, require explicit owner
+  access editing rather than invitation-based reactivation.
 - The grant audit attributes authorization to the inviting owner and records the
   recipient user and new membership IDs. Tokens, passwords and email values are
-  absent or redacted. New accounts sign in through Better Auth after acceptance.
+  absent or redacted.
 
 ## API
 
@@ -60,13 +62,14 @@ access until acceptance.
 | Set role and/or active status | `PATCH /api/users/[membershipId]` | `user.manage` |
 | Create invitation | `POST /api/users/invitations` | `user.manage` |
 | Revoke invitation | `DELETE /api/users/invitations/[id]` | `user.manage` |
-| Redeem invitation | `POST /api/invitations/accept` | One-use token; matching session for existing email |
+| Redeem invitation | `POST /api/invitations/accept` | One-use token; joining needs a matching session with a confirmed email |
 
 All JSON responses are private/no-store. CSRF checks precede authentication;
 request IDs and client-supplied company/role overrides never grant permissions.
 Invalid input returns 400, unauthorized roles 403, cross-company IDs 404, unsafe
 owner changes or duplicate memberships/invitations 409, and throttled requests 429.
-An existing account without a matching acceptance session receives 401.
+A signed-out accept gets 202 with or without an existing account, and someone
+signed in as a different user gets 403.
 
 ## Verification and limits
 
