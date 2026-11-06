@@ -42,11 +42,11 @@ access until acceptance.
   company row like every administrative write and consumes the invitation with
   the new membership and audit event in one transaction.
 - Joining a company needs a signed-in session for the invited address with a
-  confirmed email (#263). A signed-out caller supplies a name and a
-  12–128-character password and gets the same 202 in every case. After the
-  response, a new address gets an unverified account and a verification email, and
-  an existing one gets an email saying to sign in. The company's data doesn't
-  change, so the owner can't tell which happened. The person then confirms their
+  confirmed email (#263). A signed-out caller supplies only a name and gets
+  the same 202 in every case. After the response, a new address gets an account
+  with an unknown password and a set-password email, and an existing one gets an
+  email saying to sign in. The company's data doesn't change, so the owner can't
+  tell which happened. The person then sets their password, which confirms their
   email, signs in and reopens the link. A token never resets someone else's
   password. Existing memberships, including inactive ones, require explicit owner
   access editing rather than invitation-based reactivation.

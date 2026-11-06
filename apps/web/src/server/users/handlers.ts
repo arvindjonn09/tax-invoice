@@ -7,7 +7,7 @@ import type {
 } from "../../../../../packages/database/src/generated/prisma/client";
 import { withAudit } from "../../../../../packages/database/src/index";
 import type { AccountDependencies } from "../account/handlers";
-import { invitedExistingEmail, verificationEmail } from "../account/emails";
+import { invitedExistingEmail, invitedNewEmail } from "../account/emails";
 import { issueToken } from "../account/tokens";
 import { createCredentialUser } from "../auth/credentials";
 import { privateJson, type PolicyHandler } from "../authz/policy";
@@ -48,7 +48,6 @@ const Update = z
 const Accept = z.object({
   token: z.string().regex(/^[0-9a-f]{64}$/),
   name: z.string().trim().min(1).max(200).optional(),
-  password: z.string().min(12).max(128).optional(),
 });
 const uuid = z.uuid();
 export const INVITATION_TTL_MS = 48 * 60 * 60 * 1000;
@@ -360,7 +359,6 @@ class MailboxNextStep extends Error {
   constructor(
     readonly email: string,
     readonly name: string,
-    readonly password: string,
     readonly createdBy: string,
   ) {
     super("Continue by email");
@@ -386,7 +384,6 @@ export function acceptInvitation(
     | "emailSecret"
     | "dispatch"
     | "defer"
-    | "isBreached"
   >,
 ) {
   /** Capped like sign-up (S2). */
@@ -422,12 +419,7 @@ export function acceptInvitation(
    * company: no membership, no company audit event and no change to the
    * invitation, so what the owner can read is the same in both cases.
    */
-  const continueByEmail = ({
-    email,
-    name,
-    password,
-    createdBy,
-  }: MailboxNextStep) =>
+  const continueByEmail = ({ email, name, createdBy }: MailboxNextStep) =>
     deps.defer(async () => {
       const db = deps.db();
       const select = { id: true, email: true } as const;
@@ -441,15 +433,17 @@ export function acceptInvitation(
           const user = await createCredentialUser(tx, {
             email,
             name,
-            password,
+            // Nobody knows this: only the mailbox holder sets the real password,
+            // and doing so also confirms the address.
+            password: randomBytes(32).toString("base64url"),
             createdBy,
           });
-          const token = await issueToken(tx, user.id, "email_verification");
+          const token = await issueToken(tx, user.id, "password_reset");
           await enqueueEmail(tx, deps.emailSecret(), {
-            kind: "verify_email",
-            dedupeKey: `verify_email:${user.id}:invitation`,
+            kind: "password_reset",
+            dedupeKey: `password_reset:${user.id}:invitation`,
             userId: user.id,
-            message: verificationEmail(user.email, deps.appUrl(), token),
+            message: invitedNewEmail(user.email, deps.appUrl(), token),
           });
           await tx.platformAuditEvent.create({
             data: {
@@ -540,16 +534,15 @@ export function acceptInvitation(
               "This invitation is invalid or no longer available.",
             );
           if (!session) {
-            const { name, password } = parsed.data;
-            if (!name || !password)
+            const { name } = parsed.data;
+            if (!name)
               throw new HttpError(
                 400,
-                "Enter your name and a password of 12–128 characters. If you already have a JobFlow account, sign in first, then reopen this invitation.",
+                "Enter your name. If you already have a JobFlow account, sign in first, then reopen this invitation.",
               );
             throw new MailboxNextStep(
               invitation.email,
               name,
-              password,
               invitation.createdBy,
             );
           }
@@ -612,18 +605,6 @@ export function acceptInvitation(
       return privateJson({ accepted: true });
     } catch (error) {
       if (error instanceof MailboxNextStep) {
-        // Depends only on the password, so it says nothing about the address.
-        if (await deps.isBreached(error.password))
-          return privateJson(
-            {
-              error: "Check the highlighted fields",
-              fields: {
-                password:
-                  "This password has appeared in a data breach. Choose a different one.",
-              },
-            },
-            { status: 400 },
-          );
         await continueByEmail(error);
         return checkEmail();
       }

@@ -2,8 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
 import {
   type AccountDependencies,
+  forgotPassword,
   resendMine,
   resendVerification,
+  resetPassword,
   signUp,
   verifyEmail,
 } from "../../apps/web/src/server/account/handlers";
@@ -522,5 +524,327 @@ describe("verified-session gating", () => {
       params: Promise.resolve({}),
     });
     expect(refused.status).toBe(403);
+  });
+});
+
+describe("password reset", () => {
+  const NEW_PASSWORD = "a brand new synthetic password";
+  const forgot = (email: string, ip?: string) =>
+    forgotPassword(deps)(post("/api/account/password/forgot", { email }, ip));
+  const reset = (token: unknown, password = NEW_PASSWORD, ip?: string) =>
+    resetPassword(deps)(
+      post(
+        "/api/account/password/reset",
+        { token, password, passwordConfirmation: password },
+        ip,
+      ),
+    );
+  let counter = 0;
+  const newUser = async (verified = false) => {
+    const email = `reset-${++counter}@synthetic.example.com`;
+    const user = await client.user.create({
+      data: { email, name: "Reset User", emailVerified: verified },
+    });
+    await client.authAccount.create({
+      data: {
+        userId: user.id,
+        accountId: user.id,
+        providerId: "credential",
+        password: "old-hash",
+      },
+    });
+    return user;
+  };
+  const latestToken = async (email: string) => {
+    const emails = await emailsFor(email);
+    const message = emails.filter((row) => row.kind === "password_reset").at(-1)
+      ?.message as { text: string } | null | undefined;
+    return tokenFrom(message?.text ?? "");
+  };
+  const passwordOf = async (userId: string) =>
+    (
+      await client.authAccount.findFirstOrThrow({
+        where: { userId, providerId: "credential" },
+      })
+    ).password;
+
+  it("answers the same 202 for known and unknown addresses, and emails only the known one", async () => {
+    const user = await newUser();
+    const known = await forgot(user.email);
+    const unknown = await forgot("nobody-here@synthetic.example.com");
+    expect(known.status).toBe(202);
+    expect(unknown.status).toBe(202);
+    expect(await known.json()).toEqual(await unknown.json());
+    expect(await latestToken(user.email)).toBeTruthy();
+    expect(
+      await client.emailOutbox.count({
+        where: { userId: user.id, kind: "password_reset" },
+      }),
+    ).toBe(1);
+  });
+
+  it("does no account work before answering, so timing can't reveal one", async () => {
+    const user = await newUser();
+    const deferred: (() => Promise<void>)[] = [];
+    const held: AccountDependencies = {
+      ...deps,
+      defer: (work) => {
+        deferred.push(work);
+      },
+    };
+    const response = await forgotPassword(held)(
+      post("/api/account/password/forgot", { email: user.email }),
+    );
+    expect(response.status).toBe(202);
+    expect(
+      await client.accountToken.count({ where: { userId: user.id } }),
+    ).toBe(0);
+    expect(deferred).toHaveLength(1);
+  });
+
+  it("sends nothing to a demo account in production", async () => {
+    const user = await client.user.create({
+      data: { email: "reset-demo@example.test", name: "Demo" },
+    });
+    production = true;
+    try {
+      expect((await forgot(user.email)).status).toBe(202);
+    } finally {
+      production = false;
+    }
+    expect(await client.emailOutbox.count({ where: { userId: user.id } })).toBe(
+      0,
+    );
+  });
+
+  it("refuses a failed Turnstile", async () => {
+    turnstileOk = false;
+    try {
+      const response = await forgot("anyone@synthetic.example.com");
+      expect(response.status).toBe(400);
+      expect((await response.json()).code).toBe("turnstile_failed");
+    } finally {
+      turnstileOk = true;
+    }
+  });
+
+  it("limits an account to 3 an hour: still 202, no email, counted", async () => {
+    const user = await newUser();
+    for (let i = 0; i < 3; i += 1) await forgot(user.email);
+    const response = await forgot(user.email);
+    expect(response.status).toBe(202);
+    expect(
+      await client.emailOutbox.count({
+        where: { userId: user.id, kind: "password_reset" },
+      }),
+    ).toBe(3);
+    expect(
+      await client.platformAuditEvent.count({
+        where: {
+          userId: user.id,
+          action: "account.password_reset_throttled",
+        },
+      }),
+    ).toBe(1);
+  });
+
+  it("limits an IP to 10 an hour: still 202, no email, counted", async () => {
+    const ip = "203.0.113.77";
+    const user = await newUser();
+    for (let i = 0; i < 10; i += 1) {
+      await forgot(`nobody-${i}@synthetic.example.com`, ip);
+    }
+    const before = await client.platformAuditEvent.count({
+      where: { action: "account.password_reset_throttled", userId: null },
+    });
+    const response = await forgot(user.email, ip);
+    expect(response.status).toBe(202);
+    expect(await client.emailOutbox.count({ where: { userId: user.id } })).toBe(
+      0,
+    );
+    expect(
+      await client.platformAuditEvent.count({
+        where: { action: "account.password_reset_throttled", userId: null },
+      }),
+    ).toBe(before + 1);
+  });
+
+  it("replaces the hash, ends every session, verifies the address and sends the notice", async () => {
+    const user = await newUser();
+    for (const token of ["session-a", "session-b"]) {
+      await client.authSession.create({
+        data: {
+          userId: user.id,
+          token: `${user.id}-${token}`,
+          expiresAt: new Date(Date.now() + 3_600_000),
+        },
+      });
+    }
+    await forgot(user.email);
+    const token = await latestToken(user.email);
+
+    const response = await reset(token);
+
+    expect(response.status).toBe(200);
+    expect(await passwordOf(user.id)).toBe("hashed");
+    expect(await client.authSession.count({ where: { userId: user.id } })).toBe(
+      0,
+    );
+    expect(
+      (await client.user.findUniqueOrThrow({ where: { id: user.id } }))
+        .emailVerified,
+    ).toBe(true);
+    const emails = await emailsFor(user.email);
+    const notice = emails.find((row) => row.kind === "password_changed");
+    expect(notice?.status).toBe("pending");
+    expect((notice?.message as { text: string }).text).not.toContain("#token=");
+  });
+
+  it("is single-use, and a new request supersedes the old link", async () => {
+    const used = await newUser();
+    await forgot(used.email);
+    const once = await latestToken(used.email);
+    expect((await reset(once)).status).toBe(200);
+    await client.authAccount.updateMany({
+      where: { userId: used.id },
+      data: { password: "kept" },
+    });
+    const replay = await reset(once);
+    expect(replay.status).toBe(400);
+    expect((await replay.json()).code).toBe("token_invalid");
+    expect(await passwordOf(used.id)).toBe("kept");
+
+    const user = await newUser();
+    await forgot(user.email);
+    const first = await latestToken(user.email);
+    await forgot(user.email);
+    expect((await reset(first)).status).toBe(400);
+    expect(await passwordOf(user.id)).toBe("old-hash");
+    expect((await reset(await latestToken(user.email))).status).toBe(200);
+  });
+
+  it("refuses an expired token and leaves everything unchanged", async () => {
+    const user = await newUser();
+    await forgot(user.email);
+    const token = await latestToken(user.email);
+    await client.accountToken.updateMany({
+      where: { userId: user.id, purpose: "password_reset" },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    const response = await reset(token);
+    expect(response.status).toBe(400);
+    expect(await passwordOf(user.id)).toBe("old-hash");
+    expect(
+      (await client.user.findUniqueOrThrow({ where: { id: user.id } }))
+        .emailVerified,
+    ).toBe(false);
+  });
+
+  it("checks the new password before spending the token", async () => {
+    const user = await newUser();
+    await forgot(user.email);
+    const token = await latestToken(user.email);
+    expect((await reset(token, "too short")).status).toBe(400);
+    const mismatch = await resetPassword(deps)(
+      post("/api/account/password/reset", {
+        token,
+        password: NEW_PASSWORD,
+        passwordConfirmation: "something else entirely",
+      }),
+    );
+    expect(mismatch.status).toBe(400);
+    breached = true;
+    try {
+      const refused = await reset(token);
+      expect(refused.status).toBe(400);
+      expect((await refused.json()).fields.password).toContain("breach");
+    } finally {
+      breached = false;
+    }
+    expect(await passwordOf(user.id)).toBe("old-hash");
+    expect((await reset(token)).status).toBe(200);
+  });
+
+  it("rolls everything back if the transaction fails", async () => {
+    const user = await newUser();
+    await forgot(user.email);
+    const token = await latestToken(user.email);
+    const broken: AccountDependencies = {
+      ...deps,
+      emailSecret: () => "short",
+    };
+    const response = await resetPassword(broken)(
+      post("/api/account/password/reset", {
+        token,
+        password: NEW_PASSWORD,
+        passwordConfirmation: NEW_PASSWORD,
+      }),
+    );
+    expect(response.status).toBe(500);
+    expect(await passwordOf(user.id)).toBe("old-hash");
+    expect((await reset(token)).status).toBe(200);
+  });
+
+  it("never reactivates a membership", async () => {
+    const factory = syntheticFactory(219);
+    const user = await newUser();
+    const owner = factory.user();
+    const company = { ...factory.company(owner.id), isDemo: false };
+    await client.user.create({ data: owner });
+    await client.$transaction(async (tx) => {
+      await tx.company.create({ data: company });
+      await tx.membership.create({
+        data: factory.membership(company.id, owner.id),
+      });
+      await tx.membership.create({
+        data: {
+          ...factory.membership(company.id, user.id),
+          createdBy: owner.id,
+          role: "manager",
+          isActive: false,
+        },
+      });
+    });
+    await forgot(user.email);
+    expect((await reset(await latestToken(user.email))).status).toBe(200);
+    expect(
+      (
+        await client.membership.findFirstOrThrow({
+          where: { userId: user.id },
+        })
+      ).isActive,
+    ).toBe(false);
+  });
+
+  it("keeps Better Auth's own reset and verification endpoints disabled", async () => {
+    const auth = deps.auth();
+    for (const path of [
+      "request-password-reset",
+      "reset-password",
+      "send-verification-email",
+      "verify-email",
+    ]) {
+      const response = await auth.handler(
+        new Request(`${ORIGIN}/api/auth/${path}`, {
+          method: "POST",
+          headers: { origin: ORIGIN, "content-type": "application/json" },
+          body: JSON.stringify({ email: "x@synthetic.example.com" }),
+        }),
+      );
+      expect(response.status, path).toBe(404);
+    }
+  });
+
+  it("puts no address or token in audit metadata", async () => {
+    const user = await newUser();
+    await forgot(user.email);
+    const token = await latestToken(user.email);
+    await reset(token);
+    const events = await client.platformAuditEvent.findMany({
+      where: { userId: user.id },
+    });
+    const text = JSON.stringify(events.map((event) => event.metadata));
+    expect(text).not.toContain(user.email);
+    expect(text).not.toContain(token!);
   });
 });

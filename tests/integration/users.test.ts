@@ -1,8 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
+import { resetPassword } from "../../apps/web/src/server/account/handlers";
 import { createAuth } from "../../apps/web/src/server/auth/config";
-import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
+import { decryptPayload } from "../../apps/web/src/server/email/crypto";
+import {
+  createCredentialUser,
+  hashPassword,
+} from "../../apps/web/src/server/auth/credentials";
 import {
   resolveActor,
   setActiveCompany,
@@ -19,8 +24,8 @@ import {
 import { syntheticFactory } from "../helpers/factories";
 
 const ORIGIN = "http://127.0.0.1:3000";
-const BREACHED = "a known breached password";
 const PASSWORD = "synthetic password for tests";
+const SECRET = "test-outbox-key-0123456789abcdef-0123456789";
 const ROLES = [
   "owner",
   "manager",
@@ -118,10 +123,9 @@ beforeAll(async () => {
     db: () => db,
     trustedOrigins: () => [ORIGIN],
     appUrl: () => ORIGIN,
-    emailSecret: () => "test-outbox-key-0123456789abcdef-0123456789",
+    emailSecret: () => SECRET,
     dispatch: () => {},
     defer: (work: () => Promise<void>) => work(),
-    isBreached: async (password: string) => password === BREACHED,
   });
   for (const who of [...ROLES, "outsider", "secondOwner"] as const) {
     userIds[who] = (
@@ -533,7 +537,43 @@ describe("invitations", () => {
     return incoming;
   };
 
-  it("creates only an unverified account signed out, then joins once its mailbox is confirmed", async () => {
+  /** Follows the emailed link, as only the mailbox holder can. */
+  const setPasswordFromEmail = async (userId: string) => {
+    const [email] = await db.emailOutbox.findMany({
+      where: { userId, kind: "password_reset" },
+      orderBy: { createdAt: "desc" },
+      take: 1,
+    });
+    const text = decryptPayload(SECRET, email!.payloadCiphertext!).text;
+    const token = /#token=([A-Za-z0-9_-]{43})/.exec(text)![1]!;
+    const response = await resetPassword({
+      db: () => db,
+      auth: () => auth,
+      trustedOrigins: () => [ORIGIN],
+      appUrl: () => ORIGIN,
+      emailSecret: () => SECRET,
+      dispatch: () => {},
+      isBreached: async () => false,
+      hashPassword,
+    } as never)(
+      new Request(`${ORIGIN}/api/account/password/reset`, {
+        method: "POST",
+        headers: {
+          origin: ORIGIN,
+          "content-type": "application/json",
+          "x-forwarded-for": `198.51.100.${++ip}`,
+        },
+        body: JSON.stringify({
+          token,
+          password: PASSWORD,
+          passwordConfirmation: PASSWORD,
+        }),
+      }),
+    );
+    expect(response.status).toBe(200);
+  };
+
+  it("lets only the mailbox holder set the password, then join", async () => {
     const issued = await invitation("joining@jobflow.invalid", "accountant");
     const response = await accept(
       request(null, "POST", {
@@ -550,22 +590,19 @@ describe("invitations", () => {
     });
     expect(user.emailVerified).toBe(false);
     expect(await db.membership.count({ where: { userId: user.id } })).toBe(0);
-    const credential = await db.authAccount.findFirstOrThrow({
-      where: { userId: user.id },
-    });
-    expect(credential.password).not.toBe(PASSWORD);
+    // A password in the request means nothing: whoever sent it can't sign in.
+    expect((await signIn(issued.email)).status).toBe(401);
 
-    const unverified = request(null, "POST", { token: issued.token });
-    unverified.headers.set(
+    await setPasswordFromEmail(user.id);
+    expect(
+      (await db.user.findUniqueOrThrow({ where: { id: user.id } }))
+        .emailVerified,
+    ).toBe(true);
+    const joining = request(null, "POST", { token: issued.token });
+    joining.headers.set(
       "cookie",
       (await signIn(issued.email)).headers.getSetCookie()[0]!.split(";")[0]!,
     );
-    expect((await accept(unverified)).status).toBe(403);
-    expect(await db.membership.count({ where: { userId: user.id } })).toBe(0);
-
-    const joining = await verifiedRequest(issued.email, {
-      token: issued.token,
-    });
     expect((await accept(joining)).status).toBe(200);
     expect(
       await db.membership.findUnique({
@@ -586,6 +623,24 @@ describe("invitations", () => {
     ).toBe(1);
   });
 
+  it("refuses to add a signed-in account whose email isn't confirmed", async () => {
+    const existing = await createCredentialUser(db, {
+      email: `unconfirmed-${crypto.randomUUID()}@jobflow.invalid`,
+      name: "Unconfirmed Sample",
+      password: PASSWORD,
+    });
+    const issued = await invitation(existing.email);
+    const incoming = request(null, "POST", { token: issued.token });
+    incoming.headers.set(
+      "cookie",
+      (await signIn(existing.email)).headers.getSetCookie()[0]!.split(";")[0]!,
+    );
+    expect((await accept(incoming)).status).toBe(403);
+    expect(await db.membership.count({ where: { userId: existing.id } })).toBe(
+      0,
+    );
+  });
+
   it("serializes simultaneous redemption so it grants one membership and one acceptance event", async () => {
     const issued = await invitation("race@jobflow.invalid");
     const signedOut = await Promise.all(
@@ -594,15 +649,18 @@ describe("invitations", () => {
           request(null, "POST", {
             token: issued.token,
             name: "Race Sample",
-            password: PASSWORD,
           }),
         ),
       ),
     );
     expect(signedOut.map((r) => r.status)).toEqual([202, 202]);
-    expect(
-      await db.user.count({ where: { email: "race@jobflow.invalid" } }),
-    ).toBe(1);
+    await setPasswordFromEmail(
+      (
+        await db.user.findUniqueOrThrow({
+          where: { email: "race@jobflow.invalid" },
+        })
+      ).id,
+    );
     const responses = await Promise.all(
       await Promise.all(
         Array.from({ length: 2 }, () =>
@@ -740,7 +798,7 @@ describe("invitations", () => {
       status: response.status,
       body: await response.json(),
     });
-    const details = { name: "Synthetic Person", password: PASSWORD };
+    const details = { name: "Synthetic Person" };
 
     it("answers a signed-out caller identically, with and without details", async () => {
       const taken = await invitation(
@@ -817,30 +875,6 @@ describe("invitations", () => {
       expect(await state(taken)).toEqual(await state(free));
     });
 
-    it("refuses a breached password the same way in both cases, and creates nothing", async () => {
-      const taken = await invitation(
-        `oracle-breach-existing-${crypto.randomUUID()}@jobflow.invalid`,
-        "manager",
-      );
-      await db.user.create({ data: { email: taken.email, name: "Here" } });
-      const free = await invitation(
-        `oracle-breach-new-${crypto.randomUUID()}@jobflow.invalid`,
-        "manager",
-      );
-      const submit = (token: string) =>
-        accept(
-          request(null, "POST", {
-            token,
-            name: "Synthetic Person",
-            password: BREACHED,
-          }),
-        ).then(answer);
-      const existing = await submit(taken.token);
-      expect(existing.status).toBe(400);
-      expect(existing).toEqual(await submit(free.token));
-      expect(await db.user.count({ where: { email: free.email } })).toBe(0);
-    });
-
     it("refuses someone signed in as another user identically", async () => {
       const taken = await invitation(
         `oracle-signed-in-${crypto.randomUUID()}@jobflow.invalid`,
@@ -887,7 +921,7 @@ describe("invitations", () => {
       ).toBe(1);
     });
 
-    it("sends a new account its verification email, and leaves it unverified", async () => {
+    it("sends a new account a set-password email, and leaves it unverified", async () => {
       const issued = await invitation(
         `oracle-verify-${crypto.randomUUID()}@jobflow.invalid`,
         "manager",
@@ -899,7 +933,7 @@ describe("invitations", () => {
       expect(user.emailVerified).toBe(false);
       expect(
         await db.emailOutbox.count({
-          where: { userId: user.id, kind: "verify_email" },
+          where: { userId: user.id, kind: "password_reset" },
         }),
       ).toBe(1);
     });
