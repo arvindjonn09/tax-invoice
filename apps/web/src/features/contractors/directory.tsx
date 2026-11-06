@@ -8,6 +8,7 @@ import { TextField, Field } from "@/components/form/field";
 import { useRemote } from "@/components/data/use-remote";
 import { ContractorEditor } from "./editor";
 import type { Contractor } from "./types";
+import { count } from "@/lib/plural";
 export function ContractorDirectory({ editable }: { editable: boolean }) {
   const router = useRouter();
   const [creating, setCreating] = useState(false),
@@ -89,7 +90,7 @@ export function ContractorDirectory({ editable }: { editable: boolean }) {
       ) : data ? (
         <>
           <p className="text-sm text-muted-foreground">
-            {data.total} contractors · Page {page} of{" "}
+            {count(data.total, "contractor")} · Page {page} of{" "}
             {Math.max(1, Math.ceil(data.total / data.pageSize))} · Name A–Z
           </p>
           {data.contractors.length ? (

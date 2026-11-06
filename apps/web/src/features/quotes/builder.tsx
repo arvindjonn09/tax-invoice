@@ -211,7 +211,11 @@ export function QuoteBuilder({
     setErrors({});
     setDirty(false);
     setMessage({ kind: "success", text: "Draft saved." });
-    if (!saved) window.history.replaceState(null, "", `/quotes/${next.id}`);
+    if (!saved) {
+      window.history.replaceState(null, "", `/quotes/${next.id}`);
+      // The tab names the saved quote, not "New quote" (#307).
+      document.title = `${next.kind === "variation" ? "Variation" : "Quote"} ${next.reference} · JobFlow`;
+    }
   }
 
   async function send() {

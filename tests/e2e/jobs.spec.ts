@@ -103,7 +103,14 @@ test("owner creates a job, schedules a visit, assigns and ends work, and changes
     .getByRole("button", { name: "Update status", exact: true })
     .click();
   await expect(page.getByLabel("Next status")).toContainText("Assigned");
+  await expect(page.getByText("Status updated.", { exact: true })).toHaveCount(
+    1,
+  );
   await page.getByRole("tab", { name: "Visits", exact: true }).click();
+  // #307: an earlier success doesn't linger into another section.
+  await expect(page.getByText("Status updated.", { exact: true })).toHaveCount(
+    0,
+  );
   await page.getByRole("button", { name: "Add visit", exact: true }).click();
   await page
     .getByLabel("Visit start *", { exact: true })
@@ -116,6 +123,17 @@ test("owner creates a job, schedules a visit, assigns and ends work, and changes
   await expect(page.getByText("Visit saved.", { exact: true })).toBeVisible();
   const visits = (await (await page.request.get(`/api/jobs/${id}`)).json())
     .visits as { id: string }[];
+  // #307: the customer's page lists this job in its history.
+  const { reference } = (await (
+    await page.request.get(`/api/jobs/${id}`)
+  ).json()) as { reference: string };
+  await page.goto(`/customers/${seeded.customer.id}`);
+  await expect(
+    page
+      .getByRole("region", { name: "Job and invoice history" })
+      .getByRole("link", { name: new RegExp(reference) }),
+  ).toHaveAttribute("href", `/jobs/${id}`);
+  await page.goto(`/jobs/${id}`);
   const visitId = visits[0]!.id;
   const preciseStart = "2026-11-08T21:30:12.123Z";
   await write(
