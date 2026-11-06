@@ -2,6 +2,7 @@ import {
   type AgeingDocument,
   ageingReport,
   cashMovementReport,
+  owedAsAt,
 } from "@jobflow/domain";
 import type {
   Prisma,
@@ -29,6 +30,7 @@ export type AgeingSource = {
 };
 
 const day = (value: Date | null) => (value ? businessDay(value) : null);
+const fromDay = (value: string) => new Date(`${value}T00:00:00Z`);
 
 /**
  * Issued invoices with something owed at the end of `asAt`. Without
@@ -151,8 +153,115 @@ export async function receivablesSource(
   return { documents, labels, parties };
 }
 
-/** Supplier bills with something owed at the end of `asAt` (see above). */
+/**
+ * What is owed to suppliers at the end of `asAt` (#300): supplier bills
+ * (below) plus approved on-account expenses (docs/DATA_MODEL.md, #141). A
+ * supplier payment settles bills or expenses, never both, so nothing is
+ * counted twice; the two kinds of document share a supplier's party.
+ */
 export async function payablesSource(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  asAt: string,
+  options: { bounded?: boolean } = {},
+): Promise<AgeingSource> {
+  const bills = await billPayablesSource(tx, companyId, asAt, options);
+  const expenses = await onAccountExpensesSource(tx, companyId, asAt, options);
+  for (const [id, label] of expenses.labels) bills.labels.set(id, label);
+  for (const [id, party] of expenses.parties)
+    if (!bills.parties.has(id)) bills.parties.set(id, party);
+  return {
+    documents: [...bills.documents, ...expenses.documents],
+    labels: bills.labels,
+    parties: bills.parties,
+  };
+}
+
+/**
+ * Approved original expenses settled "on account" (#141, #300): each owes
+ * its supplier its GST-inclusive total, less live supplier payments
+ * allocated to it, from its purchase date, and only once it was approved
+ * (by the end of `asAt`, Sydney time). A supplier-credit reversal cancels
+ * what was owed from the day it was recorded; a cost-only reversal doesn't
+ * (the supplier is still owed; see expenseBalances in server/bills).
+ * Paid-at-purchase, unapproved and fully paid expenses add nothing.
+ */
+export async function onAccountExpensesSource(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  asAt: string,
+  { bounded = true }: { bounded?: boolean } = {},
+): Promise<AgeingSource> {
+  const rows = await tx.expense.findMany({
+    where: {
+      companyId,
+      status: "approved",
+      settlement: "on_account",
+      reversesId: null,
+      purchasedOn: { lte: fromDay(asAt) },
+    },
+    select: {
+      id: true,
+      description: true,
+      supplierName: true,
+      purchasedOn: true,
+      inclusiveCents: true,
+      decidedAt: true,
+      reversedBy: {
+        select: { settlement: true, status: true, decidedAt: true },
+      },
+      supplierPaymentAllocations: {
+        select: {
+          amountCents: true,
+          payment: { select: { paidOn: true, voidedAt: true } },
+        },
+      },
+    },
+  });
+  const labels = new Map<string, AgeingLabel>();
+  const parties: AgeingSource["parties"] = new Map();
+  const documents: AgeingDocument[] = [];
+  for (const row of rows) {
+    // Not owed until it was approved, as at the chosen day.
+    if (!row.decidedAt || businessDay(row.decidedAt) > asAt) continue;
+    const credit =
+      row.reversedBy?.settlement === "on_account" &&
+      row.reversedBy.status === "approved"
+        ? row.reversedBy.decidedAt
+        : null;
+    const document: AgeingDocument = {
+      id: row.id,
+      partyId: "",
+      issuedOn: toDay(row.purchasedOn),
+      dueOn: null,
+      inclusive: row.inclusiveCents,
+      // A supplier-credit reversal ends what was owed, like a void.
+      voidedOn: day(credit),
+      settlements: row.supplierPaymentAllocations.map((a) => ({
+        on: toDay(a.payment.paidOn),
+        amount: a.amountCents,
+        voidedOn: day(a.payment.voidedAt),
+      })),
+    };
+    // Bounded reads, like bills, load nothing that's settled as at the day.
+    if (bounded && owedAsAt(document, asAt) === 0n) continue;
+    const name = row.supplierName?.trim() || "Supplier not recorded";
+    const partyId = row.supplierName?.trim()
+      ? `supplier:${row.supplierName.trim().toLowerCase()}`
+      : "supplier:";
+    labels.set(row.id, {
+      reference: row.description,
+      partyName: name,
+      partyType: "supplier",
+    });
+    parties.set(partyId, { name, type: "supplier" });
+    documents.push({ ...document, partyId });
+  }
+  return { documents, labels, parties };
+}
+
+/** Supplier bills with something owed at the end of `asAt` (see above). */
+async function billPayablesSource(
   tx: Prisma.TransactionClient,
   companyId: string,
   asAt: string,

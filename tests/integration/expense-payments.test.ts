@@ -11,6 +11,9 @@ import {
   supplierPaymentHandlers,
 } from "../../apps/web/src/server/bills/handlers";
 import { expenseHandlers } from "../../apps/web/src/server/expenses/handlers";
+import { dashboardHandler } from "../../apps/web/src/server/dashboard/handlers";
+import { payablesSource } from "../../apps/web/src/server/reports/ledger";
+import { ageingReport } from "../../packages/domain/src/index";
 import {
   type CommittedDatabase,
   withCommittedDatabase,
@@ -52,6 +55,10 @@ function makeRoutes() {
     pay: withPolicy("payment.write", payments.create),
     payment: withPolicy<One>("payment.read", payments.read),
     voidPayment: withPolicy<One>("payment.write", payments.void),
+    dashboard: withPolicy(
+      "job.profit.read",
+      dashboardHandler(() => db),
+    ),
   };
 }
 
@@ -711,5 +718,197 @@ describe("paying on-account expenses (#141)", () => {
     ).toBe(400);
     expect(await balanceOf(expenseId)).toMatchObject({ paidCents: "1000" });
     expect(await profitOf(job)).toEqual({ cost: "15000", profit: "235000" });
+  });
+});
+
+// #300: supplier money owed counts approved on-account expenses as well as
+// bills, on the dashboard and in the ageing report alike.
+describe("on-account expenses in supplier money owed (#300)", () => {
+  const today = sydneyToday();
+  /** Ageing as at `asAt`: the whole report and the given rows' owed. */
+  async function ageing(asAt: string) {
+    const source = await db.$transaction((tx) =>
+      payablesSource(tx, companyId, asAt),
+    );
+    const report = ageingReport(source.documents, asAt);
+    const owed = (id: string) =>
+      report.rows.find((row) => row.id === id)?.owed.toString() ?? "0";
+    return { report, source, owed };
+  }
+  async function dashboardPayables(query = "") {
+    const response = await routes.dashboard(
+      new Request(
+        `${ORIGIN}/api/dashboard?from=2026-07-01&to=${today}${query}`,
+        {
+          headers: call("owner").headers,
+        },
+      ),
+      undefined,
+    );
+    expect(response.status).toBe(200);
+    return (
+      (await response.json()) as { ledger: { payables: { total: string } } }
+    ).ledger.payables.total;
+  }
+
+  it("counts an approved on-account expense at its inclusive total, less live payments", async () => {
+    const job = await newJob();
+    const expenseId = await onAccount(job, "Synthetic 300 Owed", "300000");
+    expect((await ageing(today)).owed(expenseId)).toBe("330000");
+    expect(await dashboardPayables(`&jobId=${job}`)).toBe("330000");
+    const first = await pay([{ expenseId, amountCents: "100000" }]);
+    expect(first.status).toBe(201);
+    expect((await ageing(today)).owed(expenseId)).toBe("230000");
+    expect(await dashboardPayables(`&jobId=${job}`)).toBe("230000");
+    // A voided payment no longer counts.
+    const { id: paymentId } = (await first.json()) as { id: string };
+    expect(
+      (
+        await routes.voidPayment(
+          call("accountant", { reason: "Synthetic void" }),
+          one(paymentId),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await ageing(today)).owed(expenseId)).toBe("330000");
+    // Dated today: the voided payment was live until today.
+    const rest = await pay([{ expenseId, amountCents: "330000" }], {
+      paidOn: today,
+    });
+    expect(rest.status, await rest.clone().text()).toBe(201);
+    const paid = await ageing(today);
+    expect(paid.owed(expenseId)).toBe("0");
+    // Bounded reads load nothing that's settled.
+    expect(paid.source.documents.some((d) => d.id === expenseId)).toBe(false);
+    expect(await dashboardPayables(`&jobId=${job}`)).toBe("0");
+  });
+
+  it("paid-at-purchase and unapproved expenses add nothing", async () => {
+    const job = await newJob();
+    const base = {
+      jobId: job,
+      category: "materials",
+      description: "Synthetic sundries",
+      supplierName: "Synthetic 300 Nothing",
+      purchasedOn: "2026-07-01",
+      priceEntry: "exclusive",
+      amountCents: "5000",
+      taxCode: "TAXABLE_10",
+    };
+    const card = await routes.submit(
+      call("manager", {
+        ...base,
+        settlement: "paid_at_purchase",
+        paymentMethod: "card",
+      }),
+      undefined,
+    );
+    const cardId = ((await card.json()) as { id: string }).id;
+    await routes.decide(call("manager", { decision: "approve" }), one(cardId));
+    const pending = await routes.submit(
+      call("manager", { ...base, settlement: "on_account" }),
+      undefined,
+    );
+    expect(pending.status).toBe(201);
+    const pendingId = ((await pending.json()) as { id: string }).id;
+    const { owed } = await ageing(today);
+    expect(owed(cardId)).toBe("0");
+    expect(owed(pendingId)).toBe("0");
+    expect(await dashboardPayables(`&jobId=${job}`)).toBe("0");
+  });
+
+  it("respects the as-at day: nothing before approval or purchase", async () => {
+    const expenseId = await onAccount(null, "Synthetic 300 As At");
+    // Approved today, so not owed as at yesterday or at purchase.
+    const yesterday = new Date(`${today}T00:00:00Z`);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    for (const asAt of [
+      "2026-06-30",
+      "2026-07-01",
+      yesterday.toISOString().slice(0, 10),
+    ])
+      expect((await ageing(asAt)).owed(expenseId), asAt).toBe("0");
+    expect((await ageing(today)).owed(expenseId)).toBe("16500");
+  });
+
+  it("a supplier credit cancels it; a cost-only reversal still owes", async () => {
+    const credited = await onAccount(null, "Synthetic 300 Credit");
+    const costOnly = await onAccount(null, "Synthetic 300 Cost Only");
+    expect((await reverse(credited, "supplier_credit")).status).toBe(201);
+    expect((await reverse(costOnly, "none")).status).toBe(201);
+    const { owed, source } = await ageing(today);
+    expect(owed(credited)).toBe("0");
+    expect(owed(costOnly)).toBe("16500");
+    // Reversal rows never owe in their own right.
+    const reversals = await db.expense.findMany({
+      where: { reversesId: { in: [credited, costOnly] } },
+      select: { id: true },
+    });
+    expect(reversals).toHaveLength(2);
+    for (const { id } of reversals) expect(owed(id)).toBe("0");
+    expect(source.labels.get(costOnly)).toEqual({
+      reference: "Synthetic cable and conduit",
+      partyName: "Synthetic 300 Cost Only",
+      partyType: "supplier",
+    });
+  });
+
+  it("dashboard and ageing totals agree, with bills and expenses each counted once", async () => {
+    const job = await newJob();
+    const expenseId = await onAccount(job, "Synthetic 300 Both");
+    const bill = await routes.bill(
+      call("accountant", {
+        jobId: job,
+        supplierName: "Synthetic 300 Both",
+        supplierGstRegistered: false,
+        issuedOn: "2026-07-02",
+        lines: [
+          {
+            description: "Synthetic hire",
+            taxCode: "GST_FREE",
+            exclusiveCents: "20000",
+            gstCents: "0",
+          },
+        ],
+      }),
+      undefined,
+    );
+    expect(bill.status).toBe(201);
+    const billId = ((await bill.json()) as { id: string }).id;
+    const { report, source, owed } = await ageing(today);
+    expect(owed(expenseId)).toBe("16500");
+    expect(owed(billId)).toBe("20000");
+    // One document per record; bill and expense ids never collide.
+    const ids = source.documents.map((d) => d.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(
+      report.parties
+        .find((p) => p.partyId === "supplier:synthetic 300 both")
+        ?.total.toString(),
+    ).toBe("36500");
+    expect(await dashboardPayables(`&jobId=${job}`)).toBe("36500");
+    expect(await dashboardPayables(`&customerId=${customerId}`)).toBe(
+      await db.$transaction(async (tx) => {
+        const docs = (await payablesSource(tx, companyId, today)).documents;
+        const ofCustomer = new Set(
+          [
+            ...(await tx.supplierBill.findMany({
+              where: { companyId, job: { customerId } },
+              select: { id: true },
+            })),
+            ...(await tx.expense.findMany({
+              where: { companyId, job: { customerId } },
+              select: { id: true },
+            })),
+          ].map((row) => row.id),
+        );
+        return ageingReport(
+          docs.filter((d) => ofCustomer.has(d.id)),
+          today,
+        ).totals.total.toString();
+      }),
+    );
+    // Unfiltered, the dashboard equals the whole ageing report.
+    expect(await dashboardPayables()).toBe(report.totals.total.toString());
   });
 });
