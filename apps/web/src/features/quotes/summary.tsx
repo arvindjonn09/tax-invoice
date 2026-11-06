@@ -1,3 +1,4 @@
+import { GstRow } from "@/components/gst-row";
 import { MoneyDisplay, formatAudCents } from "@/components/money-display";
 import { type Quote, percent } from "./types";
 
@@ -8,9 +9,12 @@ import { type Quote, percent } from "./types";
 export function QuoteSummary({
   quote,
   stale,
+  registered,
 }: {
   quote: Quote | null;
   stale: boolean;
+  /** For a draft, registration on the send date; else the quote's own. */
+  registered?: boolean | null;
 }) {
   return (
     <div className="space-y-4">
@@ -44,14 +48,11 @@ export function QuoteSummary({
                   />
                 </dd>
               </div>
-              <div className="flex justify-between gap-4">
-                <dt className="shrink-0">GST</dt>
-                <dd className="tabular-nums">
-                  {quote.gstRegistered === false
-                    ? "No GST charged"
-                    : `${formatAudCents(BigInt(quote.gstCents))} AUD`}
-                </dd>
-              </div>
+              <GstRow
+                gstCents={quote.gstCents}
+                registered={registered ?? quote.gstRegistered}
+                action="send"
+              />
               <div className="flex justify-between gap-4 text-lg font-semibold">
                 <dt className="shrink-0">Total</dt>
                 <dd>
