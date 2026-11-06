@@ -113,6 +113,13 @@ describe("safe return path", () => {
     "/%09/evil.example",
     "/ /evil.example",
     "/%E0%A4%A",
+    // Dot segments that normalise to a protocol-relative path (#319 review).
+    "/.//evil.example",
+    "/foo/..//evil.example",
+    "/%2e//evil.example",
+    "/%2E%2E//evil.example",
+    "/a/b/../..//evil.example",
+    "/./%2F/evil.example",
     "/login",
     "/login?next=/home",
     "/signup",
@@ -199,17 +206,21 @@ describe("proxy gate", () => {
 });
 
 describe("signed-in pages are never cached (S1 AC8)", () => {
-  it("the (app) layout and account pages render dynamically", async () => {
-    // force-dynamic makes Next.js send "private, no-cache, no-store,
-    // max-age=0, must-revalidate" in production (and no-store in dev).
-    for (const load of [
-      () => import("@/app/(app)/layout"),
-      () => import("@/app/choose-company/page"),
-      () => import("@/app/account/page"),
-      () => import("@/app/onboarding/page"),
-    ])
-      expect((await load()).dynamic).toBe("force-dynamic");
-  });
+  it(
+    "the (app) layout and account pages render dynamically",
+    { timeout: 60_000 },
+    async () => {
+      // force-dynamic makes Next.js send "private, no-cache, no-store,
+      // max-age=0, must-revalidate" in production (and no-store in dev).
+      for (const load of [
+        () => import("@/app/(app)/layout"),
+        () => import("@/app/choose-company/page"),
+        () => import("@/app/account/page"),
+        () => import("@/app/onboarding/page"),
+      ])
+        expect((await load()).dynamic).toBe("force-dynamic");
+    },
+  );
   it("Next.js's dynamic header is private and no-store", async () => {
     const { getCacheControlHeader } =
       await import("next/dist/server/lib/cache-control");

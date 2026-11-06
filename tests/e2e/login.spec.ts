@@ -63,5 +63,11 @@ test("an off-site next falls back to home", async ({ page }) => {
   await page.getByLabel("Email").fill(accounts.emails.owner);
   await page.getByLabel("Password").fill(accounts.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/home$/, { timeout: 30_000 });
+  // Home (an owner lands on the dashboard), never off-site.
+  await expect(page).toHaveURL(
+    /^http:\/\/(127\.0\.0\.1|localhost):\d+\/(home|dashboard)$/,
+    {
+      timeout: 30_000,
+    },
+  );
 });

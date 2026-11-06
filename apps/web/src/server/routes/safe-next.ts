@@ -9,8 +9,19 @@ export const HOME = "/home";
 const BASE = "https://jobflow.invalid";
 const NEVER = ["/login", "/signup"];
 
+/** Dot segments removed, it still stays on this origin as a path. */
+function normalisesSafely(value: string): boolean {
+  try {
+    const url = new URL(value, BASE);
+    return url.origin === BASE && !url.pathname.startsWith("//");
+  } catch {
+    return false;
+  }
+}
+
 function looksSafe(value: string): boolean {
   return (
+    normalisesSafely(value) &&
     value.startsWith("/") &&
     !value.startsWith("//") &&
     !value.includes("\\") &&
@@ -49,7 +60,10 @@ export function safeNextPath(raw: unknown): string {
     )
   )
     return HOME;
-  return `${url.pathname}${url.search}${url.hash}`;
+  // Check the normalised result too: dot segments ("/.//evil.example",
+  // "/foo/..//evil.example") collapse into a protocol-relative "//…".
+  const result = `${url.pathname}${url.search}${url.hash}`;
+  return looksSafe(result) ? result : HOME;
 }
 
 /** `<page>?next=…` for the given path, sanitised; bare `<page>` for home. */
