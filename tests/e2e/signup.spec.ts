@@ -93,3 +93,110 @@ test("a visitor signs up, is held at verification, then verifies", async ({
     await db.$disconnect();
   }
 });
+
+// #224 (S4): forgot password → emailed link → choose a new password.
+test("forgot password, then reset with the emailed link", async ({ page }) => {
+  test.setTimeout(120_000);
+  const db = createDatabaseClient(isolatedTestConnection());
+  const email = `reset-${randomUUID()}@example.com`;
+  try {
+    // An account to reset (signed up, unverified: a reset also verifies).
+    await page.goto("/signup");
+    await page.getByLabel("Your name").fill("Riley Reset");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+    await page.getByLabel("Confirm password").fill(PASSWORD);
+    await page.getByLabel(/I agree to the/).check();
+    await page.getByRole("button", { name: "Create account" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Check your email" }),
+    ).toBeVisible();
+
+    await page.goto("/login");
+    await page.getByRole("link", { name: "Forgot your password?" }).click();
+    await expect(page).toHaveURL(/\/forgot-password$/);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.getByLabel("Email").fill(email);
+    await page.getByRole("button", { name: "Send reset link" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Check your email" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(`If an account exists for ${email}`),
+    ).toBeVisible();
+    // Never written to browser storage.
+    expect(
+      await page.evaluate(() => [
+        JSON.stringify(localStorage),
+        JSON.stringify(sessionStorage),
+      ]),
+    ).not.toContain(email);
+
+    const user = await db.user.findUniqueOrThrow({ where: { email } });
+    await expect
+      .poll(
+        async () =>
+          (
+            await db.emailOutbox.findFirst({
+              where: { userId: user.id, kind: "password_reset" },
+            })
+          )?.status,
+      )
+      .toBe("sent");
+    const token = await db.$transaction((tx) =>
+      issueToken(tx, user.id, "password_reset"),
+    );
+    const response = await page.goto(`/reset-password#token=${token}`);
+    expect(response?.headers()["referrer-policy"]).toBe("no-referrer");
+    await expect(
+      page.getByRole("heading", { name: "Choose a new password" }),
+    ).toBeVisible();
+    // The token is removed from the address bar.
+    await expect.poll(() => new URL(page.url()).hash).toBe("");
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    const fresh = "another long synthetic reset phrase";
+    await page.getByLabel("New password", { exact: true }).fill(fresh);
+    await page.getByLabel("Confirm new password").fill("does not match at all");
+    await page.getByRole("button", { name: "Change password" }).click();
+    await expect(
+      page.getByRole("heading", { name: "There's a problem" }),
+    ).toBeFocused();
+    await page.getByLabel("New password", { exact: true }).fill(fresh);
+    await page.getByLabel("Confirm new password").fill(fresh);
+    await page.getByRole("button", { name: "Change password" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Password changed" }),
+    ).toBeVisible();
+
+    // The link works once. (Leave first: a hash-only change isn't a load.)
+    await page.goto("/login");
+    await page.goto(`/reset-password#token=${token}`);
+    await page.getByLabel("New password", { exact: true }).fill(fresh);
+    await page.getByLabel("Confirm new password").fill(fresh);
+    await page.getByRole("button", { name: "Change password" }).click();
+    await expect(
+      page.getByRole("heading", {
+        name: "This link is invalid or has expired",
+      }),
+    ).toBeVisible();
+
+    // The new password signs in, and the reset verified the address.
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(fresh);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/onboarding$/, { timeout: 30_000 });
+  } finally {
+    await db.$disconnect();
+  }
+});
+
+test("a reset link with no token offers a new one", async ({ page }) => {
+  await page.goto("/reset-password");
+  await expect(
+    page.getByRole("heading", { name: "This link is invalid or has expired" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Send a new link" }),
+  ).toHaveAttribute("href", "/forgot-password");
+});

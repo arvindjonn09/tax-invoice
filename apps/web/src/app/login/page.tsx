@@ -11,6 +11,11 @@ export default function LoginPage() {
       <p>Use the email and password for your JobFlow account.</p>
       <section className="rounded-lg border bg-card p-6 text-card-foreground">
         <LoginForm />
+        <p>
+          <Link href="/forgot-password" className="text-link underline">
+            Forgot your password?
+          </Link>
+        </p>
       </section>
       <p>
         Don&apos;t have an account?{" "}
