@@ -56,6 +56,11 @@ export type AuthSettings = {
  * - POSTs are rejected unless their Origin is the app's own (CSRF).
  * - Sign-in is throttled per client IP in the shared database.
  */
+const MFA_FACTORS: Readonly<Record<string, string>> = {
+  "/two-factor/verify-totp": "totp",
+  "/two-factor/verify-backup-code": "backup_code",
+};
+
 export function createAuth(settings: AuthSettings) {
   if (settings.secret.length < 32) {
     throw new Error("BETTER_AUTH_SECRET must be at least 32 characters");
@@ -78,8 +83,13 @@ export function createAuth(settings: AuthSettings) {
         log(level === "debug" ? "info" : level, "auth", { message, args }),
     },
     // A lost device goes through `pnpm operator enrol-code --reset`, so a stolen
-    // session and password can't remove TOTP.
-    disabledPaths: ["/two-factor/disable"],
+    // session and password can't remove or copy TOTP. Enrolment shows the secret
+    // and backup codes once.
+    disabledPaths: [
+      "/two-factor/disable",
+      "/two-factor/get-totp-uri",
+      "/two-factor/generate-backup-codes",
+    ],
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
@@ -188,6 +198,40 @@ export function createAuth(settings: AuthSettings) {
             message: "Enter a valid enrolment code",
           });
         }
+        await db.platformAuditEvent.create({
+          data: {
+            actorKind: "user",
+            userId: session.user.id,
+            action: "operator.enrolment_code_consumed",
+          },
+        });
+      }),
+      // TOTP belongs to the session that passed it (ADR 0004 D5, T21). A failed
+      // check returns an error with no token, so nothing is recorded.
+      after: createAuthMiddleware(async (ctx) => {
+        const factor = MFA_FACTORS[ctx.path];
+        if (!factor) return;
+        const returned = (
+          ctx.context.returned as { token?: unknown } | undefined
+        )?.token;
+        if (typeof returned !== "string") return;
+        // Confirming enrolment replaces the session but returns the old token.
+        const token = ctx.context.newSession?.session.token ?? returned;
+        await db.$transaction(async (tx) => {
+          const { userId } = await tx.authSession.update({
+            where: { token },
+            data: { mfaVerifiedAt: new Date() },
+            select: { userId: true },
+          });
+          await tx.platformAuditEvent.create({
+            data: {
+              actorKind: "user",
+              userId,
+              action: "operator.mfa_verified",
+              metadata: { factor },
+            },
+          });
+        });
       }),
     },
     plugins: [twoFactor({ issuer: "JobFlow" }), nextCookies()],

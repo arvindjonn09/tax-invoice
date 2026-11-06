@@ -13,5 +13,7 @@ ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor" CHECK (
 DROP TABLE "two_factor";
 ALTER TABLE "users" DROP COLUMN "two_factor_enabled";
 DROP TABLE "operator_enrolment_codes";
+DROP FUNCTION "operator_enrolment_code_stays_consumed"();
+ALTER TABLE "auth_sessions" DROP COLUMN "mfa_verified_at";
 DROP TABLE "platform_operators";
 COMMIT;

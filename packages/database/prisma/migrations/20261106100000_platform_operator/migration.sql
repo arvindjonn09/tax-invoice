@@ -72,3 +72,19 @@ ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor" CHECK (
 ALTER TABLE "trial_extension_requests" DROP CONSTRAINT "trial_extension_requests_decided_by_fkey";
 ALTER TABLE "trial_extension_requests" ADD CONSTRAINT "trial_extension_requests_decided_by_fkey"
   FOREIGN KEY ("decided_by") REFERENCES "platform_operators"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- TOTP is proved per session, so a session from before enrolment never counts.
+ALTER TABLE "auth_sessions" ADD COLUMN "mfa_verified_at" TIMESTAMPTZ(3);
+
+-- A used code stays used, whoever is asking.
+CREATE FUNCTION "operator_enrolment_code_stays_consumed"() RETURNS trigger AS $$
+BEGIN
+  IF OLD."consumed_at" IS NOT NULL THEN
+    RAISE EXCEPTION 'An enrolment code can''t change after it is used';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER "operator_enrolment_code_stays_consumed"
+  BEFORE UPDATE ON "operator_enrolment_codes"
+  FOR EACH ROW EXECUTE FUNCTION "operator_enrolment_code_stays_consumed"();

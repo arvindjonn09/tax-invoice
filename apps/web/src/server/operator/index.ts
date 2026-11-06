@@ -32,6 +32,7 @@ export async function requireOperator(
       env: process.env,
       production:
         isProductionEnvironment(process.env) && !options.allowUnenrolled,
+      sessionId: session.session.id,
     }))
   ) {
     notFound();
