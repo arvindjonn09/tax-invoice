@@ -113,6 +113,10 @@ beforeAll(async () => {
     auth: () => auth,
     db: () => db,
     trustedOrigins: () => [ORIGIN],
+    appUrl: () => ORIGIN,
+    emailSecret: () => "test-outbox-key-0123456789abcdef-0123456789",
+    dispatch: () => {},
+    defer: (work: () => Promise<void>) => work(),
   });
   for (const who of ["owner", "employee"])
     ids[who] = (
@@ -390,7 +394,7 @@ describe("allowlisted user routes while read-only", () => {
         ),
       );
     const before = await redeem(early.token, "early");
-    expect(before.status).toBe(200);
+    expect(before.status).toBe(202);
     const after = await redeem(late.token, "late");
     expect(after.status).toBe(403);
     expect(await after.json()).toMatchObject({ code: "company_read_only" });
