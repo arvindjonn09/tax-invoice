@@ -62,6 +62,27 @@ export function nextStatuses(from: JobStatus): readonly JobStatus[] {
   return TRANSITIONS[from];
 }
 
+/**
+ * The usual forward step a person takes next (#301), offered as the form's
+ * default. Never a backward move or Cancelled. No entry means there's no
+ * clear next step (a review decides awaiting_review; a completed job is
+ * usually invoiced by the system, or closed), so nothing is pre-selected.
+ */
+const USUAL_NEXT: Readonly<Partial<Record<JobStatus, JobStatus>>> = {
+  draft: "quoted",
+  quoted: "approved",
+  approved: "assigned",
+  assigned: "in_progress",
+  in_progress: "awaiting_review",
+  invoiced: "closed",
+};
+
+/** The status to pre-select after `from`, or null when there's no clear one. */
+export function usualNextStatus(from: JobStatus): JobStatus | null {
+  const to = USUAL_NEXT[from];
+  return to && transitionProblem(from, to) === null ? to : null;
+}
+
 export type TransitionProblem =
   "same-status" | "not-allowed" | "system-only" | "review-only";
 
