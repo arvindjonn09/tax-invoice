@@ -38,6 +38,10 @@ beforeAll(async () => {
   client = database.client;
   for (const user of [owner, member, other])
     await client.user.create({ data: user });
+  // decided_by references platform_operators (#230).
+  await client.platformOperator.create({
+    data: { userId: other.id, grantedReason: "Synthetic", grantedBy: "test" },
+  });
   companyId = await createCompany(owner.id);
   await client.membership.create({
     data: {

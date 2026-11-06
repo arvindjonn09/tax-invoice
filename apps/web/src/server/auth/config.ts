@@ -1,9 +1,19 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
-import { APIError } from "better-auth/api";
+import {
+  APIError,
+  createAuthMiddleware,
+  getSessionFromCtx,
+} from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
+import { twoFactor } from "better-auth/plugins/two-factor";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import { log } from "../log";
+import {
+  ENROLMENT_CODE_HEADER,
+  consumeEnrolmentCode,
+  isOperator,
+} from "../operator/access";
 
 export const SESSION_TTL_SECONDS = 60 * 60 * 12;
 export const SIGN_IN_WINDOW_SECONDS = 60;
@@ -46,6 +56,11 @@ export type AuthSettings = {
  * - POSTs are rejected unless their Origin is the app's own (CSRF).
  * - Sign-in is throttled per client IP in the shared database.
  */
+const MFA_FACTORS: Readonly<Record<string, string>> = {
+  "/two-factor/verify-totp": "totp",
+  "/two-factor/verify-backup-code": "backup_code",
+};
+
 export function createAuth(settings: AuthSettings) {
   if (settings.secret.length < 32) {
     throw new Error("BETTER_AUTH_SECRET must be at least 32 characters");
@@ -67,9 +82,15 @@ export function createAuth(settings: AuthSettings) {
       log: (level, message, ...args) =>
         log(level === "debug" ? "info" : level, "auth", { message, args }),
     },
-    // Reset and verification run through /api/account/* (#218, #219), which
-    // add throttles, Turnstile and single-use tokens these endpoints don't have.
+    // A lost device goes through `pnpm operator enrol-code --reset`, so a stolen
+    // session and password can't remove or copy TOTP. Enrolment shows the secret
+    // and backup codes once. Reset and verification run through /api/account/*
+    // (#218, #219), which add throttles, Turnstile and single-use tokens these
+    // endpoints don't have.
     disabledPaths: [
+      "/two-factor/disable",
+      "/two-factor/get-totp-uri",
+      "/two-factor/generate-backup-codes",
       "/request-password-reset",
       "/reset-password",
       "/send-verification-email",
@@ -154,7 +175,72 @@ export function createAuth(settings: AuthSettings) {
         },
       },
     },
-    plugins: [nextCookies()],
+    hooks: {
+      // ADR 0004 D5: TOTP is for platform operators only. Anyone else gets the
+      // same 404 as a path that doesn't exist.
+      before: createAuthMiddleware(async (ctx) => {
+        if (!ctx.path.startsWith("/two-factor/")) return;
+        // Trust-device stays off: a trusted device would skip TOTP for 30 days.
+        if ((ctx.body as { trustDevice?: unknown } | undefined)?.trustDevice) {
+          throw new APIError("BAD_REQUEST", {
+            message: "Trusted devices aren't available",
+          });
+        }
+        const session = await getSessionFromCtx(ctx);
+        // Mid sign-in there's no session yet, and only an enrolled user gets
+        // this far: the plugin checks its own short-lived cookie.
+        if (!session && ctx.path.startsWith("/two-factor/verify-")) return;
+        const allowed =
+          session &&
+          (await isOperator(db, session.user.id, {
+            env: process.env,
+            production: false,
+          }));
+        if (!allowed) throw new APIError("NOT_FOUND");
+        if (ctx.path !== "/two-factor/enable") return;
+        const code = ctx.headers?.get(ENROLMENT_CODE_HEADER);
+        if (!code || !(await consumeEnrolmentCode(db, session.user.id, code))) {
+          throw new APIError("FORBIDDEN", {
+            message: "Enter a valid enrolment code",
+          });
+        }
+        await db.platformAuditEvent.create({
+          data: {
+            actorKind: "user",
+            userId: session.user.id,
+            action: "operator.enrolment_code_consumed",
+          },
+        });
+      }),
+      // TOTP belongs to the session that passed it (ADR 0004 D5, T21). A failed
+      // check returns an error with no token, so nothing is recorded.
+      after: createAuthMiddleware(async (ctx) => {
+        const factor = MFA_FACTORS[ctx.path];
+        if (!factor) return;
+        const returned = (
+          ctx.context.returned as { token?: unknown } | undefined
+        )?.token;
+        if (typeof returned !== "string") return;
+        // Confirming enrolment replaces the session but returns the old token.
+        const token = ctx.context.newSession?.session.token ?? returned;
+        await db.$transaction(async (tx) => {
+          const { userId } = await tx.authSession.update({
+            where: { token },
+            data: { mfaVerifiedAt: new Date() },
+            select: { userId: true },
+          });
+          await tx.platformAuditEvent.create({
+            data: {
+              actorKind: "user",
+              userId,
+              action: "operator.mfa_verified",
+              metadata: { factor },
+            },
+          });
+        });
+      }),
+    },
+    plugins: [twoFactor({ issuer: "JobFlow" }), nextCookies()],
   });
 }
 
