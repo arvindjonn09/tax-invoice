@@ -42,35 +42,87 @@ describe("AppShell banners", () => {
   });
 });
 
-describe("TrialBanner (S8)", () => {
+describe("TrialBanner (S8, docs/design/signup-trial.md)", () => {
   const banner = (
     phase: "normal" | "warning" | "critical" | "expired",
     daysRemaining: number,
-    showCountdown: boolean,
+    viewer: "owner" | "staff" | "worker",
   ) =>
     renderToStaticMarkup(
       <TrialBanner
         status={{ phase, daysRemaining }}
-        lastDay="2026-12-02"
-        showCountdown={showCountdown}
+        lastDay="2026-12-01"
+        viewer={viewer}
         supportEmail="support@example.test"
       />,
     );
+  const indicator = (html: string) =>
+    /<div role="status" aria-label="Trial status"[^>]*>.*?<strong>(.*?)<\/strong>/.exec(
+      html,
+    )?.[1];
 
-  it("shows owners the countdown, end date and, once urgent, how to continue", () => {
-    expect(banner("normal", 30, true)).toContain("30 days left");
-    expect(banner("normal", 30, true)).toContain("2 December 2026");
-    expect(banner("warning", 5, true)).toContain("support@example.test");
-    expect(banner("critical", 1, true)).toContain("Last day");
-    expect(banner("expired", -3, true)).toContain("2 December 2026");
+  it("uses the exact S8 AC1 copy for each phase", () => {
+    expect(indicator(banner("normal", 12, "owner"))).toBe("12 days remaining");
+    expect(indicator(banner("warning", 5, "owner"))).toBe(
+      "5 days remaining · Trial expires on 1 Dec 2026",
+    );
+    expect(indicator(banner("critical", 1, "owner"))).toBe(
+      "Last day of your trial · Read-only from 12:00 am tomorrow (Sydney time)",
+    );
+    expect(indicator(banner("expired", -2, "owner"))).toBe(
+      "Trial ended 1 Dec 2026 · Read-only",
+    );
   });
 
-  it("hides trial dates and contacts from employees and subcontractors", () => {
-    expect(banner("normal", 30, false)).toBe("");
-    expect(banner("critical", 1, false)).toBe("");
-    const ended = banner("expired", -3, false);
-    expect(ended).toContain("free trial has ended");
+  it("is a status landmark whose text, not colour, carries the state", () => {
+    for (const phase of ["normal", "warning", "critical", "expired"] as const) {
+      const html = banner(phase, phase === "normal" ? 12 : 2, "staff");
+      expect(html).toContain('role="status"');
+      expect(indicator(html)).toBeTruthy();
+    }
+  });
+
+  it("shows the support email in warning, critical and expired, not normal", () => {
+    expect(banner("normal", 12, "owner")).not.toContain("support@example.test");
+    for (const [phase, days] of [
+      ["warning", 5],
+      ["critical", 1],
+      ["expired", -1],
+    ] as const)
+      expect(banner(phase, days, "owner")).toContain("support@example.test");
+  });
+
+  it("offers Request extension to owners only, and never in the normal phase", () => {
+    expect(banner("warning", 5, "owner")).toContain('href="/settings/trial"');
+    expect(banner("expired", -1, "owner")).toContain("Request extension");
+    expect(banner("normal", 12, "owner")).not.toContain("Request extension");
+    expect(banner("warning", 5, "staff")).not.toContain("Request extension");
+    expect(banner("expired", -1, "staff")).not.toContain("Request extension");
+  });
+
+  it("lets only the warning banner be dismissed", () => {
+    expect(banner("warning", 5, "owner")).toContain(">Dismiss</button>");
+    expect(banner("critical", 1, "owner")).not.toContain("Dismiss");
+    expect(banner("expired", -1, "owner")).not.toContain("Dismiss");
+  });
+
+  it("shows workers no countdown, dates or support address, only the read-only notice", () => {
+    for (const [phase, days] of [
+      ["normal", 12],
+      ["warning", 5],
+      ["critical", 1],
+    ] as const)
+      expect(banner(phase, days, "worker")).toBe("");
+    const ended = banner("expired", -3, "worker");
+    expect(ended).toContain(
+      "This company&#x27;s account is read-only. Contact your owner.",
+    );
     expect(ended).not.toContain("2026");
     expect(ended).not.toContain("support@example.test");
+    expect(ended).not.toContain('role="status"');
+  });
+
+  it("pluralises days in the countdown", () => {
+    expect(banner("warning", 2, "owner")).toContain("2 days remaining");
   });
 });
