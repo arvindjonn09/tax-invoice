@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalPage } from "@/components/legal-page";
-import { LEGAL_DETAILS } from "@/content/legal/details";
+import { legalDetails } from "@/content/legal/details";
 import { TERMS_VERSION, legalTextIsPlaceholder } from "@/server/account/terms";
 import { supportEmail } from "@/server/email";
 
 export const metadata: Metadata = { title: "Terms of Service · JobFlow" };
 
 export default function Page() {
-  const { legalName, abn, state, effectiveDate } = LEGAL_DETAILS;
+  const { legalName, abn, state, effectiveDate } = legalDetails();
   const email = supportEmail();
   return (
     <LegalPage

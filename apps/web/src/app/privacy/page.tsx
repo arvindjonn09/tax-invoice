@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { LegalPage } from "@/components/legal-page";
-import { LEGAL_DETAILS } from "@/content/legal/details";
+import { legalDetails } from "@/content/legal/details";
 import {
   PRIVACY_VERSION,
   legalTextIsPlaceholder,
@@ -10,7 +10,7 @@ import { supportEmail } from "@/server/email";
 export const metadata: Metadata = { title: "Privacy Policy · JobFlow" };
 
 export default function Page() {
-  const { legalName, abn, hostingLocation, effectiveDate } = LEGAL_DETAILS;
+  const { legalName, abn, hostingLocation, effectiveDate } = legalDetails();
   const email = supportEmail();
   const mail = (
     <a className="text-link underline" href={`mailto:${email}`}>
@@ -109,8 +109,9 @@ export default function Page() {
         </li>
       </ul>
       <p>
-        JobFlow&apos;s servers are in {hostingLocation}. We may also disclose
-        information if the law requires it.
+        JobFlow, its file storage and its backups are self-hosted on our own
+        servers in {hostingLocation}. We may also disclose information if the
+        law requires it.
       </p>
 
       <h2>How long we keep it</h2>
