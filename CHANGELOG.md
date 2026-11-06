@@ -8,6 +8,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 - Trial extension requests: owners can ask for more time, including while read-only, and the operator API approves or declines them; the screens follow in #232 ([#231](https://github.com/arvindjonn09/tax-invoice/issues/231)).
 - Platform operator role with a two-key check, TOTP enrolment by host-issued code, and `pnpm operator` to grant access and extend trials; the screens follow in #232 ([#230](https://github.com/arvindjonn09/tax-invoice/issues/230)).
+- Password reset API: request a link by email and set a new password, which signs out every device; the pages follow in #224 ([#219](https://github.com/arvindjonn09/tax-invoice/issues/219)).
 - A bill's tax invoice that arrives later moves its claimable GST from job cost to GST credits on the day it's held, without editing the bill (#142).
 - Accessibility sweep: every screen for every role passes axe (WCAG 2.2 AA) and reflows at 360, 768 and 1440 px in both themes, with a keyboard skip-link check (#60).
 - Pre-production security audit with a generated route permission matrix kept in step with the code by CI; the static design samples are not served in production (#61).
