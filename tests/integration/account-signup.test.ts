@@ -628,10 +628,106 @@ describe("password reset", () => {
     }
   });
 
-  it("limits an account to 3 an hour: still 202, no email, counted", async () => {
+  const resetEmails = (userId: string) =>
+    client.emailOutbox.count({ where: { userId, kind: "password_reset" } });
+
+  it("doesn't let one IP use up an account's resets", async () => {
     const user = await newUser();
-    for (let i = 0; i < 3; i += 1) await forgot(user.email);
-    const response = await forgot(user.email);
+    const attacker = "203.0.113.90";
+    for (let i = 0; i < 5; i += 1) await forgot(user.email, attacker);
+    expect(await resetEmails(user.id)).toBe(3);
+    const live = await client.accountToken.findFirstOrThrow({
+      where: {
+        userId: user.id,
+        purpose: "password_reset",
+        supersededAt: null,
+        consumedAt: null,
+      },
+    });
+    expect((await forgot(user.email, "203.0.113.91")).status).toBe(202);
+    expect(await resetEmails(user.id)).toBe(4);
+    expect(live.id).not.toBe(
+      (
+        await client.accountToken.findFirstOrThrow({
+          where: {
+            userId: user.id,
+            purpose: "password_reset",
+            supersededAt: null,
+            consumedAt: null,
+          },
+        })
+      ).id,
+    );
+  });
+
+  it("leaves the live link alone when a request is throttled", async () => {
+    const user = await newUser();
+    const ip = "203.0.113.92";
+    for (let i = 0; i < 3; i += 1) await forgot(user.email, ip);
+    const token = await latestToken(user.email);
+    await forgot(user.email, ip);
+    expect((await reset(token)).status).toBe(200);
+  });
+
+  it("limits one account to 10 an hour across every IP", async () => {
+    const user = await newUser();
+    for (let i = 0; i < 12; i += 1) {
+      await forgot(user.email, `203.0.114.${i + 1}`);
+    }
+    expect(await resetEmails(user.id)).toBe(10);
+  });
+
+  it("caps an account at 6 a day from one IP and 24 a day in all", async () => {
+    const user = await newUser();
+    const ip = "203.0.113.93";
+    const spendTheHour = () =>
+      client.$executeRaw`DELETE FROM auth_rate_limits WHERE key LIKE ${`jobflow:forgot:account:${user.id}%:hour`}`;
+    for (let i = 0; i < 8; i += 1) {
+      if (i % 3 === 0) await spendTheHour();
+      await forgot(user.email, ip);
+    }
+    expect(await resetEmails(user.id)).toBe(6);
+    for (let i = 0; i < 30; i += 1) {
+      if (i % 9 === 0) await spendTheHour();
+      await forgot(user.email, `203.0.115.${i + 1}`);
+    }
+    expect(await resetEmails(user.id)).toBe(24);
+  });
+
+  it("allows one live link, and lets only one of two simultaneous resets use it", async () => {
+    const user = await newUser();
+    await forgot(user.email, "203.0.113.94");
+    const token = await latestToken(user.email);
+    // account_tokens_one_live already refuses a second live link.
+    await expect(
+      client.accountToken.create({
+        data: {
+          userId: user.id,
+          purpose: "password_reset",
+          tokenHash: "f".repeat(64),
+          expiresAt: new Date(Date.now() + 3_600_000),
+        },
+      }),
+    ).rejects.toThrow();
+    const responses = await Promise.all([reset(token), reset(token)]);
+    expect(responses.map((r) => r.status).sort()).toEqual([200, 400]);
+    expect(
+      await client.accountToken.count({
+        where: {
+          userId: user.id,
+          purpose: "password_reset",
+          consumedAt: null,
+          supersededAt: null,
+        },
+      }),
+    ).toBe(0);
+  });
+
+  it("limits an account to 3 an hour from one IP: still 202, no email, counted", async () => {
+    const user = await newUser();
+    const ip = "203.0.113.95";
+    for (let i = 0; i < 3; i += 1) await forgot(user.email, ip);
+    const response = await forgot(user.email, ip);
     expect(response.status).toBe(202);
     expect(
       await client.emailOutbox.count({
