@@ -12,7 +12,10 @@ import {
 } from "../../apps/web/src/server/bills/handlers";
 import { expenseHandlers } from "../../apps/web/src/server/expenses/handlers";
 import { dashboardHandler } from "../../apps/web/src/server/dashboard/handlers";
-import { payablesSource } from "../../apps/web/src/server/reports/ledger";
+import {
+  ledgerHandlers,
+  payablesSource,
+} from "../../apps/web/src/server/reports/ledger";
 import { ageingReport } from "../../packages/domain/src/index";
 import {
   type CommittedDatabase,
@@ -59,6 +62,7 @@ function makeRoutes() {
       "job.profit.read",
       dashboardHandler(() => db),
     ),
+    ageing: withPolicy("ledger_report.read", ledgerHandlers(() => db).ageing),
   };
 }
 
@@ -850,6 +854,7 @@ describe("on-account expenses in supplier money owed (#300)", () => {
       reference: "Synthetic cable and conduit",
       partyName: "Synthetic 300 Cost Only",
       partyType: "supplier",
+      kind: "expense",
     });
   });
 
@@ -908,6 +913,23 @@ describe("on-account expenses in supplier money owed (#300)", () => {
         ).totals.total.toString();
       }),
     );
+    // The report route marks the expense row (it links to /expenses/:id);
+    // the bill row has no kind and links to the bill.
+    const route = await routes.ageing(
+      new Request(
+        `${ORIGIN}/api/reports/ageing?side=payables&asAt=${today}&pageSize=500`,
+        { headers: call("owner").headers },
+      ),
+      undefined,
+    );
+    expect(route.status).toBe(200);
+    const rows = (
+      (await route.json()) as {
+        rows: { id: string; kind?: string }[];
+      }
+    ).rows;
+    expect(rows.find((row) => row.id === expenseId)?.kind).toBe("expense");
+    expect(rows.find((row) => row.id === billId)).not.toHaveProperty("kind");
     // Unfiltered, the dashboard equals the whole ageing report.
     expect(await dashboardPayables()).toBe(report.totals.total.toString());
   });

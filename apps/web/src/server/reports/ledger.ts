@@ -22,6 +22,8 @@ export type AgeingLabel = {
   reference: string;
   partyName: string;
   partyType: "customer" | "contractor" | "supplier";
+  /** Set for an on-account expense (#300), so its row links to the expense. */
+  kind?: "expense";
 };
 export type AgeingSource = {
   documents: AgeingDocument[];
@@ -253,6 +255,7 @@ export async function onAccountExpensesSource(
       reference: row.description,
       partyName: name,
       partyType: "supplier",
+      kind: "expense",
     });
     parties.set(partyId, { name, type: "supplier" });
     documents.push({ ...document, partyId });
