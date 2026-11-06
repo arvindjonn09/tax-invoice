@@ -213,6 +213,7 @@ implementation task.
   account work runs after the response. A signed-out accept takes no password: a new account gets an unknown one, and only
   the mailbox holder sets the real one, from an emailed link that also confirms the address. A token holder can use up the
   address on an account nobody can yet sign in to; the emailed link or `/forgot-password` recovers it.
+- **Operator TOTP limits (T21).** In production an operator's session must itself have passed TOTP (`auth_sessions.mfa_verified_at`), so a password-only session from before enrolment never qualifies. Two library limits remain: Better Auth accepts codes within ±30 seconds and keeps no last-used code, so a relayed code works for about 90 seconds (Cloudflare Access reduces this), and the TOTP secret and backup codes are encrypted with `BETTER_AUTH_SECRET`, not hashed.
 - **Scanners and account pre-registration (T17).** The fragment stops scanners that only fetch a URL. `/verify-email`
   spends the token only when "Confirm my email" is pressed (#249), so only a scanner that also clicks could verify the
   address. If an attacker signed up with that address, they would then hold a verified account for it. This is uncertain: no
