@@ -3,6 +3,8 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { SiteHeader } from "@/components/landing/site-header";
 import { getAuth, getDatabase, resolveActor } from "@/server/auth";
+import { PATH_HEADER } from "@/server/routes/public";
+import { loginFor } from "@/server/routes/safe-next";
 import { PendingActions } from "./pending-actions";
 
 export const metadata: Metadata = { title: "Verify your email · JobFlow" };
@@ -10,12 +12,14 @@ export const dynamic = "force-dynamic";
 
 /** The only page an unverified, signed-in user can reach (S3 AC4). */
 export default async function VerifyPendingPage() {
+  const requestHeaders = await headers();
   const resolution = await resolveActor(
     getAuth(),
     getDatabase(),
-    await headers(),
+    requestHeaders,
   );
-  if (resolution.status === "signed-out") redirect("/login");
+  if (resolution.status === "signed-out")
+    redirect(loginFor(requestHeaders.get(PATH_HEADER)));
   if (resolution.status !== "unverified") redirect("/home");
   return (
     <>

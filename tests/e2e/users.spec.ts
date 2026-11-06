@@ -135,7 +135,7 @@ test("owner invites, recipient joins, owner changes role and deactivates access"
       card.getByText("Inactive · Accountant", { exact: true }),
     ).toBeVisible();
     await joining.goto("/users");
-    await expect(joining).toHaveURL(/\/(login|account)$/);
+    await expect(joining).toHaveURL(/\/(login|account)(\?next=%2Fusers)?$/);
     expect(await db.authSession.count({ where: { userId: newUser.id } })).toBe(
       0,
     );
