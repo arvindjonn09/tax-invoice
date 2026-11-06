@@ -1,4 +1,5 @@
-import { MoneyDisplay, formatAudCents } from "@/components/money-display";
+import { GstRow } from "@/components/gst-row";
+import { MoneyDisplay } from "@/components/money-display";
 
 /**
  * Totals exactly as the server last confirmed them. Unsaved edits mark them
@@ -50,14 +51,11 @@ export function Totals({
                 />
               </dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="shrink-0">GST</dt>
-              <dd className="tabular-nums">
-                {registered === false
-                  ? "No GST charged"
-                  : `${formatAudCents(BigInt(totals.gstCents))} AUD`}
-              </dd>
-            </div>
+            <GstRow
+              gstCents={totals.gstCents}
+              registered={registered}
+              action="issue"
+            />
             <div className="flex justify-between gap-4 text-lg font-semibold">
               <dt className="shrink-0">Total</dt>
               <dd>
