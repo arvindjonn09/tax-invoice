@@ -42,7 +42,7 @@ export function accountExistsEmail(to: string, appUrl: string): EmailMessage {
 }
 
 /** A new sign-up: only the mailbox holder sets the password (#327). */
-export function setPasswordEmail(
+export function finishSignupEmail(
   to: string,
   appUrl: string,
   token: string,

@@ -18,7 +18,7 @@ import {
   accountExistsEmail,
   resetLinkEmail,
   resetNoticeEmail,
-  setPasswordEmail,
+  finishSignupEmail,
   verificationEmail,
 } from "./emails";
 import {
@@ -315,7 +315,7 @@ export function signUp(deps: AccountDependencies) {
             kind: "password_reset",
             dedupeKey: `password_reset:${user.id}:signup`,
             userId: user.id,
-            message: setPasswordEmail(user.email, deps.appUrl(), token),
+            message: finishSignupEmail(user.email, deps.appUrl(), token),
           });
           await tx.platformAuditEvent.create({
             data: {
