@@ -289,7 +289,8 @@ test("hourly offers validate terms and require confirmation to withdraw", async 
     .fill("100.00");
   await page.getByRole("button", { name: "Save offer", exact: true }).click();
   await expect(
-    page.getByText("$750.00 AUD incl GST", { exact: true }),
+    // #305: this offer charges no GST, so its total doesn't say "incl GST".
+    page.getByText("$750.00 AUD no GST", { exact: true }),
   ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 900 });
   expect(

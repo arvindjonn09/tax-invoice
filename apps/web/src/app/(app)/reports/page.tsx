@@ -1,5 +1,6 @@
 import { can } from "@jobflow/authz";
 import { notFound } from "next/navigation";
+import { getDatabase } from "@/server/auth";
 import { requireActor } from "@/server/authz";
 import { sydneyToday } from "@/server/company/gst";
 import { ReportsHub, type ReportView } from "@/features/reports/hub";
@@ -27,6 +28,12 @@ export default async function ReportsPage({
   if (!views.length) notFound();
   const { view } = await searchParams;
   const current = views.find((item) => item === view) ?? views[0]!;
+  // #305: wording only, so "incl GST" isn't shown to a company that has
+  // never charged GST.
+  const gstEverRegistered =
+    (await getDatabase().companyGstRegistration.count({
+      where: { companyId: actor.companyId },
+    })) > 0;
   return (
     <ReportsHub
       key={current}
@@ -34,6 +41,7 @@ export default async function ReportsPage({
       view={current}
       today={sydneyToday()}
       canExport={can(actor.role, "export.run")}
+      gstEverRegistered={gstEverRegistered}
     />
   );
 }

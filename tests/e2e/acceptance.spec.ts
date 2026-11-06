@@ -651,11 +651,21 @@ for (const variant of VARIANTS)
     await expect(profitTiles).toContainText(
       `${bp / 100n}.${(bp % 100n).toString().padStart(2, "0")}% margin`,
     );
+    // #305: a company that has never been registered charged no GST, so
+    // its balances don't say "incl GST".
     await expect(
-      page.getByText(`${aud(variant.customerOutstanding)} incl GST`).first(),
+      page
+        .getByText(
+          `${aud(variant.customerOutstanding)} ${variant.registered ? "incl GST" : "no GST"}`,
+        )
+        .first(),
     ).toBeVisible();
     await expect(
-      page.getByText(`${aud(variant.supplierOutstanding)} incl GST`).first(),
+      page
+        .getByText(
+          `${aud(variant.supplierOutstanding)} ${variant.registered ? "incl GST" : "total"}`,
+        )
+        .first(),
     ).toBeVisible();
     await page.goto(`/reports?view=profitability`);
     await expect(
