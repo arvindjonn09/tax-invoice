@@ -23,6 +23,10 @@ const PUBLIC_ROUTES: Record<string, string> = {
     "Public resend: same 202 whatever the address; IP, per-account and Turnstile limits; never reveals an account",
   "api/account/verification/resend-mine/route.ts":
     "Requires a session; acts only on the caller's own unverified account; per-account limits",
+  "api/account/password/forgot/route.ts":
+    "Public forgot-password: same 202 whatever the address; IP, per-account and Turnstile limits; never reveals an account",
+  "api/account/password/reset/route.ts":
+    "Single-use 256-bit emailed token (digest stored, 1 h) authorizes replacing that one user's password; IP throttle; grants no company access",
   "api/onboarding/company/route.ts":
     "Requires a verified session; creates only the caller's own first company (one per user, idempotency key) with the caller as Owner; origin/body/throttle guards",
   "api/session/company/route.ts":
