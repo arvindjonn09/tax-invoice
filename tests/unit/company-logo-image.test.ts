@@ -226,6 +226,33 @@ describe("logo checks: JPEG (#227)", () => {
       "a short frame",
       Buffer.concat([SOI, jpegSegment(0xc0, Buffer.alloc(2)), SCAN, EOI]),
     ],
+    [
+      "a frame with no room for its components",
+      Buffer.concat([
+        SOI,
+        jpegSegment(0xc0, Buffer.from([8, 0, 1, 0, 1])),
+        SCAN,
+        EOI,
+      ]),
+    ],
+    [
+      "a frame with no components",
+      Buffer.concat([
+        SOI,
+        jpegSegment(0xc0, Buffer.from([8, 0, 1, 0, 1, 0])),
+        SCAN,
+        EOI,
+      ]),
+    ],
+    [
+      "a frame that claims more components than it holds",
+      Buffer.concat([
+        SOI,
+        jpegSegment(0xc0, Buffer.from([8, 0, 1, 0, 1, 3, 1, 0x11, 0])),
+        SCAN,
+        EOI,
+      ]),
+    ],
     ["a scan that never ends", Buffer.concat([SOI, sof(), SCAN])],
     ["no end marker", Buffer.concat([SOI, QUANT, sof()])],
     [

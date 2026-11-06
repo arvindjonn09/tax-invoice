@@ -136,7 +136,14 @@ function cleanJpeg(file: Buffer): LogoCheck {
     const end = offset + 2 + file.readUInt16BE(offset + 2);
     if (end < offset + 4 || end > file.length) return NOT_AN_IMAGE;
     if (isStartOfFrame(marker)) {
-      if (seenFrame || end < offset + 9) return NOT_AN_IMAGE;
+      // Length, precision, height, width and count, then 3 bytes per component.
+      if (
+        seenFrame ||
+        end < offset + 10 ||
+        file[offset + 9] === 0 ||
+        end !== offset + 10 + 3 * file[offset + 9]!
+      )
+        return NOT_AN_IMAGE;
       seenFrame = true;
       height = file.readUInt16BE(offset + 5);
       width = file.readUInt16BE(offset + 7);
