@@ -15,10 +15,7 @@ import { statusLabel, time, type Job, type Visit } from "./types";
 type Message = { kind: "success" | "error"; text: string } | null;
 export function StatusForm({ job, saved }: { job: Job; saved: () => void }) {
   const options = nextStatuses(job.status).filter(
-    (value) =>
-      transitionProblem(job.status, value) === null &&
-      // #303: nothing to review without worker evidence (server agrees).
-      !(value === "awaiting_review" && job.hasEvidence === false),
+    (value) => transitionProblem(job.status, value) === null,
   );
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);

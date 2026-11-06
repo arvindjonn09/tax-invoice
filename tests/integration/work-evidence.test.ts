@@ -747,16 +747,58 @@ describe("approving without worker evidence (#303)", () => {
     return job.id;
   }
 
-  it("refuses a bare move to Awaiting review with no evidence", async () => {
+  it("office moves a job with no evidence to review, then approves it with a note", async () => {
+    // Owner decision: some jobs never have a worker login, so the office
+    // completes them: In progress → Awaiting review → approved with a note.
     const id = await bareJob("in_progress");
     expect(await read(id)).toMatchObject({
       hasEvidence: false,
       noWorkerEvidence: false,
     });
-    const refused = await status("manager", id, "awaiting_review");
-    expect(refused.status).toBe(409);
-    expect((await refused.json()).fields.to).toMatch(/no worker evidence/);
-    // Workers submitting with evidence are unaffected.
+    expect((await status("manager", id, "awaiting_review")).status).toBe(200);
+    expect(await read(id)).toMatchObject({ noWorkerEvidence: true });
+    expect((await review("manager", id, { decision: "approve" })).status).toBe(
+      400,
+    );
+    const approved = await review("manager", id, {
+      decision: "approve",
+      note: "Worker has no login; checked with the customer",
+    });
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toEqual({ status: "completed" });
+    expect(await read(id)).toMatchObject({
+      hasEvidence: false,
+      noWorkerEvidence: true,
+    });
+  });
+
+  it("counts a subcontractor with an accepted offer as a worker for the label", async () => {
+    const id = await bareJob("awaiting_review", { workers: false });
+    expect(await read(id)).toMatchObject({ noWorkerEvidence: false });
+    const contractor = await db.contractor.findFirstOrThrow({
+      where: { companyId, userId: userIds.sub },
+    });
+    await db.contractorOffer.create({
+      data: {
+        companyId,
+        jobId: id,
+        contractorId: contractor.id,
+        createdBy: userIds.owner,
+        scope: "Synthetic scope",
+        rateType: "fixed",
+        rateExclusiveCents: 50000n,
+        taxCode: "TAXABLE_10",
+        status: "accepted",
+        respondedAt: new Date(),
+        respondedBy: userIds.sub,
+      },
+    });
+    expect(await read(id)).toMatchObject({ noWorkerEvidence: true });
+    expect((await listed(id))?.noWorkerEvidence).toBe(true);
+  });
+
+  it("a worker's submission with evidence clears the way as before", async () => {
+    const id = await bareJob("in_progress");
     expect(
       (await add("worker", { kind: "note", note: "Done" }, id)).status,
     ).toBe(201);

@@ -198,7 +198,8 @@ async function siteProblem(
 }
 
 /**
- * Evidence facts per job (#303): whether any worker was ever assigned and
+ * Evidence facts per job (#303): whether any worker (employee or
+ * subcontractor) was ever on the job and
  * how much work evidence exists, for the status form and the label.
  */
 async function evidenceFacts(
@@ -206,10 +207,17 @@ async function evidenceFacts(
   companyId: string,
   jobIds: readonly string[],
 ) {
-  const [assigned, evidence] = await Promise.all([
+  // Workers are assigned employees and subcontractors with an accepted
+  // offer, as in workerScope.
+  const [assigned, subcontracted, evidence] = await Promise.all([
     db.assignment.groupBy({
       by: ["jobId"],
       where: { companyId, jobId: { in: [...jobIds] } },
+      _count: { _all: true },
+    }),
+    db.contractorOffer.groupBy({
+      by: ["jobId"],
+      where: { companyId, jobId: { in: [...jobIds] }, status: "accepted" },
       _count: { _all: true },
     }),
     db.workEvidence.groupBy({
@@ -218,7 +226,9 @@ async function evidenceFacts(
       _count: { _all: true },
     }),
   ]);
-  const workers = new Set(assigned.map((row) => row.jobId));
+  const workers = new Set(
+    [...assigned, ...subcontracted].map((row) => row.jobId),
+  );
   const counts = new Map(evidence.map((row) => [row.jobId, row._count._all]));
   return (job: Pick<Job, "id" | "status">) => {
     const evidenceCount = counts.get(job.id) ?? 0;
@@ -440,19 +450,6 @@ export function jobHandlers(db: () => PrismaClient) {
     const { to, note } = parsed.data;
     const early = transitionProblem(current.status, to);
     if (early) return fail(409, TRANSITION_MESSAGES[early], "to");
-    // #303: review needs something to review. Workers submit with evidence
-    // (evidence.ts); a bare status change to review needs it too.
-    if (
-      to === "awaiting_review" &&
-      (await db().workEvidence.count({
-        where: { companyId: actor.companyId, jobId: current.id },
-      })) === 0
-    )
-      return fail(
-        409,
-        "There's no worker evidence to review yet. A worker submits the job for review with a photo, note or signature.",
-        "to",
-      );
     const job = await withAudit(db(), async (tx, audit) => {
       // Compare-and-set: applies only if nobody moved the job meanwhile.
       const moved = await tx.job.updateMany({

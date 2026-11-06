@@ -52,20 +52,10 @@ describe("No worker evidence label (#303)", () => {
 });
 
 describe("status form without evidence (#303)", () => {
-  it("doesn't offer Awaiting review when the job has no evidence", () => {
+  it("still offers Awaiting review, so the office can approve with a note", () => {
     const html = renderToStaticMarkup(
       <StatusForm
         job={job("in_progress", { hasEvidence: false })}
-        saved={() => {}}
-      />,
-    );
-    expect(html).not.toContain('value="awaiting_review"');
-    expect(html).toContain('value="cancelled"');
-  });
-  it("still offers it once there's evidence", () => {
-    const html = renderToStaticMarkup(
-      <StatusForm
-        job={job("in_progress", { hasEvidence: true })}
         saved={() => {}}
       />,
     );
