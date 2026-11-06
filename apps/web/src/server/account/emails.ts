@@ -74,3 +74,42 @@ export function resetNoticeEmail(to: string, appUrl: string): EmailMessage {
     ].join("\n"),
   };
 }
+
+/** No company name or inviter: the invitation's creator chose those (S2 AC9). */
+export function invitedExistingEmail(to: string, appUrl: string): EmailMessage {
+  return {
+    to,
+    subject: "Your JobFlow invitation",
+    text: [
+      "Someone used a JobFlow invitation for this email address, which already has an account.",
+      "",
+      `If it was you, sign in here, then reopen the invitation link: ${appUrl}/login`,
+      `If you need a password, choose one here: ${appUrl}/forgot-password`,
+      "",
+      "If it wasn't you, no action is needed. Your account hasn't changed.",
+    ].join("\n"),
+  };
+}
+
+/** Only the mailbox holder sets the password of an invited account (#263). */
+export function invitedNewEmail(
+  to: string,
+  appUrl: string,
+  token: string,
+): EmailMessage {
+  return {
+    to,
+    subject: "Set your JobFlow password",
+    text: [
+      "Someone used a JobFlow invitation for this email address.",
+      "",
+      "If it was you, open the link below to choose your password. It works once and expires in 1 hour.",
+      "",
+      `${appUrl}/reset-password#token=${token}`,
+      "",
+      "Then sign in and reopen the invitation link to join.",
+      "",
+      "If it wasn't you, you can ignore this email.",
+    ].join("\n"),
+  };
+}
