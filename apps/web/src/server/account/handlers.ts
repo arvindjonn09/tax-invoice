@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import { type Auth, DEMO_EMAIL } from "../auth/config";
@@ -15,8 +16,9 @@ import { clientIp, hit } from "../http/throttle";
 import { log, safeError } from "../log";
 import {
   accountExistsEmail,
-  resetNoticeEmail,
   resetLinkEmail,
+  resetNoticeEmail,
+  setPasswordEmail,
   verificationEmail,
 } from "./emails";
 import {
@@ -75,8 +77,9 @@ const SignUp = z
   .object({
     name,
     email,
-    password,
-    passwordConfirmation: z.string(),
+    // Ignored: only the mailbox holder sets a password (#327).
+    password: z.unknown().optional(),
+    passwordConfirmation: z.unknown().optional(),
     acceptTerms: z.literal(true, {
       error: "Accept the Terms of Service and Privacy Policy",
     }),
@@ -84,11 +87,7 @@ const SignUp = z
     privacyVersion: z.string().max(40),
     turnstileToken: z.string().max(2048).optional(),
   })
-  .strict()
-  .refine((value) => value.password === value.passwordConfirmation, {
-    path: ["passwordConfirmation"],
-    message: "Passwords don't match",
-  });
+  .strict();
 const Verify = z.object({ token: z.string().max(100) }).strict();
 const Resend = z
   .object({ email, turnstileToken: z.string().max(2048).optional() })
@@ -289,18 +288,6 @@ export function signUp(deps: AccountDependencies) {
         { status: 400 },
       );
     }
-    if (await deps.isBreached(input.password)) {
-      return privateJson(
-        {
-          error: "Check the highlighted fields",
-          fields: {
-            password:
-              "This password has appeared in a data breach. Choose a different one.",
-          },
-        },
-        { status: 400 },
-      );
-    }
     const existing = await db.user.findUnique({
       where: { email: input.email },
       select: { id: true },
@@ -312,7 +299,9 @@ export function signUp(deps: AccountDependencies) {
           const user = await createCredentialUser(tx, {
             email: input.email,
             name: input.name,
-            password: input.password,
+            // Nobody knows this: only the mailbox holder sets the real password,
+            // and doing so also confirms the address (#327).
+            password: randomBytes(32).toString("base64url"),
           });
           await tx.termsAcceptance.create({
             data: {
@@ -321,12 +310,12 @@ export function signUp(deps: AccountDependencies) {
               privacyVersion: input.privacyVersion,
             },
           });
-          const token = await issueToken(tx, user.id, "email_verification");
+          const token = await issueToken(tx, user.id, "password_reset");
           await enqueueEmail(tx, deps.emailSecret(), {
-            kind: "verify_email",
-            dedupeKey: `verify_email:${user.id}:signup`,
+            kind: "password_reset",
+            dedupeKey: `password_reset:${user.id}:signup`,
             userId: user.id,
-            message: verificationEmail(user.email, deps.appUrl(), token),
+            message: setPasswordEmail(user.email, deps.appUrl(), token),
           });
           await tx.platformAuditEvent.create({
             data: {
@@ -348,7 +337,8 @@ export function signUp(deps: AccountDependencies) {
     }
     if (!createdId) {
       // Spend the same hashing work as a new account, so timing doesn't tell.
-      if (existing) await deps.hashPassword(input.password);
+      if (existing)
+        await deps.hashPassword(randomBytes(32).toString("base64url"));
       const email = input.email;
       // After the response: the per-recipient cap below must not show in timing.
       await deps.defer(async () => {

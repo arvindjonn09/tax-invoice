@@ -179,10 +179,8 @@ test("visitors without an account can find Sign up everywhere", async ({
     "autocomplete",
     "email",
   );
-  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute(
-    "autocomplete",
-    "new-password",
-  );
+  // Only the mailbox holder sets a password, from the emailed link (#327).
+  await expect(page.getByLabel("Password", { exact: true })).toHaveCount(0);
   await expect(
     page.getByRole("link", { name: "Terms of Service" }),
   ).toHaveAttribute("href", "/terms");

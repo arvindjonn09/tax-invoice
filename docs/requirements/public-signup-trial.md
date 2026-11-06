@@ -125,18 +125,19 @@ and I never see app data unauthenticated.
 
 ### S2. Sign up (Must, P0)
 
-As a prospective owner, I want to create an account with my name, email and password, so that I can set up my company.
+As a prospective owner, I want to create an account with my name and email, and set my password from a link sent to that email, so that I can set up my company and nobody else can choose my password (#327).
 
-1. Given the sign-up form, when I submit a valid name, email and password and tick the terms and privacy box, then:
-   - an unverified account is created;
-   - a verification email is sent (S3);
-   - I see "Check your email to verify your address", and no session is granted for app pages.
+1. Given the sign-up form, when I submit a valid name and email and tick the terms and privacy box, then:
+   - an unverified account with an unknown password is created;
+   - a set-password email is sent, and setting the password also confirms the address (S4);
+   - I see "Check your email", and no session is granted for app pages.
 2. **Validation**, all checked on the server:
    - Name: 1–200 characters after trimming, with control characters rejected.
    - Email: syntactically valid and ≤ 320 characters. It's trimmed and lower-cased before storing and comparing.
-   - Password: 12–128 characters (ADR 0003). Confirmation must match. There are no composition rules.
+   - Password: none at sign-up; a password in the request is ignored. It's set from the emailed link: 12–128 characters
+     (ADR 0003), confirmation must match, and there are no composition rules.
    - Terms and privacy: acceptance is required.
-3. **Breached passwords (decided):** passwords that appear in a known-breached list are rejected with a clear message.
+3. **Breached passwords (decided):** when the password is set, passwords that appear in a known-breached list are rejected with a clear message.
    The full password or its full hash is never sent to a third party. The architect chooses between a bundled list and
    a k-anonymity range lookup. If a lookup service is unavailable, sign-up isn't blocked, and the outage is logged.
 4. **No account enumeration:**
