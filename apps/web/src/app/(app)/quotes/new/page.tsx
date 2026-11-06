@@ -10,11 +10,12 @@ export const metadata = { title: "New quote · JobFlow" };
 export default async function NewQuotePage() {
   const actor = await requireActor("company.read");
   if (!can(actor.role, "quote.write")) notFound();
-  const { today, registeredToday } = await quoteDay(actor.companyId);
+  const { today, registeredToday, periods } = await quoteDay(actor.companyId);
   return (
     <QuoteBuilder
       initial={null}
       registeredToday={registeredToday}
+      periods={periods}
       today={today}
     />
   );
