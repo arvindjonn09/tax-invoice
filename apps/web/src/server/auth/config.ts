@@ -67,6 +67,14 @@ export function createAuth(settings: AuthSettings) {
       log: (level, message, ...args) =>
         log(level === "debug" ? "info" : level, "auth", { message, args }),
     },
+    // Reset and verification run through /api/account/* (#218, #219), which
+    // add throttles, Turnstile and single-use tokens these endpoints don't have.
+    disabledPaths: [
+      "/request-password-reset",
+      "/reset-password",
+      "/send-verification-email",
+      "/verify-email",
+    ],
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
