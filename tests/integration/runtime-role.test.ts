@@ -120,6 +120,10 @@ describe("runtime database role", () => {
     ],
     ["remove an operator", "DELETE FROM platform_operators"],
     [
+      "rewrite an enrolment code",
+      "UPDATE operator_enrolment_codes SET code_hash = 'forged', expires_at = now() + interval '1 day'",
+    ],
+    [
       "issue an enrolment code",
       "INSERT INTO operator_enrolment_codes (user_id, code_hash, expires_at) VALUES (gen_random_uuid(), 'x', now())",
     ],

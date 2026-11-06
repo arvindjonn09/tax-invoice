@@ -46,6 +46,7 @@ export function createWithOperator(deps: OperatorDependencies) {
           !(await isOperator(deps.db(), session.user.id, {
             env: deps.env(),
             production: deps.production(),
+            sessionId: session.session.id,
           }))
         ) {
           return notFound();

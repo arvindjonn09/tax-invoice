@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { userInfo } from "node:os";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
 import { z } from "zod";
 import { enrolmentCodeDigest, isOperator, operatorAllowlist } from "./access";
@@ -19,10 +20,10 @@ export type CliValues = {
 };
 
 export const USAGE = [
-  "Usage: pnpm operator grant --user <uuid> --reason <text> --by <name>",
-  "       pnpm operator revoke --user <uuid> --reason <text> --by <name>",
+  "Usage: pnpm operator grant --user <uuid> --reason <text> [--by <name>]",
+  "       pnpm operator revoke --user <uuid> --reason <text> [--by <name>]",
   "       pnpm operator list",
-  "       pnpm operator enrol-code --user <uuid> --by <name> [--reset]",
+  "       pnpm operator enrol-code --user <uuid> [--by <name>] [--reset]",
   "       pnpm operator extend --as <operatorUserId> --company <uuid> --last-day <date> --reason <text>",
   "       pnpm operator access --as <operatorUserId> --company <uuid> --mode trial|unrestricted [--last-day <date>] --reason <text>",
 ].join("\n");
@@ -41,10 +42,14 @@ const text = (value: string | undefined, flag: string, max: number) => {
   return trimmed;
 };
 
+/** Who ran the command: --by if given, otherwise the OS user. */
+const byWhom = (values: CliValues) =>
+  text(values.by?.trim() || userInfo().username, "by", 100);
+
 async function grant(db: PrismaClient, values: CliValues) {
   const userId = uuid(values.user, "user");
   const reason = text(values.reason, "reason", 500);
-  const by = text(values.by, "by", 100);
+  const by = byWhom(values);
   const user = await db.user.findUnique({
     where: { id: userId },
     select: { emailVerified: true },
@@ -70,7 +75,7 @@ async function grant(db: PrismaClient, values: CliValues) {
         actorKind: "system",
         userId,
         action: "operator.granted",
-        metadata: { by, reason },
+        metadata: { by, via: "cli", reason },
       },
     });
   });
@@ -80,7 +85,7 @@ async function grant(db: PrismaClient, values: CliValues) {
 async function revoke(db: PrismaClient, values: CliValues) {
   const userId = uuid(values.user, "user");
   const reason = text(values.reason, "reason", 500);
-  const by = text(values.by, "by", 100);
+  const by = byWhom(values);
   await db.$transaction(async (tx) => {
     const { count } = await tx.platformOperator.updateMany({
       where: { userId, revokedAt: null },
@@ -97,7 +102,7 @@ async function revoke(db: PrismaClient, values: CliValues) {
         actorKind: "system",
         userId,
         action: "operator.revoked",
-        metadata: { by, reason },
+        metadata: { by, via: "cli", reason },
       },
     });
   });
@@ -127,7 +132,7 @@ async function list(db: PrismaClient, env: Env) {
 /** Prints a one-time code. `--reset` also removes a lost device's TOTP. */
 async function enrolCode(db: PrismaClient, values: CliValues) {
   const userId = uuid(values.user, "user");
-  const by = text(values.by, "by", 100);
+  const by = byWhom(values);
   const code = randomBytes(24).toString("base64url");
   await db.$transaction(async (tx) => {
     const operator = await tx.platformOperator.findUnique({
@@ -148,20 +153,28 @@ async function enrolCode(db: PrismaClient, values: CliValues) {
         expiresAt: new Date(Date.now() + ENROLMENT_CODE_TTL_MS),
       },
     });
+    let sessionsDeleted = 0;
     if (values.reset) {
       await tx.twoFactor.deleteMany({ where: { userId } });
       await tx.user.update({
         where: { id: userId },
         data: { twoFactorEnabled: false },
       });
-      await tx.authSession.deleteMany({ where: { userId } });
+      ({ count: sessionsDeleted } = await tx.authSession.deleteMany({
+        where: { userId },
+      }));
     }
     await tx.platformAuditEvent.create({
       data: {
         actorKind: "system",
         userId,
         action: "operator.enrolment_code_issued",
-        metadata: { by, reset: Boolean(values.reset) },
+        metadata: {
+          by,
+          via: "cli",
+          reset: Boolean(values.reset),
+          sessionsDeleted,
+        },
       },
     });
   });
@@ -169,11 +182,24 @@ async function enrolCode(db: PrismaClient, values: CliValues) {
 }
 
 /** D5: --as must pass the two-key check; shell access stands in for TOTP. */
-async function requireActing(db: PrismaClient, values: CliValues, env: Env) {
+async function requireActing(
+  db: PrismaClient,
+  command: string,
+  values: CliValues,
+  env: Env,
+) {
   const operatorUserId = uuid(values.as, "as");
   if (!(await isOperator(db, operatorUserId, { env, production: false }))) {
     throw new Error("--as must be an active, allowlisted operator");
   }
+  await db.platformAuditEvent.create({
+    data: {
+      actorKind: "system",
+      userId: operatorUserId,
+      action: "operator.cli_command",
+      metadata: { by: byWhom(values), via: "cli", command },
+    },
+  });
   return operatorUserId;
 }
 
@@ -203,7 +229,7 @@ export async function runOperatorCommand(
     case "enrol-code":
       return enrolCode(db, values);
     case "extend": {
-      const operatorUserId = await requireActing(db, values, env);
+      const operatorUserId = await requireActing(db, command, values, env);
       const { lastDay } = await extendTrial(trialDeps(db, env), {
         operatorUserId,
         companyId: uuid(values.company, "company"),
@@ -213,7 +239,7 @@ export async function runOperatorCommand(
       return `Extended. The last trial day is now ${lastDay}.`;
     }
     case "access": {
-      const operatorUserId = await requireActing(db, values, env);
+      const operatorUserId = await requireActing(db, command, values, env);
       const base = {
         operatorUserId,
         companyId: uuid(values.company, "company"),

@@ -41,7 +41,8 @@ REVOKE DELETE, TRUNCATE ON email_dispatch_state FROM jobflow_app;
 -- #230: only the host CLI (owner credentials) changes who is an operator or
 -- issues an enrolment code. The web role can read both and consume a code.
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON platform_operators FROM jobflow_app;
-REVOKE INSERT, DELETE, TRUNCATE ON operator_enrolment_codes FROM jobflow_app;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON operator_enrolment_codes FROM jobflow_app;
+GRANT UPDATE (consumed_at) ON operator_enrolment_codes TO jobflow_app;
 -- Migration bookkeeping belongs to the owner.
 REVOKE ALL ON _prisma_migrations FROM jobflow_app;
 

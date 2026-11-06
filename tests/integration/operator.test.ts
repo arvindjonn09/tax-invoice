@@ -256,7 +256,7 @@ describe("isOperator and withOperator", () => {
     await expect404(await call(cookie));
   });
 
-  it("returns 404 in production without TOTP, and passes with it", async () => {
+  it("returns 404 in production without TOTP on this session, whatever the user's flag says", async () => {
     const user = await newOperator();
     const cookie = cookieFrom(await signIn(user.email));
     await expect404(await call(cookie, true));
@@ -264,7 +264,7 @@ describe("isOperator and withOperator", () => {
       where: { id: user.id },
       data: { twoFactorEnabled: true },
     });
-    expect((await call(cookie, true)).status).toBe(200);
+    await expect404(await call(cookie, true));
   });
 
   it("returns 404 for a cross-origin request, even from an operator", async () => {
@@ -391,16 +391,131 @@ describe("TOTP enrolment", () => {
     expect(await db.authSession.count({ where: { userId: user.id } })).toBe(1);
   });
 
-  it("keeps TOTP from being turned off over HTTP", async () => {
+  it.each([
+    "/two-factor/disable",
+    "/two-factor/get-totp-uri",
+    "/two-factor/generate-backup-codes",
+  ])("keeps %s closed over HTTP", async (path) => {
     const user = await newOperator();
     const response = await auth.handler(
       authRequest(
-        "/two-factor/disable",
+        path,
         { password: PASSWORD },
         { cookie: cookieFrom(await signIn(user.email)) },
       ),
     );
     expect(response.status).toBe(404);
+  });
+
+  describe("in production, TOTP belongs to the session that passed it", () => {
+    const production = (cookie: string) =>
+      createWithOperator({
+        db: () => db,
+        auth: () => auth,
+        trustedOrigins: () => [ORIGIN],
+        env: () => env(),
+        production: () => true,
+      })(async ({ operatorUserId }) => Response.json({ operatorUserId }))(
+        new Request(`${ORIGIN}/api/operator/ping`, {
+          headers: { origin: ORIGIN, cookie },
+        }),
+        undefined,
+      );
+    const enrol = async (userId: string, email: string) => {
+      const cookie = cookieFrom(await signIn(email));
+      const enabled = await enable(cookie, await issueCode(userId));
+      const { totpURI, backupCodes } = (await enabled.json()) as {
+        totpURI: string;
+        backupCodes: string[];
+      };
+      const confirmed = await auth.handler(
+        authRequest(
+          "/two-factor/verify-totp",
+          { code: totp(totpURI) },
+          { cookie },
+        ),
+      );
+      expect(confirmed.status).toBe(200);
+      return { totpURI, backupCodes, cookie: cookieFrom(confirmed) };
+    };
+
+    it("refuses a session from before enrolment, and accepts the one that enrolled", async () => {
+      const user = await newOperator();
+      const stolen = cookieFrom(await signIn(user.email));
+      const { cookie } = await enrol(user.id, user.email);
+      expect((await production(stolen)).status).toBe(404);
+      expect((await production(cookie)).status).toBe(200);
+    });
+
+    it("accepts a sign-in that passes TOTP, and records it", async () => {
+      const user = await newOperator();
+      const { totpURI } = await enrol(user.id, user.email);
+      const pending = cookieFrom(await signIn(user.email));
+      const verified = await auth.handler(
+        authRequest(
+          "/two-factor/verify-totp",
+          { code: totp(totpURI) },
+          { cookie: pending },
+        ),
+      );
+      expect(verified.status).toBe(200);
+      expect((await production(cookieFrom(verified))).status).toBe(200);
+      expect(
+        await db.platformAuditEvent.count({
+          where: {
+            userId: user.id,
+            action: "operator.mfa_verified",
+            metadata: { equals: { factor: "totp" } },
+          },
+        }),
+      ).toBe(2);
+      expect(
+        await db.platformAuditEvent.count({
+          where: {
+            userId: user.id,
+            action: "operator.enrolment_code_consumed",
+          },
+        }),
+      ).toBe(1);
+    });
+
+    it("accepts a sign-in that passes a backup code", async () => {
+      const user = await newOperator();
+      const { backupCodes } = await enrol(user.id, user.email);
+      const pending = cookieFrom(await signIn(user.email));
+      const verified = await auth.handler(
+        authRequest(
+          "/two-factor/verify-backup-code",
+          { code: backupCodes[0] },
+          { cookie: pending },
+        ),
+      );
+      expect(verified.status).toBe(200);
+      expect((await production(cookieFrom(verified))).status).toBe(200);
+    });
+
+    it("records nothing for a wrong code", async () => {
+      const user = await newOperator();
+      const stolen = cookieFrom(await signIn(user.email));
+      await enrol(user.id, user.email);
+      const before = await db.platformAuditEvent.count({
+        where: { userId: user.id, action: "operator.mfa_verified" },
+      });
+      const refused = await auth.handler(
+        authRequest(
+          "/two-factor/verify-totp",
+          { code: "000000" },
+          { cookie: stolen },
+        ),
+      );
+      expect(refused.status).toBe(401);
+      expect((await production(stolen)).status).toBe(404);
+      expect(
+        await db.platformAuditEvent.count({
+          where: { userId: user.id, action: "operator.mfa_verified" },
+        }),
+      ).toBe(before);
+    });
   });
 
   it("--reset clears a lost device and its sessions", async () => {
@@ -414,6 +529,16 @@ describe("TOTP enrolment", () => {
       data: { userId: user.id, secret: "s", backupCodes: "b" },
     });
     await issueCode(user.id, true);
+    expect(
+      (
+        await db.platformAuditEvent.findFirstOrThrow({
+          where: {
+            userId: user.id,
+            action: "operator.enrolment_code_issued",
+          },
+        })
+      ).metadata,
+    ).toEqual({ by: "test", via: "cli", reset: true, sessionsDeleted: 1 });
     expect(
       (await db.user.findUniqueOrThrow({ where: { id: user.id } }))
         .twoFactorEnabled,
@@ -510,6 +635,20 @@ describe("trialAccess", () => {
     ).rejects.toMatchObject({ code: "invalid_reason" });
   });
 
+  it("refuses an access-mode trial more than 365 days out", async () => {
+    const operator = await newOperator();
+    const company = await newCompany();
+    await expect(
+      setAccessMode(deps(), {
+        operatorUserId: operator.id,
+        companyId: company.id,
+        reason: "Synthetic",
+        mode: "trial",
+        lastDay: "2027-11-07",
+      }),
+    ).rejects.toBeInstanceOf(TrialAccessError);
+  });
+
   it("refuses a demo company and an unknown company", async () => {
     const operator = await newOperator();
     const demo = await newCompany({ demo: true });
@@ -524,7 +663,7 @@ describe("trialAccess", () => {
         mode: "trial",
         lastDay: "2026-12-20",
       }),
-    ).rejects.toBeInstanceOf(TrialAccessError);
+    ).rejects.toMatchObject({ code: "demo_company" });
     await expect(
       extend(operator.id, randomUUID(), "2026-12-20"),
     ).rejects.toMatchObject({ code: "unknown_company" });
@@ -711,6 +850,25 @@ describe("pnpm operator", () => {
       { action: "operator.granted", actorKind: "system", _count: 2 },
       { action: "operator.revoked", actorKind: "system", _count: 1 },
     ]);
+    const granted = await db.platformAuditEvent.findFirstOrThrow({
+      where: { userId: user.id, action: "operator.granted" },
+    });
+    expect(granted.metadata).toEqual({
+      by: "test",
+      via: "cli",
+      reason: "Synthetic",
+    });
+  });
+
+  it("keeps a used enrolment code used", async () => {
+    const user = await newOperator();
+    const code = (await run("enrol-code", { user: user.id, by: "test" }))
+      .split("\n")
+      .at(-1)!;
+    expect(await consumeEnrolmentCode(db, user.id, code)).toBe(true);
+    await expect(
+      db.$executeRaw`UPDATE operator_enrolment_codes SET consumed_at = NULL WHERE user_id = ${user.id}::uuid`,
+    ).rejects.toThrow();
   });
 
   it("revoking cancels an unused enrolment code", async () => {
@@ -764,6 +922,13 @@ describe("pnpm operator", () => {
       }),
     ).toContain(lastDay);
     expect(await lastDayOf(company.id)).toBe(lastDay);
+    const recorded = await db.platformAuditEvent.findFirstOrThrow({
+      where: { userId: operator.id, action: "operator.cli_command" },
+    });
+    expect(recorded.metadata).toMatchObject({ via: "cli", command: "extend" });
+    expect((recorded.metadata as { by?: unknown }).by).toEqual(
+      expect.any(String),
+    );
     await expect(
       run("access", { ...values, as: operator.id, mode: "other" }),
     ).rejects.toThrow("--mode");

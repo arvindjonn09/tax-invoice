@@ -115,6 +115,8 @@ model AuthSession {
   userId          String   @map("user_id") @db.Uuid
   /// Company the session acts in; must match an active membership (checked on every request).
   activeCompanyId String?  @map("active_company_id") @db.Uuid
+  /// When this session passed TOTP. Operators need it in production (#230).
+  mfaVerifiedAt   DateTime? @map("mfa_verified_at") @db.Timestamptz(3)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
