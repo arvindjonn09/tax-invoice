@@ -162,6 +162,14 @@ test("owner records a customer receipt against an issued invoice", async ({
     {},
   );
   const total = registered ? "$550.00" : "$500.00";
+  // #304: the invoice list shows where an issued invoice stands.
+  const listed = async () => {
+    await page.goto("/invoices");
+    return page.getByRole("listitem").filter({ hasText: issued.reference });
+  };
+  const card = await listed();
+  await expect(card).toContainText("Issued · Unpaid");
+  await expect(card).toContainText(`${total} AUD owing`);
 
   await page.goto("/payments?view=receipts");
   await expect(
@@ -188,6 +196,9 @@ test("owner records a customer receipt against an issued invoice", async ({
     `Receipt from ${name}`,
   );
   await expect(page.getByText(`Invoice ${issued.reference}`)).toBeVisible();
+  const paid = await listed();
+  await expect(paid).toContainText("Issued · Paid");
+  await expect(paid).not.toContainText("owing");
 
   // Fully paid: nothing is left owing on that customer's invoices.
   await page.goto("/payments/receipts/new");
