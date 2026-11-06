@@ -312,6 +312,7 @@ export function invoiceHandlers(
           ...(balance
             ? {
                 receivedCents: balance.received.toString(),
+                creditedCents: balance.credited.toString(),
                 outstandingCents: receivable(balance).toString(),
               }
             : {}),
