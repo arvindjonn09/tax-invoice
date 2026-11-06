@@ -1,8 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
+import { resetPassword } from "../../apps/web/src/server/account/handlers";
 import { createAuth } from "../../apps/web/src/server/auth/config";
-import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
+import { decryptPayload } from "../../apps/web/src/server/email/crypto";
+import {
+  createCredentialUser,
+  hashPassword,
+} from "../../apps/web/src/server/auth/credentials";
 import {
   resolveActor,
   setActiveCompany,
@@ -20,6 +25,7 @@ import { syntheticFactory } from "../helpers/factories";
 
 const ORIGIN = "http://127.0.0.1:3000";
 const PASSWORD = "synthetic password for tests";
+const SECRET = "test-outbox-key-0123456789abcdef-0123456789";
 const ROLES = [
   "owner",
   "manager",
@@ -92,6 +98,7 @@ async function invitation(email: string, role = "employee") {
   };
   return {
     id: result.invitation.id,
+    email,
     token: result.invitationPath.split("#")[1]!,
   };
 }
@@ -115,6 +122,10 @@ beforeAll(async () => {
     auth: () => auth,
     db: () => db,
     trustedOrigins: () => [ORIGIN],
+    appUrl: () => ORIGIN,
+    emailSecret: () => SECRET,
+    dispatch: () => {},
+    defer: (work: () => Promise<void>) => work(),
   });
   for (const who of [...ROLES, "outsider", "secondOwner"] as const) {
     userIds[who] = (
@@ -512,7 +523,57 @@ describe("invitations", () => {
     ).toBe(404);
   });
 
-  it("accepts a new user's invite once, grants exactly its role/company and hashes their password", async () => {
+  /** A signed-in request from a holder of a confirmed mailbox. */
+  const verifiedRequest = async (email: string, body: unknown) => {
+    await db.user.update({
+      where: { email },
+      data: { emailVerified: true },
+    });
+    const incoming = request(null, "POST", body);
+    incoming.headers.set(
+      "cookie",
+      (await signIn(email)).headers.getSetCookie()[0]!.split(";")[0]!,
+    );
+    return incoming;
+  };
+
+  /** Follows the emailed link, as only the mailbox holder can. */
+  const setPasswordFromEmail = async (userId: string) => {
+    const [email] = await db.emailOutbox.findMany({
+      where: { userId, kind: "password_reset" },
+      orderBy: { createdAt: "desc" },
+      take: 1,
+    });
+    const text = decryptPayload(SECRET, email!.payloadCiphertext!).text;
+    const token = /#token=([A-Za-z0-9_-]{43})/.exec(text)![1]!;
+    const response = await resetPassword({
+      db: () => db,
+      auth: () => auth,
+      trustedOrigins: () => [ORIGIN],
+      appUrl: () => ORIGIN,
+      emailSecret: () => SECRET,
+      dispatch: () => {},
+      isBreached: async () => false,
+      hashPassword,
+    } as never)(
+      new Request(`${ORIGIN}/api/account/password/reset`, {
+        method: "POST",
+        headers: {
+          origin: ORIGIN,
+          "content-type": "application/json",
+          "x-forwarded-for": `198.51.100.${++ip}`,
+        },
+        body: JSON.stringify({
+          token,
+          password: PASSWORD,
+          passwordConfirmation: PASSWORD,
+        }),
+      }),
+    );
+    expect(response.status).toBe(200);
+  };
+
+  it("lets only the mailbox holder set the password, then join", async () => {
     const issued = await invitation("joining@jobflow.invalid", "accountant");
     const response = await accept(
       request(null, "POST", {
@@ -523,27 +584,35 @@ describe("invitations", () => {
         companyId: otherCompanyId,
       }),
     );
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(202);
     const user = await db.user.findUniqueOrThrow({
       where: { email: "joining@jobflow.invalid" },
     });
+    expect(user.emailVerified).toBe(false);
+    expect(await db.membership.count({ where: { userId: user.id } })).toBe(0);
+    // A password in the request means nothing: whoever sent it can't sign in.
+    expect((await signIn(issued.email)).status).toBe(401);
+
+    await setPasswordFromEmail(user.id);
+    expect(
+      (await db.user.findUniqueOrThrow({ where: { id: user.id } }))
+        .emailVerified,
+    ).toBe(true);
+    const joining = request(null, "POST", { token: issued.token });
+    joining.headers.set(
+      "cookie",
+      (await signIn(issued.email)).headers.getSetCookie()[0]!.split(";")[0]!,
+    );
+    expect((await accept(joining)).status).toBe(200);
     expect(
       await db.membership.findUnique({
         where: { companyId_userId: { companyId, userId: user.id } },
       }),
     ).toMatchObject({ role: "accountant", isActive: true });
-    const credential = await db.authAccount.findFirstOrThrow({
-      where: { userId: user.id },
-    });
-    expect(credential.password).not.toBe(PASSWORD);
     expect(
       (
         await accept(
-          request(null, "POST", {
-            token: issued.token,
-            name: "Again",
-            password: PASSWORD,
-          }),
+          await verifiedRequest(issued.email, { token: issued.token }),
         )
       ).status,
     ).toBe(400);
@@ -552,21 +621,52 @@ describe("invitations", () => {
         where: { action: "invitation.accepted", targetId: issued.id },
       }),
     ).toBe(1);
-    expect((await signIn("joining@jobflow.invalid")).status).toBe(200);
+  });
+
+  it("refuses to add a signed-in account whose email isn't confirmed", async () => {
+    const existing = await createCredentialUser(db, {
+      email: `unconfirmed-${crypto.randomUUID()}@jobflow.invalid`,
+      name: "Unconfirmed Sample",
+      password: PASSWORD,
+    });
+    const issued = await invitation(existing.email);
+    const incoming = request(null, "POST", { token: issued.token });
+    incoming.headers.set(
+      "cookie",
+      (await signIn(existing.email)).headers.getSetCookie()[0]!.split(";")[0]!,
+    );
+    expect((await accept(incoming)).status).toBe(403);
+    expect(await db.membership.count({ where: { userId: existing.id } })).toBe(
+      0,
+    );
   });
 
   it("serializes simultaneous redemption so it grants one membership and one acceptance event", async () => {
     const issued = await invitation("race@jobflow.invalid");
-    const responses = await Promise.all(
+    const signedOut = await Promise.all(
       Array.from({ length: 2 }, () =>
         accept(
           request(null, "POST", {
             token: issued.token,
             name: "Race Sample",
-            password: PASSWORD,
           }),
         ),
       ),
+    );
+    expect(signedOut.map((r) => r.status)).toEqual([202, 202]);
+    await setPasswordFromEmail(
+      (
+        await db.user.findUniqueOrThrow({
+          where: { email: "race@jobflow.invalid" },
+        })
+      ).id,
+    );
+    const responses = await Promise.all(
+      await Promise.all(
+        Array.from({ length: 2 }, () =>
+          verifiedRequest(issued.email, { token: issued.token }),
+        ),
+      ).then((incoming) => incoming.map((one) => accept(one))),
     );
     expect(responses.map((r) => r.status).sort()).toEqual([200, 400]);
     expect(
@@ -598,19 +698,17 @@ describe("invitations", () => {
           }),
         )
       ).status,
-    ).toBe(401);
+    ).toBe(202);
     expect(
       (await accept(request("owner", "POST", { token: issued.token }))).status,
-    ).toBe(401);
+    ).toBe(403);
     const before = await db.authAccount.findFirstOrThrow({
       where: { userId: existing.id },
     });
-    const signedIn = headersFrom(await signIn(existing.email));
-    const incoming = request(null, "POST", {
+    const incoming = await verifiedRequest(existing.email, {
       token: issued.token,
       password: "a different password",
     });
-    incoming.headers.set("cookie", signedIn.get("cookie") ?? "");
     expect((await accept(incoming)).status).toBe(200);
     expect(
       (
@@ -693,6 +791,172 @@ describe("invitations", () => {
         )
       ).status,
     ).toBe(400);
+  });
+
+  describe("can't reveal whether the invited address has an account (#263)", () => {
+    const answer = async (response: Response) => ({
+      status: response.status,
+      body: await response.json(),
+    });
+    const details = { name: "Synthetic Person" };
+
+    it("answers a signed-out caller identically, with and without details", async () => {
+      const taken = await invitation(
+        `oracle-existing-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      await db.user.create({
+        data: {
+          email: taken.email,
+          name: "Already Here",
+          emailVerified: true,
+        },
+      });
+      const free = await invitation(
+        `oracle-new-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      const empty = (token: string) => accept(request(null, "POST", { token }));
+      expect(await answer(await empty(taken.token))).toEqual(
+        await answer(await empty(free.token)),
+      );
+
+      const existing = await answer(
+        await accept(request(null, "POST", { token: taken.token, ...details })),
+      );
+      const created = await answer(
+        await accept(request(null, "POST", { token: free.token, ...details })),
+      );
+      expect(existing).toEqual(created);
+      expect(existing).toEqual({
+        status: 202,
+        body: { status: "check-email" },
+      });
+    });
+
+    it("leaves what the owner can read identical, including on a replay", async () => {
+      const taken = await invitation(
+        `oracle-state-existing-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      await db.user.create({
+        data: { email: taken.email, name: "Already Here", emailVerified: true },
+      });
+      const free = await invitation(
+        `oracle-state-new-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      const state = async ({ id, email }: { id: string; email: string }) => ({
+        members: await db.membership.count({
+          where: { companyId, user: { email } },
+        }),
+        invitation: await db.userInvitation
+          .findUniqueOrThrow({ where: { id } })
+          .then((row) => ({
+            acceptedAt: row.acceptedAt,
+            revokedAt: row.revokedAt,
+          })),
+        audit: await db.auditEvent.count({
+          where: { companyId, targetId: id },
+        }),
+      });
+      const submit = (token: string) =>
+        accept(request(null, "POST", { token, ...details })).then(answer);
+      const auditAfterIssue = await db.auditEvent.count({
+        where: { companyId },
+      });
+      expect(await submit(taken.token)).toEqual(await submit(free.token));
+      expect(await state(taken)).toEqual(await state(free));
+      expect(await db.auditEvent.count({ where: { companyId } })).toBe(
+        auditAfterIssue,
+      );
+      expect((await state(free)).invitation.acceptedAt).toBeNull();
+      expect(await submit(taken.token)).toEqual(await submit(free.token));
+      expect(await state(taken)).toEqual(await state(free));
+    });
+
+    it("refuses someone signed in as another user identically", async () => {
+      const taken = await invitation(
+        `oracle-signed-in-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      await db.user.create({
+        data: { email: taken.email, name: "Already Here" },
+      });
+      const free = await invitation(
+        `oracle-signed-in-new-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      const asOutsider = (token: string) =>
+        accept(request("outsider", "POST", { token }));
+      const existing = await answer(await asOutsider(taken.token));
+      expect(existing.status).toBe(403);
+      expect(existing).toEqual(await answer(await asOutsider(free.token)));
+    });
+
+    it("grants nothing to the existing account, and emails its next step to the mailbox", async () => {
+      const issued = await invitation(
+        `oracle-email-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      const user = await db.user.create({
+        data: { email: issued.email, name: "Already Here" },
+      });
+      await accept(request(null, "POST", { token: issued.token, ...details }));
+      expect(await db.membership.count({ where: { userId: user.id } })).toBe(0);
+      expect(
+        (
+          await db.userInvitation.findUniqueOrThrow({
+            where: { id: issued.id },
+          })
+        ).acceptedAt,
+      ).toBeNull();
+      expect(await db.authAccount.count({ where: { userId: user.id } })).toBe(
+        0,
+      );
+      expect(
+        await db.emailOutbox.count({
+          where: { userId: user.id, kind: "account_exists" },
+        }),
+      ).toBe(1);
+    });
+
+    it("sends a new account a set-password email, and leaves it unverified", async () => {
+      const issued = await invitation(
+        `oracle-verify-${crypto.randomUUID()}@jobflow.invalid`,
+        "manager",
+      );
+      await accept(request(null, "POST", { token: issued.token, ...details }));
+      const user = await db.user.findUniqueOrThrow({
+        where: { email: issued.email },
+      });
+      expect(user.emailVerified).toBe(false);
+      expect(
+        await db.emailOutbox.count({
+          where: { userId: user.id, kind: "password_reset" },
+        }),
+      ).toBe(1);
+    });
+
+    it("still lets the invited user accept once signed in", async () => {
+      const email = `oracle-signed-in-ok-${crypto.randomUUID()}@jobflow.invalid`;
+      const existing = await createCredentialUser(db, {
+        email,
+        name: "Returning User",
+        password: PASSWORD,
+      });
+      const issued = await invitation(email, "manager");
+      const response = await accept(
+        await verifiedRequest(email, { token: issued.token }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ accepted: true });
+      expect(
+        await db.membership.findUnique({
+          where: { companyId_userId: { companyId, userId: existing.id } },
+        }),
+      ).toMatchObject({ role: "manager", isActive: true });
+    });
   });
 
   it("keeps every pending invitation discoverable and revocable across pages", async () => {

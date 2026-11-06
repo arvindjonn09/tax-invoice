@@ -6,6 +6,8 @@ import type {
 } from "../../../../../packages/database/src/generated/prisma/client";
 import { MIN_PASSWORD_LENGTH } from "./config";
 
+export { hashPassword };
+
 /**
  * Create a user who signs in with email + password. Public sign-up is disabled,
  * so owners (#27) and the demo seed (#21) create users through this function.

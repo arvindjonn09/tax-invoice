@@ -9,6 +9,7 @@ export function InvitationForm() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  const [checkEmail, setCheckEmail] = useState(false);
   useEffect(() => {
     // Retain only in memory. Never send the bearer token in a URL or Referer.
     if (window.location.hash) token.current = window.location.hash.slice(1);
@@ -21,14 +22,12 @@ export function InvitationForm() {
     const form = new FormData(event.currentTarget);
     try {
       const name = String(form.get("name") ?? "").trim();
-      const password = String(form.get("password") ?? "");
       const response = await fetch("/api/invitations/accept", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           token: token.current,
           ...(name ? { name } : {}),
-          ...(password ? { password } : {}),
         }),
       });
       const result = (await response.json()) as {
@@ -37,14 +36,13 @@ export function InvitationForm() {
       };
       if (!response.ok)
         throw new Error(
-          response.status === 401
-            ? "Sign in with your existing invited account, then reopen the original invitation link."
-            : result.fields
-              ? Object.values(result.fields).join(". ")
-              : (result.error ?? "Unable to accept invitation."),
+          result.fields
+            ? Object.values(result.fields).join(". ")
+            : (result.error ?? "Unable to accept invitation."),
         );
       token.current = "";
-      setAccepted(true);
+      if (response.status === 202) setCheckEmail(true);
+      else setAccepted(true);
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -55,6 +53,20 @@ export function InvitationForm() {
       setBusy(false);
     }
   }
+  if (checkEmail)
+    return (
+      <section
+        role="status"
+        className="space-y-4 rounded-lg border bg-card p-6 text-card-foreground"
+      >
+        <h2 className="text-xl font-semibold">Check your email</h2>
+        <p>
+          We&apos;ve sent the next step to the invited address. Follow it to set
+          your password, sign in, then reopen your invitation link to join your
+          team.
+        </p>
+      </section>
+    );
   if (accepted)
     return (
       <section
@@ -74,12 +86,13 @@ export function InvitationForm() {
       className="space-y-4 rounded-lg border bg-card p-6 text-card-foreground"
     >
       <p>
-        New here? Enter your name and choose a password. Already have a JobFlow
-        account?{" "}
+        New here? Enter your name, and we&apos;ll email you a link to set your
+        password. Then sign in and reopen this link to join. Already have a
+        JobFlow account?{" "}
         <Link className="underline" href="/login">
           Sign in
         </Link>
-        , then reopen the original invitation link and leave these fields blank.
+        , then reopen the original invitation link and leave the name blank.
       </p>
       {error ? (
         <p
@@ -96,17 +109,6 @@ export function InvitationForm() {
           name="name"
           autoComplete="name"
           maxLength={200}
-        />
-      </label>
-      <label className="block space-y-2">
-        Password (new accounts, 12–128 characters)
-        <input
-          className={control}
-          name="password"
-          type="password"
-          autoComplete="new-password"
-          minLength={12}
-          maxLength={128}
         />
       </label>
       <Button disabled={busy} type="submit">
