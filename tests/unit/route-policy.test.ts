@@ -27,6 +27,12 @@ const PUBLIC_ROUTES: Record<string, string> = {
     "Requires a verified session; creates only the caller's own first company (one per user, idempotency key) with the caller as Owner; origin/body/throttle guards",
   "api/session/company/route.ts":
     "Requires a verified session; sets the session's company only to one where the caller is an active member, else 404; origin and size guards",
+  "api/admin-console/login/route.ts":
+    "Owner admin console (#252): .env-admin credentials, constant-time compare, IP throttle 5/15 min, origin check; 404 when unconfigured",
+  "api/admin-console/logout/route.ts":
+    "Clears only the caller's admin console cookie; origin check; 404 when unconfigured",
+  "api/admin-console/organisations/route.ts":
+    "Requires a valid HMAC-signed admin console session (8 h); origin and size checks; audited licence actions; 404 when unconfigured",
   "api/auth/[...all]/route.ts":
     "Better Auth endpoints: sign-in/out and session; they enforce their own origin checks and throttling",
 };
