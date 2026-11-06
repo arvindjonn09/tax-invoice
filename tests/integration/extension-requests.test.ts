@@ -154,7 +154,7 @@ describe("an owner asks for more time", () => {
   it("records one pending request, an audit event and a safe operator email", async () => {
     const company = await newCompany();
     const response = await ask(company, {
-      message: "Please\r\nSubject: extra\u0007 line",
+      message: "Please\r\nSubject: extra\u0007 line\u2028Next\u202e line",
     });
     expect(response.status).toBe(201);
     const { id } = (await response.json()) as { id: string };
@@ -182,7 +182,9 @@ describe("an owner asks for more time", () => {
     expect(message.text).toContain(`Request: ${id}`);
     expect(message.text).toContain("Last trial day: 2099-01-01");
     expect(message.text).toContain(company.ownerEmail);
-    expect(message.text).toContain("> Please\n> Subject: extra  line");
+    expect(message.text).toContain(
+      "> Please\n> Subject: extra  line\n> Next  line",
+    );
     expect(message.text).toContain(`${ORIGIN}/operator/requests/${id}`);
   });
 
@@ -275,6 +277,40 @@ describe("an owner asks for more time", () => {
     expect(retryAfterSeconds).toBeLessThanOrEqual(24 * 3600);
   });
 
+  it("uses the last day as the notice key, and doesn't lose the approval email to an earlier one", async () => {
+    const company = await newCompany();
+    const id = await pendingFor(company);
+    const response = await decide(id, "approve", { days: 5 });
+    expect(response.status).toBe(200);
+    const { lastDay } = (await response.json()) as { lastDay: string };
+    expect(
+      await db.userNotice.findMany({
+        where: { companyId: company.id },
+        select: { noticeKey: true },
+      }),
+    ).toEqual([{ noticeKey: `trial.extended:${lastDay}` }]);
+    const [email] = await db.emailOutbox.findMany({
+      where: { companyId: company.id, kind: "trial_extended" },
+    });
+    expect(email!.dedupeKey).toContain(id);
+  });
+
+  it("ignores a malformed x-request-id instead of failing the decision", async () => {
+    const company = await newCompany();
+    const id = await pendingFor(company);
+    const request = jsonRequest(
+      `/api/operator/extension-requests/${id}/approve`,
+      { days: 5 },
+    );
+    request.headers.set("x-request-id", "bad id!");
+    const response = await operator().approve({
+      operatorUserId: operatorId,
+      request,
+      context: { params: Promise.resolve({ id }) },
+    });
+    expect(response.status).toBe(200);
+  });
+
   it("shows owners the decline reason but not the approval note", async () => {
     const declined = await newCompany();
     const first = await pendingFor(declined);
@@ -290,6 +326,11 @@ describe("an owner asks for more time", () => {
     expect(declinedView.decisions[0]!.reason).toBe("Synthetic reason");
     const approvedView = await (await viewAs(approved)).text();
     expect(approvedView).not.toContain("Internal note");
+    const exported = JSON.stringify(await exportCompany(db, approved.id));
+    expect(exported).not.toContain("Internal note");
+    expect(exported).toContain("hasNote");
+    const declinedExport = JSON.stringify(await exportCompany(db, declined.id));
+    expect(declinedExport).toContain("Synthetic reason");
     expect(approvedView).not.toContain(operatorId);
   });
 });

@@ -10,7 +10,8 @@ import { log } from "../log";
 const WEEK_MS = 7 * 86_400_000;
 const DAY_MS = 86_400_000;
 const WEEKLY_LIMIT = 3;
-const CONTROL = /[\p{Cc}]/gu;
+// Format characters too: bidi overrides, and U+2028/9 that some clients render as line breaks.
+const CONTROL = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
 
 const Body = z
   .object({ message: z.string().trim().max(1000).optional() })
@@ -67,7 +68,7 @@ const throttled = (retryAfterSeconds: number) =>
 /** Quotes each line, so a message can't pass as this email's own wording. */
 const quoted = (message: string) =>
   message
-    .split(/\r?\n/)
+    .split(/\r\n|[\r\n\u2028\u2029]/)
     .map((line) => `> ${line.replace(CONTROL, " ")}`)
     .join("\n");
 

@@ -396,21 +396,28 @@ export async function approveExtensionRequest(
         action: "trial_extension.approved",
         target: { type: "trial_extension_request", id: request.id },
         ...(input.auditRequestId ? { requestId: input.auditRequestId } : {}),
-        before: { trialLastDay: current, status: "pending", note: null },
-        after: { trialLastDay: lastDay, status: "approved", note },
+        before: { trialLastDay: current, status: "pending" },
+        // Owners can export audit events, and the note is for operators only.
+        after: {
+          trialLastDay: lastDay,
+          status: "approved",
+          hasNote: note !== null,
+        },
       });
       await tellOwners(
         tx,
         deps,
         company.id,
         "trial_extended",
-        lastDay,
+        // Not the last day alone: after a direct extension to the same day, the
+        // outbox would drop this email as a duplicate.
+        `${lastDay}:${request.id}`,
         "Your JobFlow trial was extended",
         [
           `Your request was approved. Your JobFlow trial now runs until ${lastDay}.`,
           "Your company can keep adding and changing records until then.",
         ],
-        `trial.extended:${request.id}`,
+        `trial.extended:${lastDay}`,
       );
       return { lastDay };
     },

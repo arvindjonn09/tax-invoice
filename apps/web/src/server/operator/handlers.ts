@@ -94,8 +94,11 @@ const refused = (error: unknown) => {
   }
   throw error;
 };
-const auditId = (request: Request) =>
-  request.headers.get("x-request-id") ?? undefined;
+/** A client's malformed id is dropped: the audit writer refuses it outright. */
+const auditId = (request: Request) => {
+  const id = request.headers.get("x-request-id");
+  return id && /^[A-Za-z0-9._:-]{1,100}$/.test(id) ? id : undefined;
+};
 const page = (url: URL) =>
   Math.max(1, Math.min(10_000, Number(url.searchParams.get("page")) || 1));
 
