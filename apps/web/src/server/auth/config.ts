@@ -84,11 +84,17 @@ export function createAuth(settings: AuthSettings) {
     },
     // A lost device goes through `pnpm operator enrol-code --reset`, so a stolen
     // session and password can't remove or copy TOTP. Enrolment shows the secret
-    // and backup codes once.
+    // and backup codes once. Reset and verification run through /api/account/*
+    // (#218, #219), which add throttles, Turnstile and single-use tokens these
+    // endpoints don't have.
     disabledPaths: [
       "/two-factor/disable",
       "/two-factor/get-totp-uri",
       "/two-factor/generate-backup-codes",
+      "/request-password-reset",
+      "/reset-password",
+      "/send-verification-email",
+      "/verify-email",
     ],
     emailAndPassword: {
       enabled: true,

@@ -39,3 +39,38 @@ export function accountExistsEmail(to: string, appUrl: string): EmailMessage {
     ].join("\n"),
   };
 }
+
+export function resetLinkEmail(
+  to: string,
+  appUrl: string,
+  token: string,
+): EmailMessage {
+  const link = `${appUrl}/reset-password#token=${token}`;
+  return {
+    to,
+    subject: "Reset your JobFlow password",
+    text: [
+      "Someone asked to reset the password for this JobFlow account.",
+      "",
+      "If it was you, open the link below to choose a new password. It works once and expires in 1 hour.",
+      "",
+      link,
+      "",
+      "If it wasn't you, you can ignore this email. Your password hasn't changed.",
+    ].join("\n"),
+  };
+}
+
+export function resetNoticeEmail(to: string, appUrl: string): EmailMessage {
+  return {
+    to,
+    subject: "Your JobFlow password was changed",
+    text: [
+      "The password for this JobFlow account was just changed, and every device was signed out.",
+      "",
+      `If it was you, sign in here: ${appUrl}/login`,
+      "",
+      `If it wasn't you, reset your password now: ${appUrl}/forgot-password`,
+    ].join("\n"),
+  };
+}
