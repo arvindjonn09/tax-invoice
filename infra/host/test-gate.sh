@@ -168,7 +168,7 @@ check "a good deploy succeeds" 0 "$code"
 check "a good deploy turns maintenance off" no "$([ -e "$tmp/state/on" ] && echo yes || echo no)"
 check "it deployed the commit" "$new" "$(git -C "$repo" rev-parse HEAD)"
 check "steps run in order, with the page up throughout" \
-  "systemctl is-active,systemctl stop,pnpm install,pnpm db:migrate,pnpm build,systemctl start,flag-on-at-start" \
+  "systemctl is-active,systemctl stop,pnpm install,pnpm db:generate,pnpm db:migrate,pnpm build,systemctl start,flag-on-at-start" \
   "$(paste -sd, "$tmp/steps")"
 
 echo

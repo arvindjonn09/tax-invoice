@@ -41,6 +41,7 @@ main() {
   git checkout --quiet -- apps/web/next-env.d.ts
   git checkout --quiet --detach "$target"
   pnpm install --frozen-lockfile
+  pnpm db:generate
   pnpm db:migrate
   pnpm build
   sudo -n systemctl start jobflow.service
