@@ -1842,6 +1842,8 @@ model EmailOutbox {
   payloadCiphertext Bytes?      @map("payload_ciphertext")
   status            EmailStatus @default(pending)
   attempts          Int         @default(0)
+  /// #259: throttling replies met; they use no attempt until the per-row cap.
+  rateLimitedCount  Int         @default(0) @map("rate_limited_count")
   nextAttemptAt     DateTime    @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
   sentAt            DateTime?   @map("sent_at") @db.Timestamptz(3)
   providerMessageId String?     @map("provider_message_id") @db.VarChar(200)
@@ -1853,6 +1855,25 @@ model EmailOutbox {
 
   @@index([status, nextAttemptAt])
   @@map("email_outbox")
+}
+
+/// #259: a single row (id = 1). The provider-wide pause after a throttling reply.
+model EmailDispatchState {
+  id          Int       @id @default(1) @db.SmallInt
+  pausedUntil DateTime? @map("paused_until") @db.Timestamptz(3)
+  pauseStreak Int       @default(0) @map("pause_streak")
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+
+  @@map("email_dispatch_state")
+}
+
+/// #259: one row per SMTP attempt, for the rolling-hour cap. Pruned after two hours.
+model EmailSendAttempt {
+  id          BigInt   @id @default(autoincrement())
+  attemptedAt DateTime @default(now()) @map("attempted_at") @db.Timestamptz(3)
+
+  @@index([attemptedAt])
+  @@map("email_send_attempts")
 }
 
 model EmailSuppression {

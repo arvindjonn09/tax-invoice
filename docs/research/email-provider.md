@@ -51,9 +51,9 @@ mailbox.
 
 - **For now this is manual.** When an NDR shows a hard bounce (5.1.x "user unknown", 5.7.x refused), the operator
   suppresses that address on the host. The `email_suppressions.reason` CHECK in #247 already allows `manual`.
-  **#259** adds `pnpm email suppress --address <a> --reason bounce|complaint|manual` (host CLI, audited in
-  `platform_audit_events`, storing the HMAC only) and an `unsuppress`, together with the pacing,
-  account-first ordering and `email.rate_limited` logging described above. None of these is on `main` yet.
+  **#259** built `pnpm email suppress --reason bounce|complaint|manual` (the address on standard input; host CLI,
+  audited in `platform_audit_events`, storing the HMAC only) and `unsuppress`, together with the pacing,
+  account-first ordering and `email.rate_limited` logging described above. See `docs/ops/email.md`.
 - **Later:** an IMAP reader on `admin@` can parse NDRs (RFC 3464 `message/delivery-status`) and suppress
   automatically. It isn't needed at pilot volume.
 - `POST /api/webhooks/email` (`withWebhook`) **doesn't ship with Zoho**. It ships only with a provider that signs
