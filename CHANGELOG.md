@@ -7,6 +7,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 ### Added
 
 - Password reset emails are limited per IP and per account, so someone who knows an address can't use up its resets ([#318](https://github.com/arvindjonn09/tax-invoice/issues/318)).
+- Accepting an invitation no longer reveals whether an email address has an account. People now set their password from an emailed link and sign in before they join a company ([#263](https://github.com/arvindjonn09/tax-invoice/issues/263)).
 - Platform operator role with a two-key check, TOTP enrolment by host-issued code, and `pnpm operator` to grant access and extend trials; the screens follow in #232 ([#230](https://github.com/arvindjonn09/tax-invoice/issues/230)).
 - Password reset API: request a link by email and set a new password, which signs out every device; the pages follow in #224 ([#219](https://github.com/arvindjonn09/tax-invoice/issues/219)).
 - A bill's tax invoice that arrives later moves its claimable GST from job cost to GST credits on the day it's held, without editing the bill (#142).
