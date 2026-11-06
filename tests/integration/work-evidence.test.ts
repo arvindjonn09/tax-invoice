@@ -676,3 +676,184 @@ describe("completion review", () => {
       ).toBeGreaterThan(0);
   });
 });
+
+// #303: the office may approve completion with no worker evidence (owner and
+// manager, with a required note); the job then carries a "No worker
+// evidence" label. A bare status move to review needs evidence.
+describe("approving without worker evidence (#303)", () => {
+  let number = 300;
+  const jobs = () => jobHandlers(() => db);
+  const status = (who: Who, id: string, to: string) =>
+    withPolicy("job.write", jobs().changeStatus)(
+      call(who, "POST", { to }),
+      one(id),
+    );
+  const read = async (id: string) =>
+    (await (
+      await withPolicy("job.read_all", jobs().read)(
+        call("owner", "GET"),
+        one(id),
+      )
+    ).json()) as { hasEvidence: boolean; noWorkerEvidence: boolean };
+  const listed = async (id: string) => {
+    const body = (await (
+      await withPolicy("job.read_all", jobs().list)(
+        new Request(`${ORIGIN}/api/jobs?pageSize=100`, {
+          headers: call("owner", "GET").headers,
+        }),
+        undefined,
+      )
+    ).json()) as {
+      jobs: { id: string; hasEvidence: boolean; noWorkerEvidence: boolean }[];
+    };
+    return body.jobs.find((job) => job.id === id);
+  };
+  const review = (who: Who, id: string, body: unknown) =>
+    r().review(call(who, "POST", body), one(id));
+  /** A job with the worker assigned and no evidence, at `at`. */
+  async function bareJob(
+    at: "in_progress" | "awaiting_review",
+    { workers = true } = {},
+  ) {
+    number += 1;
+    const customer = await db.customer.findFirstOrThrow({
+      where: { companyId },
+    });
+    const job = await db.job.create({
+      data: {
+        companyId,
+        createdBy: userIds.owner,
+        customerId: customer.id,
+        number,
+        reference: `JOB-${number}`,
+        title: `Job ${number}`,
+        // Like the test job JOB-0002: moved to review by hand before #303.
+        status: at,
+      },
+    });
+    if (workers) {
+      const employee = await db.employee.findFirstOrThrow({
+        where: { companyId, userId: userIds.worker },
+      });
+      await db.assignment.create({
+        data: {
+          companyId,
+          jobId: job.id,
+          employeeId: employee.id,
+          createdBy: userIds.owner,
+        },
+      });
+    }
+    return job.id;
+  }
+
+  it("refuses a bare move to Awaiting review with no evidence", async () => {
+    const id = await bareJob("in_progress");
+    expect(await read(id)).toMatchObject({
+      hasEvidence: false,
+      noWorkerEvidence: false,
+    });
+    const refused = await status("manager", id, "awaiting_review");
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).fields.to).toMatch(/no worker evidence/);
+    // Workers submitting with evidence are unaffected.
+    expect(
+      (await add("worker", { kind: "note", note: "Done" }, id)).status,
+    ).toBe(201);
+    expect((await r().submit(call("worker", "POST", {}), one(id))).status).toBe(
+      200,
+    );
+    expect(await read(id)).toMatchObject({
+      hasEvidence: true,
+      noWorkerEvidence: false,
+    });
+  });
+
+  it("owner or manager approves with a required note; recorded and labelled", async () => {
+    const id = await bareJob("awaiting_review");
+    expect(await read(id)).toMatchObject({
+      hasEvidence: false,
+      noWorkerEvidence: true,
+    });
+    expect((await listed(id))?.noWorkerEvidence).toBe(true);
+    // Employees, subcontractors and the accountant can't review at all.
+    for (const who of ["worker", "sub", "accountant"] as const)
+      expect(
+        (await review(who, id, { decision: "approve", note: "Fine" })).status,
+        who,
+      ).toBe(403);
+    const bare = await review("manager", id, { decision: "approve" });
+    expect(bare.status).toBe(400);
+    expect((await bare.json()).fields.note).toMatch(/no worker evidence/);
+    const approved = await review("manager", id, {
+      decision: "approve",
+      note: "Checked on site with the customer",
+    });
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toEqual({ status: "completed" });
+    const [event] = await db.jobStatusEvent.findMany({
+      where: { jobId: id, toStatus: "completed" },
+    });
+    expect(event).toMatchObject({
+      fromStatus: "awaiting_review",
+      note: "Checked on site with the customer",
+      createdBy: userIds.manager,
+    });
+    expect(
+      await db.auditEvent.count({
+        where: {
+          companyId,
+          targetId: id,
+          createdBy: userIds.manager,
+          action: "job.completion_approved_without_evidence",
+        },
+      }),
+    ).toBe(1);
+    // The label stays after approval, on detail and in the list.
+    expect(await read(id)).toMatchObject({ noWorkerEvidence: true });
+    expect((await listed(id))?.noWorkerEvidence).toBe(true);
+    const byOwner = await bareJob("awaiting_review");
+    expect(
+      (
+        await review("owner", byOwner, {
+          decision: "approve",
+          note: "Owner sign-off",
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  it("can still send such a job to rework", async () => {
+    const id = await bareJob("awaiting_review");
+    expect(
+      (
+        await review("manager", id, {
+          decision: "rework",
+          note: "Photos of the switchboard please",
+        })
+      ).status,
+    ).toBe(200);
+    expect((await db.job.findUniqueOrThrow({ where: { id } })).status).toBe(
+      "in_progress",
+    );
+  });
+
+  it("no label when no worker was assigned, or when evidence exists", async () => {
+    const solo = await bareJob("awaiting_review", { workers: false });
+    expect(await read(solo)).toMatchObject({ noWorkerEvidence: false });
+    const proved = await bareJob("in_progress");
+    await add("worker", { kind: "note", note: "Finished" }, proved);
+    await r().submit(call("worker", "POST", {}), one(proved));
+    const approved = await review("manager", proved, { decision: "approve" });
+    expect(approved.status).toBe(200);
+    expect(await read(proved)).toMatchObject({
+      hasEvidence: true,
+      noWorkerEvidence: false,
+    });
+    expect(
+      await db.auditEvent.count({
+        where: { targetId: proved, action: "job.completion_approved" },
+      }),
+    ).toBe(1);
+  });
+});

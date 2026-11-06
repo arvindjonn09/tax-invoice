@@ -9,12 +9,16 @@ import {
 } from "@/components/form/field";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
 import { Button } from "@/components/ui/button";
+import { NoEvidenceLabel } from "./no-evidence-label";
 import { EntityPicker } from "./picker";
 import { statusLabel, time, type Job, type Visit } from "./types";
 type Message = { kind: "success" | "error"; text: string } | null;
 export function StatusForm({ job, saved }: { job: Job; saved: () => void }) {
   const options = nextStatuses(job.status).filter(
-    (value) => transitionProblem(job.status, value) === null,
+    (value) =>
+      transitionProblem(job.status, value) === null &&
+      // #303: nothing to review without worker evidence (server agrees).
+      !(value === "awaiting_review" && job.hasEvidence === false),
   );
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -88,6 +92,8 @@ export function ReviewForm({ job, saved }: { job: Job; saved: () => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message>(null);
   const [noteError, setNoteError] = useState<string>();
+  // #303: approving with no worker evidence needs a note (owner/manager).
+  const withEvidence = job.hasEvidence !== false;
   return (
     <form
       className="space-y-4"
@@ -102,6 +108,12 @@ export function ReviewForm({ job, saved }: { job: Job; saved: () => void }) {
           null;
         if (decision === "rework" && !note) {
           setNoteError("Say what needs redoing");
+          return;
+        }
+        if (decision === "approve" && !withEvidence && !note) {
+          setNoteError(
+            "There's no worker evidence. Add a note saying why you're approving",
+          );
           return;
         }
         setNoteError(undefined);
@@ -122,11 +134,28 @@ export function ReviewForm({ job, saved }: { job: Job; saved: () => void }) {
     >
       <fieldset disabled={busy} className="space-y-4">
         <legend className="sr-only">Review submitted work</legend>
+        {withEvidence ? null : (
+          <div
+            role="note"
+            className="space-y-2 rounded-lg border border-danger-foreground bg-danger p-3 text-danger-foreground"
+          >
+            <NoEvidenceLabel />
+            <p>
+              No worker submitted a photo, note or signature for this job. You
+              can still approve completion: add a note saying why. It&apos;s
+              kept in the job&apos;s status history.
+            </p>
+          </div>
+        )}
         <TextField
           id="job-review-note"
           name="note"
           label="Review note"
-          hint="Required when sending the work back"
+          hint={
+            withEvidence
+              ? "Required when sending the work back"
+              : "Required: why you're approving without evidence, or what needs redoing"
+          }
           maxLength={500}
           error={noteError}
         />
