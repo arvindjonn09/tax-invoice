@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { signIn } from "./accounts";
 
 test("serves the landing page and non-cacheable health endpoint", async ({
   page,
@@ -51,8 +52,18 @@ for (const width of [360, 390, 768, 1024, 1440]) {
   }
 }
 
-test("unknown paths show a real not-found page", async ({ page }) => {
+test("unknown paths show a real not-found page when signed in", async ({
+  page,
+}) => {
+  await signIn(page, "owner");
   const response = await page.goto("/this-route-does-not-exist");
   expect(response?.status()).toBe(404);
   await expect(page.getByRole("heading", { name: "404" })).toBeVisible();
+});
+
+test("signed out, unknown paths go to sign-in like any gated page (#223)", async ({
+  page,
+}) => {
+  await page.goto("/this-route-does-not-exist");
+  await expect(page).toHaveURL(/\/login\?next=%2Fthis-route-does-not-exist$/);
 });
