@@ -1,6 +1,10 @@
 import { lockDocumentClaim } from "../documents/claim";
 import { type Actor, notFound } from "@jobflow/authz";
-import { type JobStatus, transitionProblem } from "@jobflow/domain";
+import {
+  type JobStatus,
+  NO_EVIDENCE,
+  transitionProblem,
+} from "@jobflow/domain";
 import { z } from "zod";
 import type {
   Prisma,
@@ -396,13 +400,31 @@ export function evidenceHandlers(db: () => PrismaClient) {
         if (!job || job.companyId !== actor.companyId) throw notFound();
         if (job.status !== "awaiting_review")
           throw new Refusal(fail(409, "The job isn't awaiting review"));
-        if (
+        // #303: the office may approve with no worker evidence, but only
+        // owner or manager (NO_EVIDENCE.approverRoles), and only with a
+        // note, recorded in the status history and audited separately.
+        const withoutEvidence =
           decision === "approve" &&
           (await tx.workEvidence.count({
             where: { companyId: actor.companyId, jobId },
-          })) === 0
-        )
-          throw new Refusal(fail(409, "There's no evidence to approve"));
+          })) === 0;
+        if (withoutEvidence) {
+          if (!NO_EVIDENCE.approverRoles.includes(actor.role))
+            throw new Refusal(
+              fail(
+                409,
+                "Only an owner or manager can approve without worker evidence",
+              ),
+            );
+          if (!note)
+            throw new Refusal(
+              fail(
+                400,
+                "There's no worker evidence. Add a note saying why you're approving",
+                "note",
+              ),
+            );
+        }
         await moveJob(
           tx,
           audit,
@@ -411,7 +433,9 @@ export function evidenceHandlers(db: () => PrismaClient) {
           to,
           note,
           decision === "approve"
-            ? "job.completion_approved"
+            ? withoutEvidence
+              ? "job.completion_approved_without_evidence"
+              : "job.completion_approved"
             : "job.rework_requested",
         );
       });

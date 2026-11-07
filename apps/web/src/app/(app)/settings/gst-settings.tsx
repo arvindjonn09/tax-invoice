@@ -1,4 +1,5 @@
 "use client";
+import { ReadOnlyNotice, useWritable } from "@/components/shell/company-access";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
@@ -47,11 +48,12 @@ type Pending = {
  */
 export function GstSettingsPanel({
   settings,
-  editable,
+  editable: allowed,
 }: {
   settings: GstSettings;
   editable: boolean;
 }) {
+  const editable = useWritable(allowed);
   const router = useRouter();
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
@@ -146,6 +148,7 @@ export function GstSettingsPanel({
   const { today } = settings;
   return (
     <div className="space-y-6">
+      {allowed ? <ReadOnlyNotice /> : null}
       <p
         className={`rounded-lg p-4 ${today.registered ? "bg-success text-success-foreground" : "bg-warning text-warning-foreground"}`}
       >

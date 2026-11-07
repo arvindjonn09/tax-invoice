@@ -28,6 +28,9 @@ const EXCLUDED_COLUMNS = new Set([
   "user_invitations.token_hash",
   "documents.object_key",
   "companies.self_service_request_key", // onboarding idempotency key (#210)
+  // An approval note is for the operator log only (spec S13b). A decline reason
+  // stays in the export through its audit event.
+  "trial_extension_requests.decision_note",
 ]);
 const isExcluded = (table: string, column: string) =>
   EXCLUDED_COLUMNS.has(`${table}.${column}`) || column === "request_hash";

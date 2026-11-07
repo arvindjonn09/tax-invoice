@@ -21,11 +21,13 @@ import {
 } from "@jobflow/domain";
 import { audInput, parseAudInput } from "@/lib/aud-input";
 import { convertEntryMode } from "./entry-mode";
+import { unregisteredGstProblems } from "./gst-problems";
 import { Totals } from "./totals";
 import {
   type Invoice,
   TAX_CODE_OPTIONS,
   type TaxCode,
+  documentName,
   taxLabel,
 } from "./types";
 
@@ -226,7 +228,11 @@ export function InvoiceBuilder({
     setMessage({ kind: "success", text: "Draft saved." });
     // Give the new draft its own URL without remounting this form (a
     // navigation would swap the builder out from under the user).
-    if (!saved) window.history.replaceState(null, "", `/invoices/${next.id}`);
+    if (!saved) {
+      window.history.replaceState(null, "", `/invoices/${next.id}`);
+      // The tab names the saved draft, not "New invoice" (#307).
+      document.title = `Draft ${documentName(next)} · JobFlow`;
+    }
     return next;
   }
 
@@ -253,9 +259,18 @@ export function InvoiceBuilder({
     router.replace(`/invoices/${saved.id}?issued=1`);
   }
 
+  // #302: Taxable lines on an unregistered issue date are problems now,
+  // before Issue, not only when the server refuses.
+  const gstProblems = unregisteredGstProblems(
+    lines,
+    registeredOnIssue,
+    issueDate,
+    "issue",
+  );
+  const shown = { ...gstProblems, ...errors };
   const lineError = (index: number, field: string) =>
-    errors[`lines.${index}.${field}`];
-  const errorList = Object.entries(errors);
+    shown[`lines.${index}.${field}`];
+  const errorList = Object.entries(shown);
   const sites = customer.data?.locations.filter(
     (site) => !site.archivedAt || site.id === locationId,
   );
@@ -794,6 +809,18 @@ export function InvoiceBuilder({
               require a credit note or a void. The title and GST follow your
               registration on the issue date.
             </p>
+            {Object.keys(gstProblems).length ? (
+              <div
+                role="alert"
+                className="rounded-lg bg-danger p-3 text-danger-foreground"
+              >
+                <ul className="list-disc pl-6">
+                  {Object.entries(gstProblems).map(([field, text]) => (
+                    <li key={field}>{text}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {issueErrors.length ? (
               <div
                 role="alert"
@@ -818,7 +845,7 @@ export function InvoiceBuilder({
               </Button>
               <Button
                 type="button"
-                disabled={busy}
+                disabled={busy || Object.keys(gstProblems).length > 0}
                 onClick={() => void issue()}
               >
                 {busy

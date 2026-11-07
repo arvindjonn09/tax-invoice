@@ -24,6 +24,10 @@ export default defineConfig({
   testDir: "./tests/e2e",
   globalSetup: "./tests/e2e/global-setup.ts",
   reporter: [["list"], ["html", { open: "never" }]],
+  // `next dev` occasionally drops a connection or serves a page before it's
+  // ready, which fails one random test in a run. Retried tests are still listed
+  // as flaky. Remove this once E2E runs against a production build.
+  retries: process.env.CI ? 1 : 0,
   // `next dev` compiles each route on its first visit (CI runs a cold dev
   // server), and pages then load their data client-side; 5 s is too tight.
   expect: { timeout: 15_000 },

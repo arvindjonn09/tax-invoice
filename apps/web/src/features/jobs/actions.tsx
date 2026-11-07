@@ -1,6 +1,10 @@
 "use client";
 import { useState } from "react";
-import { nextStatuses, transitionProblem } from "@jobflow/domain";
+import {
+  nextStatuses,
+  transitionProblem,
+  usualNextStatus,
+} from "@jobflow/domain";
 import {
   Field,
   TextField,
@@ -9,6 +13,7 @@ import {
 } from "@/components/form/field";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
 import { Button } from "@/components/ui/button";
+import { NoEvidenceLabel } from "./no-evidence-label";
 import { EntityPicker } from "./picker";
 import { statusLabel, time, type Job, type Visit } from "./types";
 type Message = { kind: "success" | "error"; text: string } | null;
@@ -16,6 +21,9 @@ export function StatusForm({ job, saved }: { job: Job; saved: () => void }) {
   const options = nextStatuses(job.status).filter(
     (value) => transitionProblem(job.status, value) === null,
   );
+  // #301: pre-select the usual forward step, never a backward or Cancelled
+  // one; with no clear next step the person must choose.
+  const suggested = usualNextStatus(job.status);
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [message, setMessage] = useState<Message>(null);
@@ -30,7 +38,8 @@ export function StatusForm({ job, saved }: { job: Job; saved: () => void }) {
         event.preventDefault();
         if (busy) return;
         const form = new FormData(event.currentTarget);
-        const to = String(form.get("to"));
+        const to = String(form.get("to") ?? "");
+        if (!to) return;
         if (
           ["closed", "cancelled"].includes(to) &&
           !window.confirm(
@@ -60,7 +69,17 @@ export function StatusForm({ job, saved }: { job: Job; saved: () => void }) {
         <legend className="sr-only">Change job status</legend>
         <Field id="job-next-status" label="Next status">
           {(control) => (
-            <select {...control} name="to" defaultValue={options[0]}>
+            <select
+              {...control}
+              name="to"
+              required
+              defaultValue={
+                suggested && options.includes(suggested) ? suggested : ""
+              }
+            >
+              <option value="" disabled>
+                Choose a status
+              </option>
               {options.map((value) => (
                 <option key={value} value={value}>
                   {statusLabel(value)}
@@ -88,6 +107,8 @@ export function ReviewForm({ job, saved }: { job: Job; saved: () => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message>(null);
   const [noteError, setNoteError] = useState<string>();
+  // #303: approving with no worker evidence needs a note (owner/manager).
+  const withEvidence = job.hasEvidence !== false;
   return (
     <form
       className="space-y-4"
@@ -102,6 +123,12 @@ export function ReviewForm({ job, saved }: { job: Job; saved: () => void }) {
           null;
         if (decision === "rework" && !note) {
           setNoteError("Say what needs redoing");
+          return;
+        }
+        if (decision === "approve" && !withEvidence && !note) {
+          setNoteError(
+            "There's no worker evidence. Add a note saying why you're approving",
+          );
           return;
         }
         setNoteError(undefined);
@@ -122,11 +149,28 @@ export function ReviewForm({ job, saved }: { job: Job; saved: () => void }) {
     >
       <fieldset disabled={busy} className="space-y-4">
         <legend className="sr-only">Review submitted work</legend>
+        {withEvidence ? null : (
+          <div
+            role="note"
+            className="space-y-2 rounded-lg border border-danger-foreground bg-danger p-3 text-danger-foreground"
+          >
+            <NoEvidenceLabel />
+            <p>
+              No worker submitted a photo, note or signature for this job. You
+              can still approve completion: add a note saying why. It&apos;s
+              kept in the job&apos;s status history.
+            </p>
+          </div>
+        )}
         <TextField
           id="job-review-note"
           name="note"
           label="Review note"
-          hint="Required when sending the work back"
+          hint={
+            withEvidence
+              ? "Required when sending the work back"
+              : "Required: why you're approving without evidence, or what needs redoing"
+          }
           maxLength={500}
           error={noteError}
         />

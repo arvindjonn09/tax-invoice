@@ -154,6 +154,14 @@ describe("invoice PDF content (#48 golden files)", () => {
     );
   });
 
+  it("keeps the due date and the customer's PO number (#306)", () => {
+    const { details } = invoiceDocument(registered);
+    expect(details).toContainEqual(["Your reference", "PO-7781"]);
+    expect(details.find(([label]) => label === "Due")?.[1]).toMatch(
+      /14 August 2026/,
+    );
+  });
+
   it("not registered: 'Invoice', no GST column or amount", async () => {
     const model = invoiceDocument(unregistered);
     expect(model.title).toBe("Invoice");

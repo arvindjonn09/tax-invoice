@@ -164,7 +164,10 @@ test("visitors without an account can find Sign up everywhere", async ({
   ).toHaveAttribute("href", "/signup");
 
   await page.goto("/login");
-  await page.getByRole("main").getByRole("link", { name: "Sign up" }).click();
+  await page
+    .getByRole("main")
+    .getByRole("link", { name: "Create an account" })
+    .click();
   await expect(page).toHaveURL(/\/signup$/);
   await expect(page).toHaveTitle("Sign up · JobFlow");
   await expect(
