@@ -84,6 +84,7 @@ export type OpenInvoice = {
   reference: string | null;
   issueDate: string | null;
   inclusiveCents: string;
+  gstCents: string;
   receivedCents?: string;
   outstandingCents?: string;
 };
