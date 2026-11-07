@@ -3,11 +3,12 @@ import Link from "next/link";
 import { type FormEvent, useState } from "react";
 import { Turnstile } from "@/components/turnstile";
 import { Button } from "@/components/ui/button";
+import { retryAfter, waitText } from "@/lib/retry";
 
 type State =
   | { kind: "idle" }
   | { kind: "pending" }
-  | { kind: "sent" }
+  | { kind: "sent"; email: string }
   | { kind: "error"; message: string; fields: Record<string, string> };
 
 const inputClass =
@@ -87,7 +88,7 @@ export function SignupForm({
       }),
     }).catch(() => undefined);
     if (response?.status === 202) {
-      setState({ kind: "sent" });
+      setState({ kind: "sent", email: String(form.get("email") ?? "").trim() });
       return;
     }
     const result = (await response?.json().catch(() => null)) as {
@@ -100,7 +101,11 @@ export function SignupForm({
       kind: "error",
       message:
         response?.status === 429
-          ? "Too many sign-up attempts from this network. Try again later."
+          ? `Too many sign-up attempts from this network.${
+              waitText(retryAfter(response, result))
+                ? ` You can try again in ${waitText(retryAfter(response, result))}.`
+                : " Try again in a few minutes."
+            }`
           : (result?.error ?? "Something went wrong. Try again."),
       fields: result?.fields ?? {},
     });
@@ -111,8 +116,9 @@ export function SignupForm({
       <div role="status" className="space-y-3">
         <h2 className="text-2xl font-semibold">Check your email</h2>
         <p className="text-muted-foreground">
-          We&apos;ve sent a link to verify your address. Open it within 24
-          hours, then sign in to set up your business.
+          Check your email to verify your address. We&apos;ve sent a link to{" "}
+          <strong>{state.email}</strong> that works for 24 hours, then sign in
+          to set up your business.
         </p>
         <p className="text-sm text-muted-foreground">
           Nothing arrived? Check your spam folder, or{" "}
