@@ -64,3 +64,34 @@ describe("deploy script (#326)", () => {
     expect(deploy).toMatch(/\$\(id -u\)" -eq 0/);
   });
 });
+
+describe("scheduled jobs timer (#234)", () => {
+  const service = read("jobflow-jobs.service");
+  const timer = read("jobflow-jobs.timer");
+
+  it("runs every 5 minutes and catches up after downtime", () => {
+    expect(timer).toContain("OnCalendar=*:0/5");
+    expect(timer).toContain("Persistent=true");
+  });
+
+  it("runs as prod, never root, and stands aside during maintenance", () => {
+    expect(service).toContain("User=prod");
+    expect(service).toContain("ExecStart=/home/prod/.local/bin/pnpm jobs:run");
+    expect(service).toContain(
+      "ExecCondition=/usr/bin/test ! -e /var/lib/jobflow-maintenance/on",
+    );
+  });
+
+  it("is installed with the rest of the host setup", () => {
+    const install = read("install.sh");
+    for (const file of [
+      "jobflow-jobs.service",
+      "jobflow-jobs.timer",
+      "nginx-gate.conf",
+      "sudoers-jobflow-deploy",
+    ])
+      expect(install).toContain(file);
+    expect(install).toContain("visudo -cf");
+    expect(install).toContain("systemctl enable --now jobflow-jobs.timer");
+  });
+});

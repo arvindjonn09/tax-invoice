@@ -1,0 +1,17 @@
+# Scheduled jobs on the self-hosted site (#234). Started by jobflow-jobs.timer.
+[Unit]
+Description=JobFlow scheduled jobs (trial reminders)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=prod
+WorkingDirectory=/home/prod/tax-invoice-run
+EnvironmentFile=/home/prod/tax-invoice-run/.env
+# Skipped while maintenance is on: a deploy may be replacing this code.
+ExecCondition=/usr/bin/test ! -e /var/lib/jobflow-maintenance/on
+ExecStart=/home/prod/.local/bin/pnpm jobs:run
+TimeoutStartSec=240
+NoNewPrivileges=yes
+PrivateTmp=yes
