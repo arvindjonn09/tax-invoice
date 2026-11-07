@@ -166,6 +166,13 @@ export function TrialBanner({
       >
         <span aria-hidden="true">{ICON[phase]}</span>
         <strong>{trialIndicatorText(status, lastDay)}</strong>
+        {/* Owners, managers and accountants can open the trial page (§12). */}
+        <Link
+          href="/settings/trial"
+          className="inline-flex min-h-11 items-center underline"
+        >
+          Trial details
+        </Link>
       </div>
       {banner}
     </>

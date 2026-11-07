@@ -7,6 +7,7 @@ import { shortDate, trialIndicatorText } from "@/components/shell/banners";
 import { StatusPill } from "@/components/status-pill";
 import { getDatabase } from "@/server/auth";
 import { requireActor } from "@/server/authz";
+import { navItemFor } from "@/server/navigation";
 import { ownerRequests } from "@/server/trial/extension-requests";
 import { loadTrialStatus } from "@/server/trial/handlers";
 import { sydneyDateTime } from "./format";
@@ -42,7 +43,10 @@ export default async function TrialSettingsPage() {
       description="Your free trial and requests for more time."
       breadcrumbs={[
         { label: "JobFlow", href: "/home" },
-        { label: "Settings", href: "/settings" },
+        // Managers can't open Settings itself, so no link for them.
+        navItemFor(actor.role, "settings")
+          ? { label: "Settings", href: "/settings" }
+          : { label: "Settings" },
         { label: "Trial" },
       ]}
     />
@@ -105,8 +109,13 @@ export default async function TrialSettingsPage() {
             {requests.decisions.length === 0 ? (
               <p className="text-muted-foreground">No past requests.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
+              <div
+                className="overflow-x-auto"
+                tabIndex={0}
+                role="region"
+                aria-label="Past requests table"
+              >
+                <table className="w-full min-w-[32rem] text-left">
                   <thead>
                     <tr className="border-b">
                       <th scope="col" className="py-2 pr-4">

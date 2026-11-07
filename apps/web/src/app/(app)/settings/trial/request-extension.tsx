@@ -101,6 +101,10 @@ export function RequestExtension({
     <form onSubmit={onSubmit} noValidate className="space-y-4">
       {state.kind === "error" ? (
         <p
+          // The button is disabled while sending, so focus would fall to
+          // the page: move it to the error instead.
+          ref={(node) => node?.focus()}
+          tabIndex={-1}
           role="alert"
           className="rounded-lg bg-danger p-4 text-danger-foreground"
         >
