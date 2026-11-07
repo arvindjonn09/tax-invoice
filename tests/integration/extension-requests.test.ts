@@ -356,6 +356,8 @@ describe("the operator decides", () => {
       "company",
       "createdAt",
       "decidedAt",
+      // The operator who decided, for the Decided tab (#232); null here.
+      "decidedByEmail",
       "decisionNote",
       "extensionDays",
       "id",
