@@ -35,6 +35,11 @@ const COMPANY_FIELDS: FieldRules<Company> = {
   basPeriod: "gst_settings.read",
   // Pre-fills every expense form (#40), so every member may read it.
   defaultExpenseSettlement: true,
+  phone: "gst_settings.read",
+  businessEmail: "gst_settings.read",
+  website: "gst_settings.read",
+  about: "gst_settings.read",
+  logoDocumentId: "gst_settings.read",
 };
 
 export const AUSTRALIAN_STATES = [
@@ -61,6 +66,34 @@ const prefix = z
   .string()
   .trim()
   .regex(/^[A-Za-z0-9-]{1,10}$/, "Use 1–10 letters, digits or hyphens");
+
+const UNPRINTABLE = /[\p{Cf}\u2028\u2029]|[^\P{Cc}\n\r]/gu;
+
+/** Blank clears the field; anything else must pass `schema`. */
+const clearable = <Output>(schema: z.ZodType<Output, string>) =>
+  z.preprocess(
+    (value) => (typeof value === "string" ? value.trim() || null : value),
+    schema.nullable(),
+  );
+
+/** S6 AC1: an http(s) address only. The scheme is stored in lower case. */
+const website = z
+  .string()
+  .max(200, "Use at most 200 characters")
+  .refine((value) => {
+    // new URL() drops tabs and newlines, but the stored text would keep them.
+    if (!/^https?:\/\//i.test(value) || /[\s\p{Cc}\p{Cf}]/u.test(value))
+      return false;
+    try {
+      const url = new URL(value);
+      return Boolean(url.hostname) && !url.username && !url.password;
+    } catch {
+      return false;
+    }
+  }, "Enter an address starting with http:// or https://")
+  .transform((value) =>
+    value.replace(/^https?/i, (scheme) => scheme.toLowerCase()),
+  );
 
 /**
  * Partial profile update. Unknown keys (including a forged `companyId`) are
@@ -98,6 +131,27 @@ export const UpdateCompany = z
     invoicePrefix: prefix,
     jobPrefix: prefix,
     defaultExpenseSettlement: z.enum(["paid_at_purchase", "on_account"]),
+    phone: clearable(
+      z
+        .string()
+        .regex(/^[\d +()]{8,20}$/, "Enter a valid phone number")
+        .refine(
+          (value) => /^\d{8,15}$/.test(value.replace(/\D/g, "")),
+          "Enter a valid phone number",
+        ),
+    ),
+    businessEmail: clearable(
+      z.string().max(320).email("Enter a valid email address"),
+    ),
+    website: clearable(website),
+    // Plain text with line breaks; shown as text, never rendered as HTML.
+    // Printed on quotes, so control and bidi characters go (not \n or \r).
+    about: z
+      .string()
+      .max(2000)
+      .nullable()
+      .transform((value) => value?.replace(UNPRINTABLE, "") ?? null)
+      .pipe(optionalText(1000)),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, "Nothing to update");

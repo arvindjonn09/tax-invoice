@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 import type { Permission } from "@jobflow/authz";
 import { getAuth, getDatabase, getTrustedOrigins } from "../auth";
-import { authorize, createWithPolicy } from "./policy";
+import { authorize, authorizeRequest, createWithPolicy } from "./policy";
 
 export { privateJson } from "./policy";
 
@@ -20,4 +20,9 @@ export const withPolicy = createWithPolicy(deps);
  */
 export async function requireActor(permission: Permission) {
   return authorize(deps, await headers(), permission);
+}
+
+/** As requireActor, plus the company's trial access (read-only state, #221). */
+export async function requireActorWithAccess(permission: Permission) {
+  return authorizeRequest(deps, await headers(), permission);
 }

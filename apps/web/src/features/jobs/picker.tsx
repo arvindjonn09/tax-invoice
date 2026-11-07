@@ -92,8 +92,8 @@ export function EntityPicker({
       ) : (
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-sm text-muted-foreground">
-            {data.total} active {kind} · page {page} of{" "}
-            {Math.max(1, Math.ceil(data.total / data.pageSize))}
+            {data.total} active {data.total === 1 ? singular : kind} · page{" "}
+            {page} of {Math.max(1, Math.ceil(data.total / data.pageSize))}
           </p>
           <Button
             type="button"

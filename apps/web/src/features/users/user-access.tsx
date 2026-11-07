@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { type Role, ROLES } from "@jobflow/authz";
 import { Button } from "@/components/ui/button";
 import { ROLE_LABELS } from "@/server/shell";
+import { count } from "@/lib/plural";
 
 const control =
   "min-h-11 w-full min-w-0 rounded-sm border border-input bg-card px-4 text-card-foreground";
@@ -307,7 +308,7 @@ export function UserAccess() {
             <span>
               Page {data.page} of{" "}
               {Math.max(1, Math.ceil(data.total / data.pageSize))} ·{" "}
-              {data.total} members
+              {count(data.total, "member")}
             </span>
             <Button
               variant="outline"
