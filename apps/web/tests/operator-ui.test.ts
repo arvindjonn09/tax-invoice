@@ -52,6 +52,18 @@ describe("operator UI helpers", () => {
       expect(verifyProblem(status, json, false, APP).message).toBe(
         `Your operator sign-in needs Cloudflare Access first. Open ${APP}/operator to sign in to Access, then sign in here again.`,
       );
+    // JobFlow's own 401 (#323) says why and returns to the password form.
+    expect(
+      verifyProblem(
+        401,
+        { message: "Your session ended. Sign in again to continue." },
+        false,
+        APP,
+      ),
+    ).toEqual({
+      message: "Your session ended. Sign in again to continue.",
+      restart: true,
+    });
     expect(verifyProblem(429, {}, false, APP).message).toMatch(
       /Too many attempts/,
     );

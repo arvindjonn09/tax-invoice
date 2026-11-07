@@ -12,7 +12,7 @@ export const cleanCode = (value: string) => value.replace(/[\s-]/g, "");
 /** What a reply from the verify call means for the operator (§13e). */
 export function verifyProblem(
   status: number | undefined,
-  json: { code?: string } | null,
+  json: { code?: string; message?: string } | null,
   backup: boolean,
   appUrl: string,
 ): { message: string; restart?: boolean; clear?: boolean } {
@@ -37,6 +37,10 @@ export function verifyProblem(
   }
   if (status === 429)
     return { message: "Too many attempts. Wait a few minutes and try again." };
+  // JobFlow's own 401, e.g. "Your session ended. Sign in again to continue."
+  // (#323): JSON with a message. Cloudflare Access answers with a page.
+  if (status === 401 && json?.message)
+    return { message: json.message, restart: true };
   if (status === undefined || json === null || status === 401 || status === 403)
     return {
       message: `Your operator sign-in needs Cloudflare Access first. Open ${appUrl}/operator to sign in to Access, then sign in here again.`,
@@ -94,7 +98,7 @@ export function TwoFactorStep({
     const json = (await response
       ?.clone()
       .json()
-      .catch(() => null)) as { code?: string } | null;
+      .catch(() => null)) as { code?: string; message?: string } | null;
     const problem = verifyProblem(
       response?.status,
       json,
