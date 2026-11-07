@@ -6,12 +6,17 @@ import { useRemote } from "@/components/data/use-remote";
 import { PageHeader } from "@/components/shell/page-header";
 import { Field } from "@/components/form/field";
 import { Button } from "@/components/ui/button";
-import { MoneyDisplay, formatAudCents } from "@/components/money-display";
+import {
+  MoneyDisplay,
+  type MoneyBasis,
+  companyBasis,
+  formatAudCents,
+} from "@/components/money-display";
 
 const CARD = "min-w-0 rounded-lg border bg-card p-5";
 const LINK =
   "inline-flex min-h-11 items-center font-semibold underline [overflow-wrap:anywhere]";
-const amount = (cents: string, basis: "ex GST" | "incl GST" = "ex GST") => (
+const amount = (cents: string, basis: MoneyBasis = "ex GST") => (
   <MoneyDisplay cents={BigInt(cents)} basis={basis} />
 );
 const tax = (cents: string) => (
@@ -45,7 +50,14 @@ const percent = (bp: string | null) => {
   return `${value < 0n ? "−" : ""}${abs / 100n}.${(abs % 100n).toString().padStart(2, "0")}% margin`;
 };
 
-export function Dashboard({ today }: { today: string }) {
+export function Dashboard({
+  today,
+  notice,
+}: {
+  today: string;
+  /** Shown under the page heading, e.g. the owner's setup checklist (#225). */
+  notice?: ReactNode;
+}) {
   const month = Number(today.slice(5, 7));
   const initial = {
     from: `${today.slice(0, 4)}-${String(Math.floor((month - 1) / 3) * 3 + 1).padStart(2, "0")}-01`,
@@ -70,6 +82,10 @@ export function Dashboard({ today }: { today: string }) {
   > | null>(null);
   if (data && options?.jobs !== data.jobs)
     setOptions({ customers: data.customers, jobs: data.jobs });
+  // #305: true wording for this company's GST history.
+  const ever = data?.gstEverRegistered ?? true;
+  const sales = companyBasis(ever, "sales");
+  const mixed = companyBasis(ever, "mixed");
   const invalid =
     !draft.from || !draft.to
       ? "Choose both dates"
@@ -82,6 +98,7 @@ export function Dashboard({ today }: { today: string }) {
         title="Dashboard"
         description="Profit, cash and what's owing, from your recorded work."
       />
+      {notice}
       <form
         className={`${CARD} grid items-end gap-4 sm:grid-cols-2 lg:grid-cols-5`}
         aria-label="Dashboard filters"
@@ -195,10 +212,10 @@ export function Dashboard({ today }: { today: string }) {
               {amount(data.totals.profit)}
             </Figure>
             <Figure label="Received" note="Cash received — not profit">
-              {amount(data.totals.receivedInclusive, "incl GST")}
+              {amount(data.totals.receivedInclusive, sales)}
             </Figure>
             <Figure label="Paid" note="Cash paid — not an additional cost">
-              {amount(data.totals.paidInclusive, "incl GST")}
+              {amount(data.totals.paidInclusive, mixed)}
             </Figure>
           </dl>
           {data.ledger ? (
@@ -212,16 +229,16 @@ export function Dashboard({ today }: { today: string }) {
               </p>
               <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <Figure label="Customers owe">
-                  {amount(data.ledger.receivables.total, "incl GST")}
+                  {amount(data.ledger.receivables.total, sales)}
                 </Figure>
                 <Figure label="Customer overdue">
-                  {amount(data.ledger.receivables.overdue, "incl GST")}
+                  {amount(data.ledger.receivables.overdue, sales)}
                 </Figure>
                 <Figure label="Supplier money owing">
-                  {amount(data.ledger.payables.total, "incl GST")}
+                  {amount(data.ledger.payables.total, mixed)}
                 </Figure>
                 <Figure label="Supplier money overdue">
-                  {amount(data.ledger.payables.overdue, "incl GST")}
+                  {amount(data.ledger.payables.overdue, mixed)}
                 </Figure>
               </dl>
               <div className={`${CARD} space-y-3`}>
@@ -243,8 +260,8 @@ export function Dashboard({ today }: { today: string }) {
                             {row.reference} · {row.partyName}
                           </Link>
                           <span>
-                            {amount(row.owed, "incl GST")} · {row.daysOverdue}{" "}
-                            days overdue
+                            {amount(row.owed, sales)} · {row.daysOverdue} days
+                            overdue
                           </span>
                         </li>
                       ))}
