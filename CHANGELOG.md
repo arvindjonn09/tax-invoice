@@ -6,6 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- In production, a platform operator has to pass TOTP again after 12 hours ([#323](https://github.com/arvindjonn09/tax-invoice/issues/323)).
 - Hardening: exports audit only validated values, someone demoted can no longer reach an invoice PDF they once generated, and the route policy tests close three gaps (part of [#260](https://github.com/arvindjonn09/tax-invoice/issues/260)).
 - Each organisation can set its own logo, phone, business email, website and description in Settings and during onboarding ([#228](https://github.com/arvindjonn09/tax-invoice/issues/228)).
 - Trial reminder emails at 7, 3 and 1 days left and when the trial ends, sent by `pnpm jobs:run`, plus one-time notices for owners ([#233](https://github.com/arvindjonn09/tax-invoice/issues/233)).
