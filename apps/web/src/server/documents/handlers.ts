@@ -132,7 +132,10 @@ let disabledLogged = false;
 export const BODY_DEADLINE_MS = 30_000;
 
 /** Reject with 503 when `work` doesn't settle in time. */
-async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+export async function withDeadline<T>(
+  work: Promise<T>,
+  ms: number,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -150,6 +153,93 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   }
 }
 
+/** A scan slot, or the 503 to send when scanning is required but can't run. */
+export async function reserveScan(
+  deps: Pick<DocumentDeps, "scanner">,
+): Promise<Response | { scanning: Scanning; release: Release | undefined }> {
+  const scanning = deps.scanner();
+  if (scanning.disabled && !disabledLogged) {
+    disabledLogged = true;
+    log("warn", "document.scan_disabled", { reason: "MALWARE_SCAN=off" });
+  }
+  if (!scanning.scanner && scanning.required) {
+    log("error", "document.scan_unavailable", { reason: "not configured" });
+    return scanUnavailable();
+  }
+  let release: Release | undefined;
+  if (scanning.scanner) {
+    try {
+      release = await scanning.scanner.reserve();
+    } catch (error) {
+      log("error", "document.scan_unavailable", {
+        reason: error instanceof ScannerUnavailable ? error.reason : "unknown",
+      });
+      return scanUnavailable();
+    }
+  }
+  return { scanning, release };
+}
+
+/**
+ * Scan `bytes` before anything is stored (#136). Returns the refusal to send
+ * (infected, unscannable, scanner unavailable), or null when it's clean or
+ * scanning is off. Releases the slot once clamd has answered.
+ */
+export async function scanOrRefuse(
+  deps: Pick<DocumentDeps, "db">,
+  actor: { companyId: string; userId: string },
+  scanning: Scanning,
+  bytes: Uint8Array,
+  type: string,
+  releaseSlot: () => void,
+): Promise<Response | null> {
+  if (!scanning.scanner) return null;
+  let result;
+  try {
+    result = await scanning.scanner.scan(bytes);
+  } catch (error) {
+    releaseSlot();
+    log("error", "document.scan_unavailable", {
+      reason: error instanceof ScannerUnavailable ? error.reason : "unknown",
+    });
+    return scanUnavailable();
+  }
+  // The slot is for clamd only; storing and the database don't need it.
+  releaseSlot();
+  if (result.status === "clean") return null;
+  // No file name or contents: only who, and what clamd reported. Logs
+  // rotate, so the audit trail keeps it too.
+  log("warn", "document.malware_rejected", {
+    companyId: actor.companyId,
+    userId: actor.userId,
+    outcome: result.status,
+    detection: result.detection,
+  });
+  await withAudit(deps.db(), async (_tx, audit) => {
+    await audit({
+      companyId: actor.companyId,
+      actorUserId: actor.userId,
+      action: "document.malware_rejected",
+      target: { type: "document_upload", id: randomUUID() },
+      after: {
+        outcome: result.status,
+        detection: result.detection,
+        contentType: type,
+        sizeBytes: bytes.byteLength,
+      },
+    });
+  });
+  return result.status === "infected"
+    ? privateJson(
+        {
+          error:
+            "This file can't be accepted because it was flagged as unsafe. Upload a different copy.",
+        },
+        { status: 422 },
+      )
+    : unscannable(result.detection);
+}
+
 export function documentHandlers(deps: DocumentDeps) {
   const upload: PolicyHandler<unknown> = async (context) => {
     const store = deps.store();
@@ -160,27 +250,9 @@ export function documentHandlers(deps: DocumentDeps) {
       ip: clientIp(context.request.headers),
     });
     // #136: scanning setup, and a scan slot, before the body is read.
-    const scanning = deps.scanner();
-    if (scanning.disabled && !disabledLogged) {
-      disabledLogged = true;
-      log("warn", "document.scan_disabled", { reason: "MALWARE_SCAN=off" });
-    }
-    if (!scanning.scanner && scanning.required) {
-      log("error", "document.scan_unavailable", { reason: "not configured" });
-      return scanUnavailable();
-    }
-    let release: Release | undefined;
-    if (scanning.scanner) {
-      try {
-        release = await scanning.scanner.reserve();
-      } catch (error) {
-        log("error", "document.scan_unavailable", {
-          reason:
-            error instanceof ScannerUnavailable ? error.reason : "unknown",
-        });
-        return scanUnavailable();
-      }
-    }
+    const slot = await reserveScan(deps);
+    if (slot instanceof Response) return slot;
+    const { scanning, release } = slot;
     try {
       return await receive(context, store, scanning, () => release?.());
     } finally {
@@ -221,54 +293,15 @@ export function documentHandlers(deps: DocumentDeps) {
         { status: 415 },
       );
     // #136: scan before anything is stored; fail closed when required.
-    if (scanning.scanner) {
-      let result;
-      try {
-        result = await scanning.scanner.scan(bytes);
-      } catch (error) {
-        releaseSlot();
-        log("error", "document.scan_unavailable", {
-          reason:
-            error instanceof ScannerUnavailable ? error.reason : "unknown",
-        });
-        return scanUnavailable();
-      }
-      // The slot is for clamd only; storing and the database don't need it.
-      releaseSlot();
-      if (result.status !== "clean") {
-        // No file name or contents: only who, and what clamd reported. Logs
-        // rotate, so the audit trail keeps it too.
-        log("warn", "document.malware_rejected", {
-          companyId: actor.companyId,
-          userId: actor.userId,
-          outcome: result.status,
-          detection: result.detection,
-        });
-        await withAudit(deps.db(), async (_tx, audit) => {
-          await audit({
-            companyId: actor.companyId,
-            actorUserId: actor.userId,
-            action: "document.malware_rejected",
-            target: { type: "document_upload", id: randomUUID() },
-            after: {
-              outcome: result.status,
-              detection: result.detection,
-              contentType: type,
-              sizeBytes: bytes.byteLength,
-            },
-          });
-        });
-        return result.status === "infected"
-          ? privateJson(
-              {
-                error:
-                  "This file can't be accepted because it was flagged as unsafe. Upload a different copy.",
-              },
-              { status: 422 },
-            )
-          : unscannable(result.detection);
-      }
-    }
+    const refused = await scanOrRefuse(
+      deps,
+      actor,
+      scanning,
+      bytes,
+      type,
+      releaseSlot,
+    );
+    if (refused) return refused;
     const id = randomUUID();
     // Random key, never derived from the file name or any user input.
     const objectKey = `documents/${actor.companyId}/${randomBytes(32).toString("hex")}`;
