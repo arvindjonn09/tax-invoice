@@ -35,7 +35,11 @@ function loadApi(): Promise<TurnstileApi> {
     script.addEventListener("load", () =>
       holder.turnstile ? resolve(holder.turnstile) : reject(new Error("load")),
     );
-    script.addEventListener("error", () => reject(new Error("load")));
+    script.addEventListener("error", () => {
+      // Drop the failed tag so a retry (#224) loads the script again.
+      script?.remove();
+      reject(new Error("load"));
+    });
   });
 }
 
@@ -47,15 +51,20 @@ export function Turnstile({
   siteKey,
   action,
   onToken,
+  onError,
 }: {
   siteKey: string;
   action: string;
   onToken: (token: string | null) => void;
+  /** The widget couldn't load or errored: offer a retry (remount). */
+  onError?: () => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const callback = useRef(onToken);
+  const failed = useRef(onError);
   useEffect(() => {
     callback.current = onToken;
+    failed.current = onError;
   });
   useEffect(() => {
     let widget: string | undefined;
@@ -70,10 +79,16 @@ export function Turnstile({
           action,
           callback: (token) => callback.current(token),
           "expired-callback": () => callback.current(null),
-          "error-callback": () => callback.current(null),
+          "error-callback": () => {
+            callback.current(null);
+            failed.current?.();
+          },
         });
       })
-      .catch(() => callback.current(null));
+      .catch(() => {
+        callback.current(null);
+        failed.current?.();
+      });
     return () => {
       cancelled = true;
       if (api && widget) api.remove(widget);

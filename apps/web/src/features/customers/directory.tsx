@@ -1,4 +1,5 @@
 "use client";
+import { WriteAction } from "@/components/shell/company-access";
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -35,8 +36,10 @@ export function Directory({ editable }: { editable: boolean }) {
         title="Customers"
         description="Billing details, contacts and job sites."
         actions={
-          editable && !creating ? (
-            <Button onClick={() => setCreating(true)}>Add customer</Button>
+          !creating ? (
+            <WriteAction allowed={editable} label="Add customer">
+              <Button onClick={() => setCreating(true)}>Add customer</Button>
+            </WriteAction>
           ) : null
         }
       />

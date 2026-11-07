@@ -1,4 +1,5 @@
 "use client";
+import { WriteAction } from "@/components/shell/company-access";
 import Link from "next/link";
 import { useState } from "react";
 import { PageHeader } from "@/components/shell/page-header";
@@ -9,6 +10,7 @@ import { MoneyDisplay, formatAudCents } from "@/components/money-display";
 import { day } from "@/features/jobs/types";
 import { paymentState } from "./payment-state";
 import type { Invoice } from "./types";
+import { count } from "@/lib/plural";
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "Draft · not issued",
@@ -58,11 +60,11 @@ export function InvoiceList({
         title="Invoices"
         description="Tax invoices, invoices and credit notes. Issued documents are read only."
         actions={
-          canWrite ? (
+          <WriteAction allowed={canWrite} label="New invoice">
             <Button asChild>
               <Link href="/invoices/new">New invoice</Link>
             </Button>
-          ) : null
+          </WriteAction>
         }
       />
       <div className="grid items-end gap-4 rounded-lg border bg-card p-4 sm:grid-cols-3">
@@ -121,7 +123,7 @@ export function InvoiceList({
       ) : data ? (
         <>
           <p className="text-sm text-muted-foreground">
-            {data.total} documents · Page {page} of{" "}
+            {count(data.total, "document")} · Page {page} of{" "}
             {Math.max(1, Math.ceil(data.total / data.pageSize))} · Newest first
           </p>
           {rows.length ? (
