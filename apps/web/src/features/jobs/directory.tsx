@@ -1,4 +1,5 @@
 "use client";
+import { WriteAction } from "@/components/shell/company-access";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -49,8 +50,10 @@ export function JobsDirectory({
             : "Your current employee assignments. Times are shown in your browser's local timezone."
         }
         actions={
-          editable && !creating ? (
-            <Button onClick={() => setCreating(true)}>Create job</Button>
+          !creating ? (
+            <WriteAction allowed={editable} label="Create job">
+              <Button onClick={() => setCreating(true)}>Create job</Button>
+            </WriteAction>
           ) : null
         }
       />

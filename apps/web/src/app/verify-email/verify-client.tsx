@@ -3,11 +3,13 @@ import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Turnstile } from "@/components/turnstile";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { retryAfter, waitText } from "@/lib/retry";
 
 type State =
   | { kind: "loading" }
   | { kind: "confirm"; token: string }
   | { kind: "checking"; token: string }
+  | { kind: "offline"; token: string }
   | { kind: "verified" }
   | { kind: "invalid" }
   | { kind: "resend" }
@@ -51,9 +53,10 @@ export function VerifyEmail({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ token }),
     }).catch(() => undefined);
+    // Offline: the token hasn't been spent, so keep the button (§3).
     setState(
       !response
-        ? { kind: "error", message: "Check your connection and try again." }
+        ? { kind: "offline", token }
         : { kind: response.ok ? "verified" : "invalid" },
     );
   }
@@ -71,25 +74,46 @@ export function VerifyEmail({
     }).catch(() => undefined);
     setTurnstileToken(null);
     setAttempt((value) => value + 1);
-    setState(
-      response?.status === 202
-        ? { kind: "resent" }
-        : {
-            kind: "error",
-            message:
-              response?.status === 429
-                ? "Too many requests. Try again later."
-                : "Enter a valid email address.",
-          },
-    );
+    if (response?.status === 202) return setState({ kind: "resent" });
+    const result = (await response?.json().catch(() => null)) as {
+      retryAfterSeconds?: number;
+      code?: string;
+    } | null;
+    const wait =
+      response?.status === 429 ? waitText(retryAfter(response, result)) : null;
+    setState({
+      kind: "error",
+      message:
+        response?.status === 429
+          ? wait
+            ? `You can request another link in ${wait}.`
+            : "Too many attempts. Try again in a few minutes."
+          : result?.code === "turnstile_failed"
+            ? "We couldn't complete the security check. Try again."
+            : !response
+              ? "Check your connection and try again."
+              : "Enter a valid email address.",
+    });
   }
 
   if (state.kind === "loading") {
     return <p role="status">Checking your link…</p>;
   }
-  if (state.kind === "confirm" || state.kind === "checking") {
+  if (
+    state.kind === "confirm" ||
+    state.kind === "checking" ||
+    state.kind === "offline"
+  ) {
     return (
       <div className="space-y-4">
+        {state.kind === "offline" ? (
+          <p
+            role="alert"
+            className="rounded-lg bg-danger p-4 text-danger-foreground"
+          >
+            Check your connection and try again.
+          </p>
+        ) : null}
         <p>Press the button to confirm this email address is yours.</p>
         <Button
           type="button"

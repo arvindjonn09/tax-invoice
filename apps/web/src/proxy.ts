@@ -9,7 +9,13 @@ import { loginFor } from "@/server/routes/safe-next";
 import { createNonce, securityHeaders } from "@/server/security/headers";
 
 /** The only pages allowed to frame Cloudflare's challenge. */
-const TURNSTILE_PAGES = new Set(["/signup", "/verify-email"]);
+const TURNSTILE_PAGES = new Set([
+  "/signup",
+  "/verify-email",
+  "/forgot-password",
+]);
+/** Pages that read a token from the URL fragment (#224). */
+const TOKEN_PAGES = new Set(["/verify-email", "/reset-password"]);
 
 /**
  * Security headers and a per-request CSP nonce for every page and API
@@ -60,6 +66,9 @@ export function proxy(request: NextRequest) {
   for (const [name, value] of Object.entries(headers)) {
     response.headers.set(name, value);
   }
+  // Nothing about the page URL leaves it, not even the origin.
+  if (TOKEN_PAGES.has(request.nextUrl.pathname))
+    response.headers.set("Referrer-Policy", "no-referrer");
   // Signed-in pages are force-dynamic, so Next.js itself sends
   // "private, no-cache, no-store, …" for them (S1 AC8; see route-gating test).
   return response;
