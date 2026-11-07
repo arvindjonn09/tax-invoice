@@ -30,6 +30,8 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 | `/api/company/gst/registrations` | POST | `gst_settings.update` | owner, accountant |
 | `/api/company/gst/registrations/[id]` | PATCH | `gst_settings.update` | owner, accountant |
 | `/api/company/trial` | GET | `company.read` | owner, manager, accountant, employee, subcontractor |
+| `/api/company/trial/extension-requests` | GET | `trial.request_extension` | owner |
+| `/api/company/trial/extension-requests` | POST | `trial.request_extension` | owner |
 | `/api/contractors` | GET | `contractor.read` | owner, manager, accountant |
 | `/api/contractors` | POST | `contractor.write` | owner, manager |
 | `/api/contractors/[id]` | GET | `contractor.read` | owner, manager, accountant |
@@ -99,6 +101,12 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 | `/api/my/work/[id]/evidence` | POST | `evidence.submit_assigned` | owner, employee, subcontractor |
 | `/api/my/work/[id]/submit` | POST | `evidence.submit_assigned` | owner, employee, subcontractor |
 | `/api/onboarding/company` | POST | — | public (see route-policy.test.ts) |
+| `/api/operator/companies` | GET | — | platform operator only (withOperator) |
+| `/api/operator/companies/[id]/access` | POST | — | platform operator only (withOperator) |
+| `/api/operator/companies/[id]/extend` | POST | — | platform operator only (withOperator) |
+| `/api/operator/extension-requests` | GET | — | platform operator only (withOperator) |
+| `/api/operator/extension-requests/[id]/approve` | POST | — | platform operator only (withOperator) |
+| `/api/operator/extension-requests/[id]/decline` | POST | — | platform operator only (withOperator) |
 | `/api/quotes` | GET | `quote.read` | owner, manager, accountant |
 | `/api/quotes` | POST | `quote.write` | owner, manager |
 | `/api/quotes/[id]` | DELETE | `quote.write` | owner, manager |
