@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly JobFlow encrypted backup to the file share
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 Australia/Sydney
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
