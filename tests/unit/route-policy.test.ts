@@ -54,7 +54,9 @@ const all = files(APP).map((path) => ({
 }));
 
 describe("route handlers", () => {
-  const routes = all.filter(({ path }) => /(^|\/)route\.tsx?$/.test(path));
+  const routes = all.filter(({ path }) =>
+    /(^|\/)route\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path),
+  );
 
   it("finds the route files", () => {
     expect(routes.map(({ path }) => path)).toContain("api/company/route.ts");
@@ -66,6 +68,11 @@ describe("route handlers", () => {
       expect(source).not.toMatch(
         new RegExp(`export\\s+(async\\s+)?function\\s+(${METHODS})\\b`),
       );
+      // `export { handler as POST }` and re-exports would skip the guard (#260).
+      expect(source).not.toMatch(
+        new RegExp(`export\\s*\\{[^}]*\\b(${METHODS})\\b[^}]*\\}`),
+      );
+      expect(source).not.toMatch(/export\s*\*/);
       const exported = [
         ...source.matchAll(
           new RegExp(`export\\s+const\\s+(${METHODS})\\s*=\\s*([^\\n]*)`, "g"),

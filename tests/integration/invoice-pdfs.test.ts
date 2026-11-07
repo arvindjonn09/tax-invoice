@@ -5,6 +5,7 @@ import type { PrismaClient } from "../../packages/database/src/generated/prisma/
 import { createAuth } from "../../apps/web/src/server/auth/config";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
 import { createWithPolicy } from "../../apps/web/src/server/authz/policy";
+import { documentHandlers } from "../../apps/web/src/server/documents/handlers";
 import { downloadHandler } from "../../apps/web/src/server/documents/handlers";
 import { MemoryStore } from "../../apps/web/src/server/documents/store";
 import { invoiceHandlers } from "../../apps/web/src/server/invoices/handlers";
@@ -334,6 +335,31 @@ describe("invoice PDFs (#48)", () => {
       expect(content, text).toContain(
         Buffer.from(text).toString("hex").toUpperCase(),
       );
+  });
+
+  it("refuses a document link to an invoice PDF without invoice.read (#260)", async () => {
+    const invoice = await issued();
+    await link(invoice.id);
+    const stored = await db.invoicePdf.findFirstOrThrow({
+      where: { invoiceId: invoice.id },
+    });
+    // As if the person who triggered the render has since been demoted.
+    await db.document.update({
+      where: { id: stored.documentId },
+      data: { createdBy: userIds.employee },
+    });
+    const documentLink = withPolicy<One>(
+      "document.upload",
+      documentHandlers(deps as never).link,
+    );
+    expect(
+      (await documentLink(call("employee", "POST"), one(stored.documentId)))
+        .status,
+    ).toBe(404);
+    expect(
+      (await documentLink(call("accountant", "POST"), one(stored.documentId)))
+        .status,
+    ).toBe(200);
   });
 
   it("has no PDF for drafts, and only office roles of the company get one", async () => {

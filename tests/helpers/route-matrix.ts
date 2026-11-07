@@ -16,7 +16,7 @@ function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
     entry.isDirectory()
       ? files(join(dir, entry.name))
-      : entry.name === "route.ts"
+      : /^route\.(ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name)
         ? [join(dir, entry.name)]
         : [],
   );
@@ -36,7 +36,10 @@ export function routeEntries(): RouteEntry[] {
     const source = readFileSync(path, "utf8");
     const route = `/api/${relative(API, path)
       .replaceAll("\\", "/")
-      .replace(/\/?route\.ts$/, "")}`;
+      .replace(/\/?route\.[a-z]+$/, "")}`;
+    // A permission in a constant couldn't be listed, so it's refused (#260).
+    if (/withPolicy\(\s*[^"\s]/.test(source))
+      throw new Error(`${route}: give withPolicy a literal permission`);
     for (const match of source.matchAll(
       /export\s+const\s+(GET|POST|PUT|PATCH|DELETE)\s*=\s*withPolicy\(\s*"([a-z_.]+)"/g,
     ))
