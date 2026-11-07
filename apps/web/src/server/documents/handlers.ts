@@ -58,7 +58,11 @@ function documentView(row: Document) {
 }
 
 /** Read at most `limit` bytes of the body, then parse it as multipart. */
-async function readMultipart(request: Request, limit: number) {
+export async function readMultipart(
+  request: Request,
+  limit: number,
+  tooLarge = "Files can be at most 10 MB",
+) {
   const type = request.headers.get("content-type") ?? "";
   if (!/^multipart\/form-data;/i.test(type))
     throw new HttpError(415, "Upload a file as multipart/form-data");
@@ -72,7 +76,7 @@ async function readMultipart(request: Request, limit: number) {
     size += value.byteLength;
     if (size > limit) {
       await reader.cancel();
-      throw new HttpError(413, "Files can be at most 10 MB");
+      throw new HttpError(413, tooLarge);
     }
     chunks.push(value);
   }

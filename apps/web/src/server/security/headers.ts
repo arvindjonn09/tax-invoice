@@ -25,7 +25,9 @@ export function contentSecurityPolicy({
 }: HeaderOptions): string {
   const directives = [
     "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${development ? " 'unsafe-eval'" : ""}`,
+    // 'strict-dynamic' lets the nonced bundle load Turnstile; the host is
+    // listed too for browsers without CSP3 (#224), and only on its pages.
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${turnstile ? " https://challenges.cloudflare.com" : ""}${development ? " 'unsafe-eval'" : ""}`,
     // `next dev` injects un-nonced <style> tags for hot reload; production
     // serves CSS files, and Next.js nonces its own inline styles.
     development

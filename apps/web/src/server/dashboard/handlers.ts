@@ -55,17 +55,31 @@ async function balances(
             },
             select: { id: true },
           })
-        : await tx.supplierBill.findMany({
-            where: {
-              companyId,
-              id: { in: ids },
-              ...(query.jobId ? { jobId: query.jobId } : {}),
-              ...(query.customerId
-                ? { job: { customerId: query.customerId } }
-                : {}),
-            },
-            select: { id: true },
-          });
+        : [
+            // Bills and on-account expenses (#300), filtered the same way.
+            ...(await tx.supplierBill.findMany({
+              where: {
+                companyId,
+                id: { in: ids },
+                ...(query.jobId ? { jobId: query.jobId } : {}),
+                ...(query.customerId
+                  ? { job: { customerId: query.customerId } }
+                  : {}),
+              },
+              select: { id: true },
+            })),
+            ...(await tx.expense.findMany({
+              where: {
+                companyId,
+                id: { in: ids },
+                ...(query.jobId ? { jobId: query.jobId } : {}),
+                ...(query.customerId
+                  ? { job: { customerId: query.customerId } }
+                  : {}),
+              },
+              select: { id: true },
+            })),
+          ];
     const included = new Set(matches.map((m) => m.id));
     documents = documents.filter((d) => included.has(d.id));
   }
@@ -204,9 +218,16 @@ export async function loadDashboard(
       take: 8,
     }),
   ]);
+  // #305: "incl GST" wording only for a company that has ever been
+  // registered; otherwise sales carried no GST.
+  const gstEverRegistered =
+    (await tx.companyGstRegistration.count({
+      where: { companyId: actor.companyId },
+    })) > 0;
   return {
     range: query,
     generatedAt: new Date().toISOString(),
+    gstEverRegistered,
     totals: profit.totals,
     gst,
     ledger,

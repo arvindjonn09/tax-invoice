@@ -10,9 +10,14 @@ import {
   sendJson,
 } from "@/components/form/field";
 import { Button } from "@/components/ui/button";
-import { MoneyDisplay, formatAudCents } from "@/components/money-display";
+import {
+  MoneyDisplay,
+  formatAudCents,
+  totalBasis,
+} from "@/components/money-display";
 import { parseAudInput, audInput } from "@/lib/aud-input";
 import { time } from "@/features/jobs/types";
+import { taxLabel } from "@/features/invoices/types";
 import type { Contractor, Offer } from "./types";
 function JobPicker({
   value,
@@ -328,7 +333,7 @@ export function OfferHistory({
                   basis="ex GST"
                 />
                 {offer.estimatedHours ? ` · ${offer.estimatedHours} hours` : ""}{" "}
-                · {offer.taxCode}
+                · {taxLabel(offer.taxCode)}
               </p>
               {offer.exclusiveCents !== null &&
               offer.gstCents !== null &&
@@ -348,11 +353,11 @@ export function OfferHistory({
                     <dd>{formatAudCents(BigInt(offer.gstCents))} AUD</dd>
                   </div>
                   <div>
-                    <dt>Total incl GST</dt>
+                    <dt>Total</dt>
                     <dd>
                       <MoneyDisplay
                         cents={BigInt(offer.inclusiveCents)}
-                        basis="incl GST"
+                        basis={totalBasis(offer.gstCents)}
                       />
                     </dd>
                   </div>
