@@ -26,6 +26,8 @@ export type RouteEntry = {
   route: string;
   method: string;
   permission: string | null;
+  /** Behind withOperator: platform operators only (ADR 0004 D5). */
+  operator?: boolean;
 };
 
 export function routeEntries(): RouteEntry[] {
@@ -40,7 +42,16 @@ export function routeEntries(): RouteEntry[] {
     ))
       entries.push({ route, method: match[1]!, permission: match[2]! });
     for (const match of source.matchAll(
-      /export\s+(?:const|async function|function)\s+(GET|POST|PUT|PATCH|DELETE)\b(?!\s*=\s*withPolicy)/g,
+      /export\s+const\s+(GET|POST|PUT|PATCH|DELETE)\s*=\s*withOperator\(/g,
+    ))
+      entries.push({
+        route,
+        method: match[1]!,
+        permission: null,
+        operator: true,
+      });
+    for (const match of source.matchAll(
+      /export\s+(?:const|async function|function)\s+(GET|POST|PUT|PATCH|DELETE)\b(?!\s*=\s*with(?:Policy|Operator))/g,
     ))
       entries.push({ route, method: match[1]!, permission: null });
   }
@@ -51,10 +62,12 @@ export function routeEntries(): RouteEntry[] {
 }
 
 export function matrixMarkdown(entries = routeEntries()): string {
-  const rows = entries.map(({ route, method, permission }) => {
-    const roles = permission
-      ? ROLES.filter((role) => can(role, permission)).join(", ")
-      : "public (see route-policy.test.ts)";
+  const rows = entries.map(({ route, method, permission, operator }) => {
+    const roles = operator
+      ? "platform operator only (withOperator)"
+      : permission
+        ? ROLES.filter((role) => can(role, permission)).join(", ")
+        : "public (see route-policy.test.ts)";
     return `| \`${route}\` | ${method} | ${permission ? `\`${permission}\`` : "—"} | ${roles} |`;
   });
   return [
