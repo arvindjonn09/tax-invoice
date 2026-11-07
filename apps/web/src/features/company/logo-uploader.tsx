@@ -13,9 +13,12 @@ type Message = { kind: "success" | "error"; text: string } | null;
 export function LogoUploader({
   hasLogo,
   editable,
+  heading: Heading = "h3",
 }: {
   hasLogo: boolean;
   editable: boolean;
+  /** One level below the heading above it on the page. */
+  heading?: "h2" | "h3";
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [present, setPresent] = useState(hasLogo);
@@ -77,7 +80,7 @@ export function LogoUploader({
 
   return (
     <div className="space-y-3">
-      <h3 className="text-lg font-semibold">Logo</h3>
+      <Heading className="text-lg font-semibold">Logo</Heading>
       <p id="logo-hint" className="text-sm text-muted-foreground">
         Your own logo, for your quotes and invoices. PNG or JPEG, up to 2 MB and
         4000 × 4000 px.

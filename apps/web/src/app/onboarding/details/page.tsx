@@ -62,7 +62,11 @@ export default async function OnboardingDetailsPage() {
           Settings.
         </p>
         <section className="mt-8 space-y-6 rounded-2xl border bg-card p-6 text-card-foreground md:p-8">
-          <LogoUploader hasLogo={Boolean(company.logoDocumentId)} editable />
+          <LogoUploader
+            hasLogo={Boolean(company.logoDocumentId)}
+            editable
+            heading="h2"
+          />
           <ContactDetailsForm
             details={{
               phone: company.phone,

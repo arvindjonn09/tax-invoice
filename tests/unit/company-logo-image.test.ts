@@ -174,6 +174,48 @@ describe("logo checks: JPEG (#227)", () => {
     expect(Buffer.from(result.bytes).equals(plain)).toBe(true);
   });
 
+  describe("Adobe colour transform", () => {
+    /** "Adobe", version, two flag words, then the transform byte. */
+    const adobe = (transform: number, extra = Buffer.alloc(0)) =>
+      jpegSegment(
+        0xee,
+        Buffer.concat([
+          Buffer.from("Adobe", "latin1"),
+          Buffer.from("SECRET", "latin1"),
+          Buffer.from([transform]),
+          extra,
+        ]),
+      );
+    const clean = adobe(2).subarray(0, 9);
+    const rebuilt = (transform: number) =>
+      Buffer.concat([clean, Buffer.from([0, 100, 0, 0, 0, 0, transform])]);
+    const bytesOf = (...segments: Buffer[]) => {
+      const result = cleanLogo(jpeg({}, ...segments));
+      if ("refused" in result) throw new Error("refused");
+      return Buffer.from(result.bytes);
+    };
+
+    it.each([0, 1, 2])("keeps transform %i and drops the rest", (transform) => {
+      const bytes = bytesOf(adobe(transform));
+      expect(bytes.includes(rebuilt(transform))).toBe(true);
+      expect(latin1(bytes)).not.toContain("SECRET");
+    });
+
+    it("keeps only the first one", () => {
+      const bytes = bytesOf(adobe(2), adobe(1));
+      expect(bytes.includes(rebuilt(2))).toBe(true);
+      expect(bytes.includes(rebuilt(1))).toBe(false);
+    });
+
+    it.each([
+      ["an unknown transform", adobe(3)],
+      ["a longer segment", adobe(2, secret)],
+      ["another vendor's segment", jpegSegment(0xee, Buffer.alloc(12, 0x41))],
+    ])("removes %s", (_name, segment) => {
+      expect(bytesOf(segment).equals(bytesOf())).toBe(true);
+    });
+  });
+
   it("removes an APP0 segment that isn't the JFIF header", () => {
     const result = cleanLogo(jpeg({}, jpegSegment(0xe0, secret)));
     if ("refused" in result) throw new Error("refused");
