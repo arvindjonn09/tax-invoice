@@ -3020,6 +3020,17 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
           - COALESCE((SELECT SUM(c.inclusive_cents) FROM supplier_credits c
               WHERE c.bill_id=b.id AND c.voided_at IS NULL),0)))::bigint AS owed
         FROM supplier_bills b WHERE b.company_id=${id}::uuid AND b.voided_at IS NULL`;
+      // #300: approved on-account expenses owe too, unless a supplier credit
+      // reversed them.
+      const [onAccount] = await db.$queryRaw<{ owed: bigint | null }[]>`
+        SELECT SUM(GREATEST(0, e.inclusive_cents
+          - COALESCE((SELECT SUM(a.amount_cents) FROM supplier_payment_expense_allocations a
+              JOIN supplier_payments p ON p.id=a.payment_id
+              WHERE a.expense_id=e.id AND p.voided_at IS NULL),0)))::bigint AS owed
+        FROM expenses e WHERE e.company_id=${id}::uuid AND e.status='approved'
+          AND e.settlement='on_account' AND e.reverses_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM expenses r WHERE r.reverses_id=e.id
+            AND r.status='approved' AND r.settlement='on_account')`;
       const totals = await db.$transaction(
         async (tx) => [
           ageingReport(
@@ -3033,7 +3044,10 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
         ],
         { isolationLevel: "RepeatableRead" },
       );
-      expect(totals, id).toEqual([receivable?.owed ?? 0n, payable?.owed ?? 0n]);
+      expect(totals, id).toEqual([
+        receivable?.owed ?? 0n,
+        (payable?.owed ?? 0n) + (onAccount?.owed ?? 0n),
+      ]);
     }
     expect(compared).toBeGreaterThan(100);
   }, 300_000);
