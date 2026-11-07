@@ -7,9 +7,14 @@ import {
   formatInstant,
   operatorOutcome,
 } from "@/components/operator/format";
+import { Pager, pageFrom } from "@/components/operator/pager";
 import { getDatabase } from "@/server/auth";
 import { requireOperator } from "@/server/operator";
-import { countPendingRequests, loadRequests } from "@/server/operator/handlers";
+import {
+  OPERATOR_PAGE_SIZE,
+  countPendingRequests,
+  loadRequests,
+} from "@/server/operator/handlers";
 
 export const metadata: Metadata = { title: "Extension requests · Operator" };
 export const dynamic = "force-dynamic";
@@ -24,12 +29,14 @@ export default async function OperatorRequestsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireOperator();
-  const decided = (await searchParams).status === "decided";
+  const params = await searchParams;
+  const decided = params.status === "decided";
+  const page = pageFrom(params.page);
   const db = getDatabase();
   const now = new Date();
   const [pendingCount, requests] = await Promise.all([
     countPendingRequests(db),
-    loadRequests(db, { decided, page: 1, now }),
+    loadRequests(db, { decided, page, now }),
   ]);
   return (
     <>
@@ -53,7 +60,14 @@ export default async function OperatorRequestsPage({
       {requests.length === 0 ? (
         <p>{decided ? "No decided requests yet." : "No pending requests."}</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border bg-card">
+        <div
+          className="overflow-x-auto rounded-lg border bg-card"
+          tabIndex={0}
+          role="region"
+          aria-label={
+            decided ? "Decided requests table" : "Pending requests table"
+          }
+        >
           <table className="w-full min-w-[40rem] text-left">
             <caption className="sr-only">
               {decided ? "Decided requests" : "Pending requests"}
@@ -130,6 +144,13 @@ export default async function OperatorRequestsPage({
           </table>
         </div>
       )}
+      <Pager
+        page={page}
+        full={requests.length === OPERATOR_PAGE_SIZE}
+        href={(n) =>
+          decided ? `/operator?status=decided&page=${n}` : `/operator?page=${n}`
+        }
+      />
     </>
   );
 }

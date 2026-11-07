@@ -4,6 +4,7 @@ import { type FormEvent, useState } from "react";
 import { encode } from "uqr";
 import { Button } from "@/components/ui/button";
 import { cleanCode } from "@/app/login/two-factor-step";
+import { useFocusWhen } from "@/lib/focus";
 
 /** ENROLMENT_CODE_HEADER in server/operator/access.ts (a test keeps them equal). */
 export const ENROLMENT_HEADER = "x-jobflow-enrolment-code";
@@ -53,11 +54,45 @@ function QrCode({ value }: { value: string }) {
 }
 
 function Alert({ message }: { message: string | null }) {
+  const ref = useFocusWhen<HTMLParagraphElement>(message);
   return message ? (
-    <p role="alert" className="rounded-lg bg-danger p-4 text-danger-foreground">
+    <p
+      id="enrolment-error"
+      ref={ref}
+      tabIndex={-1}
+      role="alert"
+      className="rounded-lg bg-danger p-4 text-danger-foreground"
+    >
       {message}
     </p>
   ) : null;
+}
+
+function DoneHeading() {
+  const ref = useFocusWhen<HTMLHeadingElement>(true);
+  return (
+    <h1 ref={ref} tabIndex={-1} className="text-3xl font-bold tracking-tight">
+      Two-factor authentication is on.
+    </h1>
+  );
+}
+
+/** Headings that take focus once, when their step appears. */
+function StepHeading({
+  id,
+  className,
+  children,
+}: {
+  id?: string;
+  className: string;
+  children: React.ReactNode;
+}) {
+  const ref = useFocusWhen<HTMLHeadingElement>(true);
+  return (
+    <h2 id={id} ref={ref} tabIndex={-1} className={className}>
+      {children}
+    </h2>
+  );
 }
 
 /** Enrolment code → authenticator app → backup codes → done (§13d). */
@@ -109,7 +144,7 @@ export function Enrolment() {
         : result?.code === "INVALID_PASSWORD"
           ? "That password is incorrect."
           : result?.code === "TOTP_ALREADY_ENABLED"
-            ? "Two-factor authentication is already on. Ask for a new enrolment code to set it up again."
+            ? "Two-factor authentication is already on. To set it up again, run pnpm operator enrol-code --user <id> --reset on the server."
             : "Something went wrong. Try again.",
     );
   }
@@ -134,20 +169,30 @@ export function Enrolment() {
       setStep({ kind: "backup", backupCodes: step.backupCodes });
       return;
     }
-    setTotp("");
-    setError("That code didn't work. Check your app and try the newest code.");
+    const result = (await response?.json().catch(() => null)) as {
+      code?: string;
+    } | null;
+    // Only a wrong code clears the field; anything else keeps what was typed.
+    if (result?.code === "INVALID_CODE") {
+      setTotp("");
+      setError(
+        "That code didn't work. Check your app and try the newest code.",
+      );
+    } else if (response?.status === 429) {
+      setError("Too many attempts. Wait a few minutes and try again.");
+    } else {
+      setError(
+        response
+          ? "Something went wrong. Try again."
+          : "Couldn't reach JobFlow. Check your connection and try again.",
+      );
+    }
   }
 
   if (step.kind === "done")
     return (
       <>
-        <h1
-          ref={(node) => node?.focus()}
-          tabIndex={-1}
-          className="text-3xl font-bold tracking-tight"
-        >
-          Two-factor authentication is on.
-        </h1>
+        <DoneHeading />
         <p>
           <Link
             href="/operator"
@@ -188,7 +233,12 @@ export function Enrolment() {
               id="enrolment-code"
               name="enrolmentCode"
               autoComplete="off"
-              aria-describedby="enrolment-code-help"
+              aria-describedby={
+                error
+                  ? "enrolment-code-help enrolment-error"
+                  : "enrolment-code-help"
+              }
+              aria-invalid={error ? true : undefined}
               className={CONTROL}
             />
           </div>
@@ -196,6 +246,8 @@ export function Enrolment() {
             <label htmlFor="enrolment-password">Your password</label>
             <input
               id="enrolment-password"
+              aria-describedby={error ? "enrolment-error" : undefined}
+              aria-invalid={error ? true : undefined}
               name="password"
               type="password"
               autoComplete="current-password"
@@ -213,13 +265,9 @@ export function Enrolment() {
           noValidate
           className="space-y-4 rounded-lg border bg-card p-6 text-card-foreground"
         >
-          <h2
-            ref={(node) => node?.focus()}
-            tabIndex={-1}
-            className="text-xl font-semibold"
-          >
+          <StepHeading className="text-xl font-semibold">
             Step 2: Add JobFlow to your authenticator app
-          </h2>
+          </StepHeading>
           <p>Scan this code, or type the key below into your app.</p>
           <QrCode value={step.uri} />
           <div className="flex flex-wrap items-center gap-3">
@@ -246,6 +294,8 @@ export function Enrolment() {
             <label htmlFor="enrolment-totp">Enter the 6-digit code</label>
             <input
               id="enrolment-totp"
+              aria-describedby={error ? "enrolment-error" : undefined}
+              aria-invalid={error ? true : undefined}
               inputMode="numeric"
               autoComplete="one-time-code"
               value={totp}
@@ -263,14 +313,9 @@ export function Enrolment() {
           aria-labelledby="backup-heading"
           className="space-y-4 rounded-lg border bg-card p-6 text-card-foreground"
         >
-          <h2
-            id="backup-heading"
-            ref={(node) => node?.focus()}
-            tabIndex={-1}
-            className="text-xl font-semibold"
-          >
+          <StepHeading id="backup-heading" className="text-xl font-semibold">
             Step 3: Save your backup codes
-          </h2>
+          </StepHeading>
           <p>
             Each code signs you in once if you lose your device. They won&apos;t
             be shown again.

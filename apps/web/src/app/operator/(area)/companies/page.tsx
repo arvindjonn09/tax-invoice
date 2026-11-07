@@ -6,9 +6,10 @@ import {
   formatInstant,
 } from "@/components/operator/format";
 import { Button } from "@/components/ui/button";
+import { Pager, pageFrom } from "@/components/operator/pager";
 import { getDatabase } from "@/server/auth";
 import { requireOperator } from "@/server/operator";
-import { loadCompanies } from "@/server/operator/handlers";
+import { OPERATOR_PAGE_SIZE, loadCompanies } from "@/server/operator/handlers";
 
 export const metadata: Metadata = { title: "Companies · Operator" };
 export const dynamic = "force-dynamic";
@@ -20,11 +21,13 @@ export default async function OperatorCompaniesPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireOperator();
-  const raw = (await searchParams).q;
+  const params = await searchParams;
+  const raw = params.q;
+  const page = pageFrom(params.page);
   const q = (Array.isArray(raw) ? raw[0] : raw)?.slice(0, 200) ?? "";
   const companies = await loadCompanies(getDatabase(), {
     q,
-    page: 1,
+    page,
     now: new Date(),
   });
   return (
@@ -77,6 +80,13 @@ export default async function OperatorCompaniesPage({
           ))}
         </ul>
       )}
+      <Pager
+        page={page}
+        full={companies.length === OPERATOR_PAGE_SIZE}
+        href={(n) =>
+          `/operator/companies?${new URLSearchParams({ q, page: String(n) })}`
+        }
+      />
     </>
   );
 }

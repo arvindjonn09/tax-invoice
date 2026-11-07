@@ -6,6 +6,7 @@ import {
 } from "../src/app/operator/mfa/enrolment";
 import { cleanCode, verifyProblem } from "../src/app/login/two-factor-step";
 import { operatorOutcome } from "../src/components/operator/format";
+import { pageFrom } from "../src/components/operator/pager";
 
 // #232 (design §13d, §13e): the operator's enrolment and code step.
 const APP = "https://jobflow.example.test";
@@ -29,17 +30,15 @@ describe("operator UI helpers", () => {
   });
 
   it("tells a wrong code from a timed-out step and Cloudflare Access", () => {
-    expect(
-      verifyProblem(401, { code: "INVALID_CODE" }, false, APP),
-    ).toMatchObject({
+    expect(verifyProblem(401, { code: "INVALID_CODE" }, APP)).toMatchObject({
       message: expect.stringContaining("That code didn't work"),
       clear: true,
     });
     expect(
-      verifyProblem(401, { code: "INVALID_BACKUP_CODE" }, true, APP).message,
+      verifyProblem(401, { code: "INVALID_BACKUP_CODE" }, APP).message,
     ).toBe("That backup code didn't work. Each code works once.");
     expect(
-      verifyProblem(401, { code: "INVALID_TWO_FACTOR_COOKIE" }, false, APP),
+      verifyProblem(401, { code: "INVALID_TWO_FACTOR_COOKIE" }, APP),
     ).toEqual({
       message: "Your sign-in timed out. Sign in again.",
       restart: true,
@@ -49,7 +48,7 @@ describe("operator UI helpers", () => {
       [200, null],
       [403, {}],
     ] as const)
-      expect(verifyProblem(status, json, false, APP).message).toBe(
+      expect(verifyProblem(status, json, APP).message).toBe(
         `Your operator sign-in needs Cloudflare Access first. Open ${APP}/operator to sign in to Access, then sign in here again.`,
       );
     // JobFlow's own 401 (#323) says why and returns to the password form.
@@ -57,16 +56,13 @@ describe("operator UI helpers", () => {
       verifyProblem(
         401,
         { message: "Your session ended. Sign in again to continue." },
-        false,
         APP,
       ),
     ).toEqual({
       message: "Your session ended. Sign in again to continue.",
       restart: true,
     });
-    expect(verifyProblem(429, {}, false, APP).message).toMatch(
-      /Too many attempts/,
-    );
+    expect(verifyProblem(429, {}, APP).message).toMatch(/Too many attempts/);
   });
 
   it("describes each decided outcome without the approval note", () => {
@@ -88,5 +84,24 @@ describe("operator UI helpers", () => {
         closedReason: "made_unrestricted",
       }),
     ).toBe("Closed: made unrestricted");
+  });
+
+  it("throttles with the server's wait and keeps the code on a 5xx", () => {
+    expect(verifyProblem(429, {}, APP, 150)).toEqual({
+      message: "Too many attempts. You can try again in 3 minutes.",
+      waitSeconds: 150,
+    });
+    expect(verifyProblem(429, {}, APP).waitSeconds).toBe(60);
+    expect(verifyProblem(500, { message: "x" }, APP)).toEqual({
+      message: "Something went wrong. Try again.",
+    });
+  });
+
+  it("reads ?page= safely", () => {
+    expect(pageFrom(undefined)).toBe(1);
+    expect(pageFrom("3")).toBe(3);
+    expect(pageFrom(["2", "9"])).toBe(2);
+    for (const bad of ["0", "-1", "1.5", "abc", "100000"])
+      expect(pageFrom(bad)).toBe(1);
   });
 });

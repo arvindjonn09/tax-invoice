@@ -99,6 +99,15 @@ test("an operator reviews a request, changes a company and enrols TOTP", async (
     // Owners never reach the operator area: the same 404 as a missing page.
     expect((await owner.goto("/operator"))?.status()).toBe(404);
     expect((await owner.goto("/operator/mfa"))?.status()).toBe(404);
+    expect((await owner.goto("/operator/companies"))?.status()).toBe(404);
+    const requestId = (
+      await db.trialExtensionRequest.findFirstOrThrow({
+        where: { company: { name: company } },
+      })
+    ).id;
+    expect(
+      (await owner.goto(`/operator/requests/${requestId}`))?.status(),
+    ).toBe(404);
     await ownerContext.close();
 
     // Outside production, an unenrolled operator signs in with a password.
@@ -223,6 +232,13 @@ test("an operator reviews a request, changes a company and enrols TOTP", async (
       page.getByRole("heading", { name: "Step 3: Save your backup codes" }),
     ).toBeFocused();
     await expect(page.getByRole("button", { name: "Finish" })).toBeDisabled();
+    const backupCode = (
+      await page
+        .getByRole("region", { name: /Step 3/ })
+        .locator("li")
+        .first()
+        .innerText()
+    ).trim();
     await page.getByLabel("I've saved these").check();
     await page.getByRole("button", { name: "Finish" }).click();
     await expect(
@@ -240,12 +256,41 @@ test("an operator reviews a request, changes a company and enrols TOTP", async (
     await page.getByLabel("Authentication code").fill("000 000");
     await expect(page.getByLabel("Authentication code")).toHaveValue("000000");
     await page.getByRole("button", { name: "Verify" }).click();
-    await expect(
-      page.getByRole("alert").filter({ hasText: "That code didn't work." }),
-    ).toBeVisible();
+    const wrong = page
+      .getByRole("alert")
+      .filter({ hasText: "That code didn't work." });
+    await expect(wrong).toBeFocused();
+    // Typing after an error keeps focus in the field (no refocus per key).
+    const field = page.getByLabel("Authentication code");
+    await field.click();
+    await field.pressSequentially("12");
+    await expect(field).toBeFocused();
+    await expect(field).toHaveValue("12");
     // A fresh window, so the code isn't the one enrolment just used.
     const next = totp(uri, Date.now() + 30_000);
     await page.getByLabel("Authentication code").fill(next);
+    await page.getByRole("button", { name: "Verify" }).click();
+    await expect(page).toHaveURL(/\/operator$/, { timeout: 30_000 });
+
+    // "Cancel and sign out" ends the half-signed-in session.
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await expect(page).toHaveURL(/\/login/);
+    await signIn(page, OPERATOR_EMAIL);
+    await expect(
+      page.getByRole("heading", { name: "Enter your authentication code" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Cancel and sign out" }).click();
+    await expect(page.getByLabel("Password")).toBeVisible();
+    // Signed out again: the operator area sends them to sign in.
+    await page.goto("/operator");
+    await expect(page).toHaveURL(/\/login\?next=%2Foperator/);
+
+    // A backup code works once, instead of the app.
+    await signIn(page, OPERATOR_EMAIL);
+    await page
+      .getByRole("button", { name: "Use a backup code instead" })
+      .click();
+    await page.getByLabel("Backup code").fill(backupCode);
     await page.getByRole("button", { name: "Verify" }).click();
     await expect(page).toHaveURL(/\/operator$/, { timeout: 30_000 });
   } finally {

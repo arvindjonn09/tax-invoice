@@ -16,7 +16,8 @@ import {
   setAccessMode,
 } from "./trial-access";
 
-const PAGE_SIZE = 20;
+export const OPERATOR_PAGE_SIZE = 20;
+const PAGE_SIZE = OPERATOR_PAGE_SIZE;
 type IdContext = { params: Promise<{ id: string }> };
 
 const Approve = z

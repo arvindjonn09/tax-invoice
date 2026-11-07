@@ -124,6 +124,7 @@ export function DecisionForms({
             {errors.days ? (
               <p
                 id="approve-days-error"
+                role="alert"
                 className="text-sm text-danger-foreground"
               >
                 {errors.days}
@@ -178,6 +179,7 @@ export function DecisionForms({
             {errors.reason ? (
               <p
                 id="decline-reason-error"
+                role="alert"
                 className="text-sm text-danger-foreground"
               >
                 {errors.reason}

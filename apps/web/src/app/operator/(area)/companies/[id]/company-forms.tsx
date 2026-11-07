@@ -5,6 +5,7 @@ import { type FormEvent, useState } from "react";
 import { ConfirmDialog } from "@/components/operator/confirm-dialog";
 import { formatDay } from "@/components/operator/format";
 import { Button } from "@/components/ui/button";
+import { useFocusWhen } from "@/lib/focus";
 
 const CONTROL =
   "min-h-11 rounded-sm border border-input bg-card px-4 text-card-foreground";
@@ -68,6 +69,7 @@ export function CompanyForms({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const doneRef = useFocusWhen<HTMLParagraphElement>(done);
 
   function reasonError(reason: string) {
     return reason.trim() ? undefined : "Enter a reason";
@@ -176,7 +178,7 @@ export function CompanyForms({
       {done ? (
         <p
           role="status"
-          ref={(node) => node?.focus()}
+          ref={doneRef}
           tabIndex={-1}
           className="rounded-lg bg-success p-4 text-success-foreground"
         >
