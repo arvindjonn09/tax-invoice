@@ -152,6 +152,7 @@ As a prospective owner, I want to create an account with my name and email, and 
 6. **Terms record:** the accepted terms version, privacy version and acceptance instant are recorded against the user.
    Until the owner supplies reviewed text, the pages show clearly versioned placeholders (for example
    `placeholder-2026-11`). Production launch is gated on reviewed versions (E5).
+   The owner approved version `2026-11-07` on 7 November 2026 (#212).
 7. **Production guard:** in production, sign-up for `@example.test` or any reserved TLD (`.test`, `.example`,
    `.invalid`, `.localhost`) is refused with a generic validation error. No email is sent.
 8. **Abuse protection:**

@@ -1,5 +1,36 @@
 import { cn } from "@/lib/utils";
-export type MoneyBasis = "ex GST" | "incl GST";
+/**
+ * What an amount includes (#305). "no GST": a total that charged none.
+ * "total": a company-wide sum that may or may not include GST (for a company
+ * that has never been registered, so "incl GST" would be untrue).
+ */
+export type MoneyBasis = "ex GST" | "incl GST" | "no GST" | "total";
+
+/** A document's total: "incl GST" only when it charged some (#305). */
+export function totalBasis(gstCents: string | bigint | null): MoneyBasis {
+  return gstCents !== null && BigInt(gstCents) !== 0n ? "incl GST" : "no GST";
+}
+
+/** "$2,500.00 no GST" / "$2,750.00 incl GST": a document total in text (#305). */
+export function documentTotalText(
+  inclusiveCents: string | bigint,
+  gstCents: string | bigint | null,
+): string {
+  return `${formatAudCents(BigInt(inclusiveCents))} ${totalBasis(gstCents)}`;
+}
+
+/**
+ * Company-wide totals (#305): unchanged for a company that has ever been
+ * registered; otherwise sales and receipts carry no GST, and anything mixing
+ * in supplier amounts is just a total.
+ */
+export function companyBasis(
+  everRegistered: boolean,
+  side: "sales" | "mixed",
+): MoneyBasis {
+  if (everRegistered) return "incl GST";
+  return side === "sales" ? "no GST" : "total";
+}
 type MoneyDisplayProps = { basis: MoneyBasis; className?: string } & (
   | { cents: number | bigint; unavailable?: false }
   | { unavailable: true; cents?: never }

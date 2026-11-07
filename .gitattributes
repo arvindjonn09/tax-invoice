@@ -1,3 +1,5 @@
 # Docker's PostgreSQL init script must remain runnable after Windows checkouts.
 *.sh text eol=lf
 *.sql text eol=lf
+# Every PR adds a line at the top of the changelog; keep both sides automatically.
+CHANGELOG.md merge=union

@@ -10,7 +10,7 @@ import {
   sendJson,
 } from "@/components/form/field";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
-import { formatAudCents } from "@/components/money-display";
+import { formatAudCents, totalBasis } from "@/components/money-display";
 import { EntityPicker } from "@/features/jobs/picker";
 import {
   type Allocation,
@@ -450,7 +450,7 @@ export function ReceiptForm({ today }: { today: string }) {
     .map(({ invoice, limit }) => ({
       id: invoice.id,
       label: `Invoice ${invoice.reference ?? ""}`.trim(),
-      detail: `Issued ${invoice.issueDate ?? ""}, ${formatAudCents(BigInt(invoice.inclusiveCents))} AUD incl GST`,
+      detail: `Issued ${invoice.issueDate ?? ""}, ${formatAudCents(BigInt(invoice.inclusiveCents))} AUD ${totalBasis(invoice.gstCents)}`,
       limitCents: limit.toString(),
       limitLabel: kind === "refund" ? "received so far" : "owing",
     }));
