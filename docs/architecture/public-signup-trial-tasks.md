@@ -334,7 +334,7 @@ the ADR 0004 D1 deploy-order rule.
 - **Acceptance criteria:**
   - `POST /api/account/password/forgot` always returns an identical 202 with similar timing. Only existing accounts
     (not production demo accounts) get an email.
-  - Limits are 3/h per account and 10/h per IP, plus Turnstile. Throttled requests are still 202, send nothing and
+  - Limits are 3/h and 6/day per account and IP, 10/h and 24/day per account (#318) and 10/h per IP, plus Turnstile. Throttled requests are still 202, send nothing and
     are counted in `platform_audit_events`.
   - The reset token lasts 1 h and is single-use. A new request supersedes the old link.
   - On success, one transaction does all of the following, with an integration test for each:
