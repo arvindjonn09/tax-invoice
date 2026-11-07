@@ -21,6 +21,10 @@ export type Job = {
   title: string;
   status: JobStatus;
   dueOn: string | null;
+  /** Office reads (#303): any work evidence on the job. */
+  hasEvidence?: boolean;
+  /** Office reads (#303): show the "No worker evidence" label. */
+  noWorkerEvidence?: boolean;
   description?: string | null;
   customerId?: string;
   customerName?: string;
