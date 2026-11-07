@@ -11,6 +11,14 @@ export function totalBasis(gstCents: string | bigint | null): MoneyBasis {
   return gstCents !== null && BigInt(gstCents) !== 0n ? "incl GST" : "no GST";
 }
 
+/** "$2,500.00 no GST" / "$2,750.00 incl GST": a document total in text (#305). */
+export function documentTotalText(
+  inclusiveCents: string | bigint,
+  gstCents: string | bigint | null,
+): string {
+  return `${formatAudCents(BigInt(inclusiveCents))} ${totalBasis(gstCents)}`;
+}
+
 /**
  * Company-wide totals (#305): unchanged for a company that has ever been
  * registered; otherwise sales and receipts carry no GST, and anything mixing

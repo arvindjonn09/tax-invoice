@@ -5,7 +5,7 @@ import { useRef, useState } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Field, FormMessage, sendJson } from "@/components/form/field";
-import { formatAudCents } from "@/components/money-display";
+import { documentTotalText } from "@/components/money-display";
 import { day, time } from "@/features/jobs/types";
 import { InvoiceLines } from "./lines";
 import { Totals } from "./totals";
@@ -215,7 +215,8 @@ export function IssuedInvoice({
                     >
                       {credit.reference}
                     </Link>{" "}
-                    · {formatAudCents(BigInt(credit.inclusiveCents))} incl GST
+                    ·{" "}
+                    {documentTotalText(credit.inclusiveCents, credit.gstCents)}
                   </li>
                 ))}
               </ul>
