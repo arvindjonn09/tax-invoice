@@ -19,7 +19,7 @@ The owner runs this, because it needs `sudo`. It's safe to run again. First depl
 sudo bash /home/prod/tax-invoice-run/infra/host/install.sh
 ```
 
-It installs nginx and the maintenance page, a limited permission for the deploy script, and the [scheduled jobs timer](#scheduled-jobs).
+It installs nginx and the maintenance page, a limited permission for the deploy script, and the [scheduled jobs timer](#scheduled-jobs). It also starts the database and file storage at boot (`jobflow-services.service`); the app and the timer start after them.
 
 Then switch the tunnel: in the Cloudflare dashboard, under **Zero Trust → Networks → Tunnels**, change the public hostname's service from `http://localhost:3300` to `http://localhost:3299`. To undo this, change it back. The app itself isn't affected.
 

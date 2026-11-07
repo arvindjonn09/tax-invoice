@@ -95,3 +95,36 @@ describe("scheduled jobs timer (#234)", () => {
     expect(install).toContain("systemctl enable --now jobflow-jobs.timer");
   });
 });
+
+describe("starting at boot (#234)", () => {
+  const services = read("jobflow-services.service");
+  const dropIn = read("jobflow.service.d/services.conf");
+  const install = read("install.sh");
+
+  it("starts the database and file storage as prod, and stops them cleanly", () => {
+    expect(services).toMatch(/^User=prod$/m);
+    expect(services).toMatch(
+      /^ExecStart=\/home\/prod\/\.local\/bin\/jobflow-services start$/m,
+    );
+    expect(services).toMatch(
+      /^ExecStop=\/home\/prod\/\.local\/bin\/jobflow-services stop$/m,
+    );
+    expect(services).toMatch(/^WantedBy=multi-user\.target$/m);
+  });
+
+  it("starts the app and the jobs only after them", () => {
+    for (const unit of [dropIn, read("jobflow-jobs.service")]) {
+      expect(unit).toMatch(/^After=.*jobflow-services\.service/m);
+      expect(unit).toMatch(/^Wants=.*jobflow-services\.service/m);
+    }
+  });
+
+  it("is installed and enabled by the install script", () => {
+    expect(install).toContain(
+      "systemctl enable --now jobflow-services.service",
+    );
+    expect(install).toContain(
+      "/etc/systemd/system/jobflow.service.d/services.conf",
+    );
+  });
+});

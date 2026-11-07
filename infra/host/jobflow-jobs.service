@@ -1,8 +1,8 @@
 # Scheduled jobs on the self-hosted site (#234). Started by jobflow-jobs.timer.
 [Unit]
 Description=JobFlow scheduled jobs (trial reminders)
-After=network-online.target postgresql.service
-Wants=network-online.target
+After=network-online.target jobflow-services.service
+Wants=network-online.target jobflow-services.service
 
 [Service]
 Type=oneshot

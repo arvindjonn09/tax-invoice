@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-time setup of the self-hosted site (#326, #234): the maintenance page,
-# the limited deploy permission and the scheduled jobs timer. Safe to run again.
+# the limited deploy permission, the scheduled jobs timer, and starting the
+# database and file storage at boot. Safe to run again.
 # Usage, after a deploy that includes this file:
 #   sudo bash /home/prod/tax-invoice-run/infra/host/install.sh
 set -euo pipefail
@@ -37,6 +38,15 @@ visudo -cf "$here/sudoers-jobflow-deploy"
 install -o root -g root -m 0440 "$here/sudoers-jobflow-deploy" \
   /etc/sudoers.d/jobflow-deploy
 
+echo "==> Starting the database and file storage at boot"
+install -o root -g root -m 0644 "$here/jobflow-services.service" /etc/systemd/system/
+install -d -o root -g root -m 0755 /etc/systemd/system/jobflow.service.d
+install -o root -g root -m 0644 "$here/jobflow.service.d/services.conf" \
+  /etc/systemd/system/jobflow.service.d/services.conf
+systemctl daemon-reload
+# Already running ones are left alone; this only takes over the next boots.
+systemctl enable --now jobflow-services.service
+
 echo "==> Installing the scheduled jobs timer"
 install -o root -g root -m 0644 "$here/jobflow-jobs.service" \
   "$here/jobflow-jobs.timer" /etc/systemd/system/
@@ -48,6 +58,7 @@ echo "==> Checking"
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:3299/api/health || true)"
 echo "Through nginx: $code (expect 200)"
 systemctl list-timers jobflow-jobs.timer --no-pager | sed -n 1,2p
+systemctl is-enabled jobflow-services.service
 echo
 echo "Done. One step is left, in the Cloudflare dashboard: under Zero Trust ->"
 echo "Networks -> Tunnels, change this site's service from http://localhost:3300"
