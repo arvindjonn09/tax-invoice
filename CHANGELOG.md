@@ -6,6 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- Trial reminder emails at 7, 3 and 1 days left and when the trial ends, sent by `pnpm jobs:run`, plus one-time notices for owners ([#233](https://github.com/arvindjonn09/tax-invoice/issues/233)).
 - A "We'll be back soon" page during deploys and whenever the app is down, with a deploy script for the self-hosted site that keeps it up until the new build is ready ([#326](https://github.com/arvindjonn09/tax-invoice/issues/326)).
 - Issuing an invoice now needs the company's legal name, ABN and full address, whether or not it's registered for GST, and a due date on or after the issue date ([#348](https://github.com/arvindjonn09/tax-invoice/issues/348)).
 - Operator area screens: extension requests (pending and decided), request review with approve or decline, company search with direct extensions and access changes, TOTP enrolment at `/operator/mfa`, and the authentication-code step on `/login`, with an operator runbook ([#232](https://github.com/arvindjonn09/tax-invoice/issues/232)).
