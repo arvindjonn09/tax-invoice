@@ -200,3 +200,42 @@ test("a reset link with no token offers a new one", async ({ page }) => {
     page.getByRole("link", { name: "Send a new link" }),
   ).toHaveAttribute("href", "/forgot-password");
 });
+
+test("a throttled reset works again after the wait, without a reload", async ({
+  page,
+}) => {
+  let calls = 0;
+  await page.route("**/api/account/password/reset", async (route) => {
+    calls += 1;
+    // First a 429 with a 1-second wait, then the real (invalid-token) answer.
+    if (calls === 1)
+      return route.fulfill({
+        status: 429,
+        contentType: "application/json",
+        headers: { "retry-after": "1" },
+        body: JSON.stringify({
+          error: "Too many attempts. Try again later.",
+          retryAfterSeconds: 1,
+        }),
+      });
+    return route.continue();
+  });
+  await page.goto(`/reset-password#token=${"0".repeat(64)}`);
+  const fresh = "another long synthetic reset phrase";
+  await page.getByLabel("New password", { exact: true }).fill(fresh);
+  await page.getByLabel("Confirm new password").fill(fresh);
+  const change = page.getByRole("button", { name: "Change password" });
+  await change.click();
+  await expect(
+    page.getByText("Too many attempts. You can try again in 1 minute."),
+  ).toBeVisible();
+  await expect(change).toBeDisabled();
+  await expect(change).toBeEnabled({ timeout: 5_000 });
+  await page.getByLabel("New password", { exact: true }).fill(fresh);
+  await page.getByLabel("Confirm new password").fill(fresh);
+  await change.click();
+  await expect(
+    page.getByRole("heading", { name: "This link is invalid or has expired" }),
+  ).toBeVisible();
+  expect(calls).toBe(2);
+});

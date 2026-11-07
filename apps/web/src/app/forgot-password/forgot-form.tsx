@@ -27,6 +27,8 @@ export function ForgotForm({
   const [state, setState] = useState<State>({ kind: "idle" });
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // The security check didn't load: say so and offer a retry (Codex P2).
+  const [checkFailed, setCheckFailed] = useState(false);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -111,7 +113,29 @@ export function ForgotForm({
           siteKey={turnstileSiteKey}
           action="forgot"
           onToken={setTurnstileToken}
+          onError={() => setCheckFailed(true)}
         />
+      ) : null}
+      {checkFailed ? (
+        <div
+          role="alert"
+          className="space-y-2 rounded-lg bg-warning p-4 text-warning-foreground"
+        >
+          <p>
+            The security check didn&apos;t load. Check your connection, then try
+            it again.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setCheckFailed(false);
+              setAttempt((value) => value + 1);
+            }}
+          >
+            Try the security check again
+          </Button>
+        </div>
       ) : null}
       <Button
         type="submit"

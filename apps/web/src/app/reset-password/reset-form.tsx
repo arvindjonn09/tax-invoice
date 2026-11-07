@@ -18,7 +18,7 @@ type State =
       message: string;
       fields: Record<string, string>;
     }
-  | { kind: "throttled"; token: string; message: string }
+  | { kind: "throttled"; token: string; message: string; waitMs: number }
   | { kind: "done" }
   | { kind: "invalid" };
 
@@ -49,6 +49,18 @@ export function ResetForm() {
     );
   }, []);
 
+  // After the server's wait, the button works again without a reload.
+  const throttledToken = state.kind === "throttled" ? state.token : null;
+  const waitMs = state.kind === "throttled" ? state.waitMs : 0;
+  useEffect(() => {
+    if (!throttledToken) return;
+    const timer = setTimeout(
+      () => setState({ kind: "form", token: throttledToken }),
+      waitMs,
+    );
+    return () => clearTimeout(timer);
+  }, [throttledToken, waitMs]);
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (state.kind !== "form" && state.kind !== "error") return;
@@ -76,12 +88,16 @@ export function ResetForm() {
       retryAfterSeconds?: number;
     } | null;
     if (result?.code === "token_invalid") return setState({ kind: "invalid" });
-    if (response?.status === 429)
+    if (response?.status === 429) {
+      const seconds = retryAfter(response, result);
       return setState({
         kind: "throttled",
         token,
-        message: throttledText(retryAfter(response, result)),
+        message: throttledText(seconds),
+        // No wait given: let them try again after a minute (Codex P2).
+        waitMs: (seconds ?? 60) * 1000,
       });
+    }
     // Password fields are cleared after a server rejection (Forms).
     element.reset();
     setState({
