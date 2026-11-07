@@ -73,10 +73,38 @@ test("a visitor signs up, is held at verification, then verifies", async ({
 
     // A verified user without a company sets up their business (S5).
     await expect(page).toHaveURL(/\/onboarding$/);
+    await expect(page.getByText("Step 1 of 2")).toBeVisible();
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    // Usable at 320 px without sideways scrolling (#225).
+    await page.setViewportSize({ width: 320, height: 800 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // GST fields appear only once the answer is yes.
+    await expect(page.getByLabel("GST accounting basis")).toHaveCount(0);
+    await page.getByLabel("Yes, I'm registered for GST").check();
+    await expect(page.getByLabel("GST accounting basis")).toBeVisible();
     await page.getByLabel("Business name").fill("Signup Sparks");
     await page.getByLabel("No, not registered").check();
-    await page.getByRole("button", { name: /Create my business/ }).click();
+    await expect(page.getByLabel("GST accounting basis")).toHaveCount(0);
+    // Nothing is kept in the browser before submitting (S5 AC8).
+    expect(
+      await page.evaluate(() => localStorage.length + sessionStorage.length),
+    ).toBe(0);
+    // A double click still creates one company (one key per form load).
+    await page.getByRole("button", { name: /Create my business/ }).dblclick();
+
+    // Step 2: add the optional details or skip them (S5 AC8).
+    await expect(page).toHaveURL(/\/onboarding\/details$/);
+    await expect(page.getByText("Step 2 of 2")).toBeVisible();
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    expect(
+      await db.company.count({ where: { selfServiceOwnerId: user.id } }),
+    ).toBe(1);
+    await page.getByRole("link", { name: "Skip for now" }).click();
     // /home sends a new Owner on to their dashboard.
     await expect(page).toHaveURL(/\/dashboard$/);
     await expect(
@@ -89,6 +117,53 @@ test("a visitor signs up, is held at verification, then verifies", async ({
       name: "Signup Sparks",
       accessMode: "trial",
     });
+
+    // What's left to set up, until it's dismissed (S5 AC8, design §10).
+    const checklist = page.getByRole("region", {
+      name: "Finish setting up your company",
+    });
+    await expect(checklist).toContainText("Business address");
+    await expect(checklist).toContainText("To do");
+    await expect(
+      checklist.getByRole("link", { name: "Add business address" }),
+    ).toHaveAttribute("href", "/settings");
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await checklist.getByRole("button", { name: "Dismiss" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(checklist).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Dashboard" }),
+    ).toBeFocused();
+    await page.reload();
+    await expect(
+      page.getByRole("heading", { name: "Dashboard" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Finish setting up your company" }),
+    ).toHaveCount(0);
+
+    // No longer an active member of the company they created: the
+    // self-service limit applies, with the support address (S5 AC5).
+    await db.membership.updateMany({
+      where: { companyId: company.id, userId: user.id },
+      data: { isActive: false },
+    });
+    await page.goto("/onboarding");
+    await page.getByLabel("Business name").fill("Second Sparks");
+    await page.getByLabel("No, not registered").check();
+    await page.getByRole("button", { name: /Create my business/ }).click();
+    await expect(
+      page.getByRole("heading", { name: "You've already set up a company" }),
+    ).toBeFocused();
+    await expect(
+      page.getByText(/Contact us to set up another company/),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: /@/ })).toHaveAttribute(
+      "href",
+      /^mailto:/,
+    );
+    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   } finally {
     await db.$disconnect();
   }

@@ -176,8 +176,21 @@ async function newJob(body: Record<string, unknown> = {}, who: Who = "owner") {
 const move = (id: string, to: string, who: Who = "manager") =>
   r().status(call(who, "POST", { to }), one(id));
 
+/** Worker evidence on a job, so it may move to review (#303). */
+const withEvidence = (jobId: string) =>
+  db.workEvidence.create({
+    data: {
+      companyId,
+      jobId,
+      kind: "note",
+      note: "Synthetic proof of work",
+      submittedBy: userIds.owner,
+    },
+  });
+
 /** Walk a draft job to awaiting_review, then complete it as a review would (#42). */
 async function reviewed(id: string) {
+  await withEvidence(id);
   for (const to of ["approved", "in_progress", "awaiting_review"])
     expect((await move(id, to)).status, to).toBe(200);
   await db.job.update({ where: { id }, data: { status: "completed" } });
@@ -269,6 +282,7 @@ describe("status machine", () => {
 
   it("walks allowed moves, recording an immutable timeline and audit", async () => {
     jobId = (await newJob()).body.id;
+    await withEvidence(jobId);
     for (const to of [
       "quoted",
       "approved",
