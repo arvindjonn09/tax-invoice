@@ -4,7 +4,7 @@ import { useState } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { Field } from "@/components/form/field";
 import { Button } from "@/components/ui/button";
-import { MoneyDisplay } from "@/components/money-display";
+import { MoneyDisplay, totalBasis } from "@/components/money-display";
 import { useRemote } from "@/components/data/use-remote";
 import { type Quote, STATE_LABEL, percent } from "./types";
 
@@ -108,7 +108,7 @@ export function QuotesList({ editable }: { editable: boolean }) {
                     <tr className="border-b bg-muted">
                       <th className="p-4">Quote</th>
                       <th className="p-4">Status</th>
-                      <th className="p-4">Total (incl GST)</th>
+                      <th className="p-4">Total</th>
                       <th className="p-4">Est. margin (ex GST)</th>
                     </tr>
                   </thead>
@@ -127,7 +127,7 @@ export function QuotesList({ editable }: { editable: boolean }) {
                         <td className="p-4">
                           <MoneyDisplay
                             cents={BigInt(quote.inclusiveCents)}
-                            basis="incl GST"
+                            basis={totalBasis(quote.gstCents)}
                           />
                         </td>
                         <td className="p-4 tabular-nums">
@@ -153,7 +153,7 @@ export function QuotesList({ editable }: { editable: boolean }) {
                     <p>{STATE_LABEL[quote.state]}</p>
                     <MoneyDisplay
                       cents={BigInt(quote.inclusiveCents)}
-                      basis="incl GST"
+                      basis={totalBasis(quote.gstCents)}
                     />
                     <p className="text-sm tabular-nums">
                       Est. margin {percent(quote.estimate.marginBasisPoints)}{" "}

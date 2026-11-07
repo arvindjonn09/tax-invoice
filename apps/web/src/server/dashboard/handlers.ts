@@ -218,9 +218,16 @@ export async function loadDashboard(
       take: 8,
     }),
   ]);
+  // #305: "incl GST" wording only for a company that has ever been
+  // registered; otherwise sales carried no GST.
+  const gstEverRegistered =
+    (await tx.companyGstRegistration.count({
+      where: { companyId: actor.companyId },
+    })) > 0;
   return {
     range: query,
     generatedAt: new Date().toISOString(),
+    gstEverRegistered,
     totals: profit.totals,
     gst,
     ledger,

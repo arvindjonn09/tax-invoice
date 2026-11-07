@@ -7,6 +7,8 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 ### Added
 
 - Settings → Trial: owners, managers and accountants see the trial status; owners can request more time, see whether a request is pending, and see past outcomes. The trial banner's "Request extension" now opens it ([#232](https://github.com/arvindjonn09/tax-invoice/issues/232), part 1).
+- The Terms of Service and Privacy Policy are published, in effect from 7 November 2026, after the owner's approval ([#212](https://github.com/arvindjonn09/tax-invoice/issues/212)).
+- Onboarding shows "Step 1 of 2", explains the one-company limit with the support address, then offers the optional details or "Skip for now"; owners see "Finish setting up your company" on their dashboard until it's done or dismissed ([#225](https://github.com/arvindjonn09/tax-invoice/issues/225)).
 - Company phone, business email, website, about text and logo API. Logos must be real PNG or JPEG files, have their metadata removed, and old ones are kept for documents already sent; the screens follow in #229 ([#227](https://github.com/arvindjonn09/tax-invoice/issues/227)).
 - Trial extension requests: owners can ask for more time, including while read-only, and the operator API approves or declines them; the screens follow in #232 ([#231](https://github.com/arvindjonn09/tax-invoice/issues/231)).
 - Accepting an invitation no longer reveals whether an email address has an account. People now set their password from an emailed link and sign in before they join a company ([#263](https://github.com/arvindjonn09/tax-invoice/issues/263)).
