@@ -3,7 +3,8 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { trialStatus } from "@jobflow/domain";
 import { AppShell } from "@/components/shell/app-shell";
-import { TrialBanner } from "@/components/shell/banners";
+import { TrialBanner, type TrialViewer } from "@/components/shell/banners";
+import { CompanyAccessProvider } from "@/components/shell/company-access";
 import { supportEmail } from "@/server/email";
 import { getAuth, getDatabase, resolveActor } from "@/server/auth";
 import { PATH_HEADER } from "@/server/routes/public";
@@ -12,8 +13,11 @@ import { ROLE_LABELS, navLinksFor } from "@/server/shell";
 
 export const dynamic = "force-dynamic";
 
-/** Roles that see the trial countdown; others only see that it has ended (S8). */
-const TRIAL_VIEWERS = new Set(["owner", "manager", "accountant"]);
+/** S8 AC1–AC2: owners can request more time; workers see no dates. */
+function trialViewer(role: string): TrialViewer {
+  if (role === "owner") return "owner";
+  return role === "manager" || role === "accountant" ? "staff" : "worker";
+}
 
 /** Every signed-in page: actor, company and demo status come from the server. */
 export default async function SignedInLayout({
@@ -44,6 +48,16 @@ export default async function SignedInLayout({
       trialLastDay: true,
     },
   });
+  const viewer = trialViewer(actor.role);
+  // S9 AC5: the server is authoritative; this only keeps the UI honest.
+  const readOnly = actor.access?.readOnly === true;
+  const access = {
+    readOnly,
+    reason:
+      viewer === "worker"
+        ? "Read-only: contact your owner."
+        : "Read-only: the trial has ended.",
+  };
   const trialLastDay =
     company.accessMode === "trial"
       ? (company.trialLastDay?.toISOString().slice(0, 10) ?? null)
@@ -59,13 +73,13 @@ export default async function SignedInLayout({
           <TrialBanner
             status={trialStatus(trialLastDay, new Date())}
             lastDay={trialLastDay}
-            showCountdown={TRIAL_VIEWERS.has(actor.role)}
+            viewer={viewer}
             supportEmail={supportEmail()}
           />
         ) : null
       }
     >
-      {children}
+      <CompanyAccessProvider value={access}>{children}</CompanyAccessProvider>
     </AppShell>
   );
 }

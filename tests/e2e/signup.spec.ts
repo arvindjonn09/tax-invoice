@@ -79,9 +79,9 @@ test("a visitor signs up, is held at verification, then verifies", async ({
     await page.getByRole("button", { name: /Create my business/ }).click();
     // /home sends a new Owner on to their dashboard.
     await expect(page).toHaveURL(/\/dashboard$/);
-    await expect(
-      page.getByRole("region", { name: "Free trial" }),
-    ).toContainText("Free trial: 30 days left");
+    await expect(page.getByRole("status", { name: "Trial status" })).toHaveText(
+      /30 days remaining/,
+    );
     const company = await db.company.findFirstOrThrow({
       where: { selfServiceOwnerId: user.id },
     });
