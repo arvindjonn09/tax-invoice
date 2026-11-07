@@ -1,5 +1,6 @@
 import { can } from "@jobflow/authz";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/shell/page-header";
 import { getDatabase } from "@/server/auth";
@@ -71,6 +72,16 @@ export default async function SettingsPage() {
           { label: "Settings" },
         ]}
       />
+      {company.accessMode === "trial" && can(actor.role, "trial.read") ? (
+        <p>
+          <Link
+            href="/settings/trial"
+            className="inline-flex min-h-11 items-center font-semibold underline"
+          >
+            Trial and extension requests
+          </Link>
+        </p>
+      ) : null}
       {canSeeTax ? (
         <>
           <section
