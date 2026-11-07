@@ -1,4 +1,11 @@
 import { type NextRequest, NextResponse } from "next/server";
+import {
+  PATH_HEADER,
+  SESSION_COOKIES,
+  isApiPath,
+  isPublicPage,
+} from "@/server/routes/public";
+import { loginFor } from "@/server/routes/safe-next";
 import { createNonce, securityHeaders } from "@/server/security/headers";
 
 /** The only pages allowed to frame Cloudflare's challenge. */
@@ -15,6 +22,10 @@ const TOKEN_PAGES = new Set(["/verify-email", "/reset-password"]);
  * response (#71). Next.js reads the nonce from the request's CSP header and
  * applies it to its own scripts, so pages must render dynamically (the root
  * layout reads headers()).
+ *
+ * Pages outside the public allowlist need a session (S1, #223): with no
+ * session cookie the request goes to `/login?next=<path>`. A cookie alone
+ * proves nothing; layouts resolve the actor on every request.
  */
 export function proxy(request: NextRequest) {
   const nonce = createNonce();
@@ -28,8 +39,25 @@ export function proxy(request: NextRequest) {
       Boolean(process.env.TURNSTILE_SITE_KEY) &&
       TURNSTILE_PAGES.has(request.nextUrl.pathname),
   });
+  const { pathname, search } = request.nextUrl;
+  const page = !isApiPath(pathname);
+  const gated = page && !isPublicPage(pathname);
+  if (gated && !SESSION_COOKIES.some((name) => request.cookies.has(name))) {
+    const target = new URL(loginFor(`${pathname}${search}`), request.url);
+    // 303 so a form POST arrives at sign-in as a GET.
+    const redirect = NextResponse.redirect(
+      target,
+      request.method === "GET" || request.method === "HEAD" ? 307 : 303,
+    );
+    for (const [name, value] of Object.entries(headers))
+      redirect.headers.set(name, value);
+    redirect.headers.set("Cache-Control", "private, no-store");
+    return redirect;
+  }
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
+  // Layouts send a stale session back to sign-in with this path as `next`.
+  requestHeaders.set(PATH_HEADER, `${pathname}${search}`);
   requestHeaders.set(
     "Content-Security-Policy",
     headers["Content-Security-Policy"] ?? "",
@@ -41,6 +69,8 @@ export function proxy(request: NextRequest) {
   // Nothing about the page URL leaves it, not even the origin.
   if (TOKEN_PAGES.has(request.nextUrl.pathname))
     response.headers.set("Referrer-Policy", "no-referrer");
+  // Signed-in pages are force-dynamic, so Next.js itself sends
+  // "private, no-cache, no-store, …" for them (S1 AC8; see route-gating test).
   return response;
 }
 
