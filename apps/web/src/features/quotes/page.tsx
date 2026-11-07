@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import type { GstRegistrationPeriod } from "@jobflow/domain";
 import { Button } from "@/components/ui/button";
 import { useRemote } from "@/components/data/use-remote";
 import { QuoteBuilder } from "./builder";
@@ -11,11 +12,13 @@ export function QuotePage({
   id,
   editable,
   registeredToday,
+  periods,
   today,
 }: {
   id: string;
   editable: boolean;
   registeredToday: boolean;
+  periods: GstRegistrationPeriod[];
   today: string;
 }) {
   const remote = useRemote<Quote>(`/api/quotes/${id}`);
@@ -37,6 +40,7 @@ export function QuotePage({
       <QuoteBuilder
         initial={quote}
         registeredToday={registeredToday}
+        periods={periods}
         today={today}
         onSent={setLocal}
       />

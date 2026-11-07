@@ -54,6 +54,10 @@ export type Invoice = {
   voidReason: string | null;
   voidedAt: string | null;
   lines: InvoiceLine[];
+  /** List rows, issued invoices, payment.read only (#304). */
+  receivedCents?: string;
+  creditedCents?: string;
+  outstandingCents?: string;
   creditNotes?: {
     id: string;
     status: string;
