@@ -9,6 +9,7 @@ import { FormMessage } from "@/components/form/field";
 import { hasUnsavedChanges } from "@/components/form/use-unsaved-changes";
 import { useRemote } from "@/components/data/use-remote";
 import { JobEditor } from "./editor";
+import { NoEvidenceLabel } from "./no-evidence-label";
 import {
   AssignmentsPanel,
   ReviewForm,
@@ -162,7 +163,10 @@ export function JobDetail({
                         <dt className="text-sm text-muted-foreground">
                           Status
                         </dt>
-                        <dd>{statusLabel(data.status)}</dd>
+                        <dd className="flex flex-wrap items-center gap-2">
+                          {statusLabel(data.status)}
+                          {data.noWorkerEvidence ? <NoEvidenceLabel /> : null}
+                        </dd>
                       </div>
                       <div>
                         <dt className="text-sm text-muted-foreground">

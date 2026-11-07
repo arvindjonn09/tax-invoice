@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { createDatabaseClient } from "../../packages/database/src/index";
-import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
+import {
+  createCredentialUser,
+  hashPassword,
+} from "../../apps/web/src/server/auth/credentials";
 import { isolatedTestConnection } from "../helpers/test-environment";
 
 // Same optional-database contract as main's signed-in settings specs.
@@ -102,18 +105,29 @@ test("owner invites, recipient joins, owner changes role and deactivates access"
     const joining = await recipient.newPage();
     await joining.goto(invitationUrl);
     await joining.getByLabel("Name (new accounts)").fill("Browser Joiner");
-    await joining
-      .getByLabel("Password (new accounts, 12–128 characters)")
-      .fill(PASSWORD);
+    await joining.getByRole("button", { name: "Accept invitation" }).click();
+    await expect(
+      joining.getByRole("heading", { name: "Check your email" }),
+    ).toBeVisible();
+    await expect(joining).toHaveURL(/\/invite$/);
+    await expect
+      .poll(() => db.user.count({ where: { email: invitedEmail } }))
+      .toBe(1);
+    // Stands in for the emailed set-password link, which also confirms the address.
+    const newUser = await db.user.update({
+      where: { email: invitedEmail },
+      data: { emailVerified: true },
+    });
+    await db.authAccount.updateMany({
+      where: { userId: newUser.id, providerId: "credential" },
+      data: { password: await hashPassword(PASSWORD) },
+    });
+    await login(joining, invitedEmail);
+    await joining.goto(invitationUrl);
     await joining.getByRole("button", { name: "Accept invitation" }).click();
     await expect(
       joining.getByRole("heading", { name: "Invitation accepted" }),
     ).toBeVisible();
-    await expect(joining).toHaveURL(/\/invite$/);
-    await login(joining, invitedEmail);
-    const newUser = await db.user.findUniqueOrThrow({
-      where: { email: invitedEmail },
-    });
     expect(
       await db.membership.findUnique({
         where: { companyId_userId: { companyId, userId: newUser.id } },
@@ -135,7 +149,7 @@ test("owner invites, recipient joins, owner changes role and deactivates access"
       card.getByText("Inactive · Accountant", { exact: true }),
     ).toBeVisible();
     await joining.goto("/users");
-    await expect(joining).toHaveURL(/\/(login|account)$/);
+    await expect(joining).toHaveURL(/\/(login|account)(\?next=%2Fusers)?$/);
     expect(await db.authSession.count({ where: { userId: newUser.id } })).toBe(
       0,
     );

@@ -227,7 +227,7 @@ Every response is JSON with `Cache-Control: private, no-store`. Errors look like
 | POST `/api/account/verification/resend` | `{ email, turnstileToken }` | **202** generic, always | IP 10/h, plus account 1/min and 5/day silently; Turnstile `resend` |
 | POST `/api/account/password/forgot` | `{ email, turnstileToken }` | **202** generic, always | IP 10/h, account 3/h silently; Turnstile `forgot` |
 | POST `/api/account/password/reset` | `{ token, password, passwordConfirmation }` | 200; 400 `token_invalid` or `fields` | IP 10/h |
-| POST `/api/invitations/accept` (existing) | unchanged | adds 403 `company_read_only` when the invitation was created on or after `read_only_from`. It doesn't set `email_verified`: an invitation link isn't mailbox proof (ADR 0004 D1) | unchanged |
+| POST `/api/invitations/accept` (existing) | unchanged | **Signed out:** 400 without a name, otherwise **202** `{ status: "check-email" }` whether or not the address has an account (#263). No password is accepted. After the response, a new account is created with an unknown password and gets a set-password email, which also confirms the address, or an existing one gets an email saying to sign in and reopen the link. Either way the invitation stays pending, with no membership or company audit event. **Signed in as the invited user, with a confirmed email:** 200 `{ accepted: true }`; unconfirmed: 403. **Signed in as anyone else:** 403. Adds 403 `company_read_only` when the invitation was created on or after `read_only_from`. It doesn't set `email_verified`: an invitation link isn't mailbox proof (ADR 0004 D1) | unchanged |
 
 ### Webhook (`withWebhook`)
 

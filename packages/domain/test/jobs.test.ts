@@ -6,6 +6,7 @@ import {
   isJobStatus,
   nextStatuses,
   transitionProblem,
+  usualNextStatus,
 } from "../src/index";
 
 describe("job status machine", () => {
@@ -99,5 +100,52 @@ describe("job status machine", () => {
       expect(isJobEditable(status)).toBe(false);
     expect(formatJobReference("JOB-", 7)).toBe("JOB-0007");
     expect(formatJobReference("J", 123456)).toBe("J123456");
+  });
+});
+
+// #301: the status form's default is never a backward step or Cancelled.
+describe("usual next status", () => {
+  const order = (status: (typeof JOB_STATUSES)[number]) =>
+    JOB_STATUSES.indexOf(status);
+  it("is a forward, allowed, non-cancelling move for every status, or none", () => {
+    for (const from of JOB_STATUSES) {
+      const to = usualNextStatus(from);
+      if (to === null) continue;
+      expect(transitionProblem(from, to), `${from} → ${to}`).toBeNull();
+      expect(to, from).not.toBe("cancelled");
+      expect(order(to), `${from} → ${to}`).toBeGreaterThan(order(from));
+    }
+  });
+  it("names the usual step, and nothing where there's no clear one", () => {
+    expect(
+      Object.fromEntries(JOB_STATUSES.map((s) => [s, usualNextStatus(s)])),
+    ).toEqual({
+      draft: "quoted",
+      quoted: "approved",
+      approved: "assigned",
+      assigned: "in_progress",
+      in_progress: "awaiting_review",
+      awaiting_review: null,
+      completed: null,
+      invoiced: "closed",
+      closed: null,
+      cancelled: null,
+    });
+  });
+  it("leaves the allowed moves unchanged", () => {
+    expect(
+      Object.fromEntries(JOB_STATUSES.map((s) => [s, nextStatuses(s)])),
+    ).toEqual({
+      draft: ["quoted", "approved", "cancelled"],
+      quoted: ["draft", "approved", "cancelled"],
+      approved: ["assigned", "in_progress", "cancelled"],
+      assigned: ["approved", "in_progress", "cancelled"],
+      in_progress: ["awaiting_review", "cancelled"],
+      awaiting_review: ["in_progress", "completed", "cancelled"],
+      completed: ["invoiced", "closed", "cancelled"],
+      invoiced: ["closed", "cancelled"],
+      closed: [],
+      cancelled: [],
+    });
   });
 });

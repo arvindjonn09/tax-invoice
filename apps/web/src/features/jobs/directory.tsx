@@ -10,6 +10,7 @@ import { MoneyDisplay } from "@/components/money-display";
 import { useRemote } from "@/components/data/use-remote";
 import { JobEditor } from "./editor";
 import { day, statusLabel, type Job } from "./types";
+import { NoEvidenceLabel } from "./no-evidence-label";
 export function JobsDirectory({
   office,
   editable,
@@ -181,7 +182,12 @@ export function JobsDirectory({
                             {job.reference} · {job.title}
                           </Link>
                         </td>
-                        <td className="p-4">{statusLabel(job.status)}</td>
+                        <td className="p-4">
+                          <span className="flex flex-wrap items-center gap-2">
+                            {statusLabel(job.status)}
+                            {job.noWorkerEvidence ? <NoEvidenceLabel /> : null}
+                          </span>
+                        </td>
                         <td className="p-4">{day(job.dueOn)}</td>
                         {office ? (
                           <td className="p-4">
@@ -215,6 +221,7 @@ export function JobsDirectory({
                     <p>
                       {statusLabel(job.status)} · Due {day(job.dueOn)}
                     </p>
+                    {job.noWorkerEvidence ? <NoEvidenceLabel /> : null}
                     {job.customerName ? <p>{job.customerName}</p> : null}
                     {office && job.agreedPriceExclusiveCents != null ? (
                       <MoneyDisplay

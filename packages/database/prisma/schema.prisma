@@ -25,18 +25,18 @@ enum IdempotencyState {
 }
 
 model User {
-  id                 String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email              String                  @unique @db.VarChar(320)
-  name               String?                 @db.VarChar(200)
-  createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy          String?                 @map("created_by") @db.Uuid
-  creator            User?                   @relation("UserCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  createdUsers       User[]                  @relation("UserCreator")
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email              String               @unique @db.VarChar(320)
+  name               String?              @db.VarChar(200)
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy          String?              @map("created_by") @db.Uuid
+  creator            User?                @relation("UserCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdUsers       User[]               @relation("UserCreator")
   memberships        Membership[]
   // Better Auth (#13): identity fields and credential/session records.
-  emailVerified      Boolean                 @default(false) @map("email_verified")
-  image              String?                 @db.VarChar(2048)
+  emailVerified      Boolean              @default(false) @map("email_verified")
+  image              String?              @db.VarChar(2048)
   sessions           AuthSession[]
   accounts           AuthAccount[]
   // Public sign-up (#210).
@@ -44,13 +44,65 @@ model User {
   termsAcceptances   TermsAcceptance[]
   emails             EmailOutbox[]
   platformEvents     PlatformAuditEvent[]
-  selfServiceCompany Company?                @relation("SelfServiceCompany")
+  selfServiceCompany Company?             @relation("SelfServiceCompany")
   // Trial notices and extension decisions (#211).
   notices            UserNotice[]
-  extensionDecisions TrialExtensionRequest[] @relation("ExtensionDecider")
+  // Platform operator and TOTP (#230, ADR 0004 D5).
+  twoFactorEnabled   Boolean              @default(false) @map("two_factor_enabled")
+  twoFactors         TwoFactor[]
+  platformOperator   PlatformOperator?
 
   @@index([createdBy])
   @@map("users")
+}
+
+/// Platform-level role (ADR 0004 D5). Changed only by the host CLI; the web
+/// role has SELECT only. It never grants access to a company's data.
+model PlatformOperator {
+  userId             String                  @id @map("user_id") @db.Uuid
+  grantedAt          DateTime                @default(now()) @map("granted_at") @db.Timestamptz(3)
+  grantedReason      String                  @map("granted_reason") @db.VarChar(500)
+  grantedBy          String                  @map("granted_by") @db.VarChar(100)
+  revokedAt          DateTime?               @map("revoked_at") @db.Timestamptz(3)
+  revokedReason      String?                 @map("revoked_reason") @db.VarChar(500)
+  user               User                    @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  enrolmentCodes     OperatorEnrolmentCode[]
+  auditEvents        AuditEvent[]            @relation("AuditOperator")
+  extensionDecisions TrialExtensionRequest[] @relation("ExtensionDecider")
+
+  @@map("platform_operators")
+}
+
+/// One-time code from `pnpm operator enrol-code`, needed to enrol TOTP. Only
+/// its SHA-256 digest is stored.
+model OperatorEnrolmentCode {
+  id         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String           @map("user_id") @db.Uuid
+  codeHash   String           @unique @map("code_hash") @db.VarChar(64)
+  expiresAt  DateTime         @map("expires_at") @db.Timestamptz(3)
+  consumedAt DateTime?        @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  operator   PlatformOperator @relation(fields: [userId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("operator_enrolment_codes")
+}
+
+/// Better Auth's twoFactor plugin. The secret and backup codes are encrypted
+/// by the plugin.
+model TwoFactor {
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                  String    @map("user_id") @db.Uuid
+  secret                  String
+  backupCodes             String    @map("backup_codes")
+  verified                Boolean   @default(true)
+  failedVerificationCount Int       @default(0) @map("failed_verification_count")
+  lockedUntil             DateTime? @map("locked_until") @db.Timestamptz(3)
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([secret])
+  @@map("two_factor")
 }
 
 /// Server-side login session (#13). The token is the opaque cookie value; revoke by deleting the row.
@@ -63,6 +115,8 @@ model AuthSession {
   userId          String   @map("user_id") @db.Uuid
   /// Company the session acts in; must match an active membership (checked on every request).
   activeCompanyId String?  @map("active_company_id") @db.Uuid
+  /// When this session passed TOTP. Operators need it in production (#230).
+  mfaVerifiedAt   DateTime? @map("mfa_verified_at") @db.Timestamptz(3)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -301,18 +355,21 @@ model Membership {
 }
 
 model AuditEvent {
-  id         String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId  String         @map("company_id") @db.Uuid
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String            @map("company_id") @db.Uuid
   /// Null for system and operator events (audit_events_actor CHECK).
-  createdBy  String?        @map("created_by") @db.Uuid
-  actorKind  AuditActorKind @default(member) @map("actor_kind")
-  action     String         @db.VarChar(100)
-  targetType String         @map("target_type") @db.VarChar(100)
-  targetId   String         @map("target_id") @db.VarChar(200)
-  metadata   Json           @default("{}")
-  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  company    Company        @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  creator    Membership?    @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
+  createdBy      String?           @map("created_by") @db.Uuid
+  actorKind      AuditActorKind    @default(member) @map("actor_kind")
+  /// Set only for operator events (audit_events_actor CHECK).
+  operatorUserId String?           @map("operator_user_id") @db.Uuid
+  operator       PlatformOperator? @relation("AuditOperator", fields: [operatorUserId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  action         String            @db.VarChar(100)
+  targetType     String            @map("target_type") @db.VarChar(100)
+  targetId       String            @map("target_id") @db.VarChar(200)
+  metadata       Json              @default("{}")
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  company        Company           @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator        Membership?       @relation(fields: [companyId, createdBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([companyId, createdAt, id])
   @@index([companyId, targetType, targetId])
@@ -1952,7 +2009,7 @@ model UserNotice {
 
 /// An owner's request for more trial time, decided once (S14). One pending
 /// request per company (partial unique index in SQL); decided rows are
-/// immutable (trigger). decidedBy becomes a platform_operators FK in #230.
+/// immutable (trigger).
 model TrialExtensionRequest {
   id               String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId        String                 @map("company_id") @db.Uuid
@@ -1970,7 +2027,7 @@ model TrialExtensionRequest {
   createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
   company          Company                @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "trial_extension_requests_company_id_fkey")
   requester        Membership             @relation("ExtensionRequester", fields: [companyId, requestedBy], references: [companyId, userId], onDelete: NoAction, onUpdate: NoAction, map: "trial_extension_requests_requester_fkey")
-  decider          User?                  @relation("ExtensionDecider", fields: [decidedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  decider          PlatformOperator?      @relation("ExtensionDecider", fields: [decidedBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([status, createdAt])
   @@index([companyId, createdAt])

@@ -15,6 +15,12 @@ import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
 import { formatAudCents } from "@/components/money-display";
 import { EntityPicker } from "@/features/jobs/picker";
 import { audInput, parseAudInput } from "@/lib/aud-input";
+import { unregisteredGstProblems } from "@/features/invoices/gst-problems";
+import {
+  type GstRegistrationPeriod,
+  gstStatusOn,
+  isIsoDate,
+} from "@jobflow/domain";
 import { QuoteSummary } from "./summary";
 import { type Quote, TAX_CODE_OPTIONS, type TaxCode, taxLabel } from "./types";
 
@@ -56,11 +62,14 @@ function cents(text: string, required: boolean): string | null | undefined {
 export function QuoteBuilder({
   initial,
   registeredToday,
+  periods,
   today,
   onSent,
 }: {
   initial: Quote | null;
   registeredToday: boolean;
+  /** Company registration periods: the send date decides the GST. */
+  periods: GstRegistrationPeriod[];
   today: string;
   onSent?: (quote: Quote) => void;
 }) {
@@ -238,9 +247,22 @@ export function QuoteBuilder({
     else router.replace(`/quotes/${saved.id}?sent=1`);
   }
 
-  const errorList = Object.entries(errors);
+  // #302: Taxable lines on an unregistered send date are problems now,
+  // before Send, not only when the server refuses.
+  const registeredOnSend = gstStatusOn(
+    periods,
+    isIsoDate(sentOn) ? sentOn : today,
+  ).registered;
+  const gstProblems = unregisteredGstProblems(
+    lines,
+    registeredOnSend,
+    sentOn,
+    "send",
+  );
+  const shown = { ...gstProblems, ...errors };
+  const errorList = Object.entries(shown);
   const lineError = (index: number, field: string) =>
-    errors[`lines.${index}.${field}`];
+    shown[`lines.${index}.${field}`];
   const label = saved
     ? `${saved.kind === "variation" ? "Variation" : "Quote"} ${saved.reference}`
     : "New quote";
@@ -771,7 +793,11 @@ export function QuoteBuilder({
           </div>
         </form>
         <aside>
-          <QuoteSummary quote={saved} stale={dirty && Boolean(saved)} />
+          <QuoteSummary
+            quote={saved}
+            stale={dirty && Boolean(saved)}
+            registered={registeredOnSend}
+          />
         </aside>
       </div>
       <p>
@@ -810,6 +836,18 @@ export function QuoteBuilder({
               Sending freezes the prices and GST as at the send date. To change
               it afterwards, revise the quote.
             </p>
+            {Object.keys(gstProblems).length ? (
+              <div
+                role="alert"
+                className="rounded-lg bg-danger p-3 text-danger-foreground"
+              >
+                <ul className="list-disc pl-6">
+                  {Object.entries(gstProblems).map(([field, text]) => (
+                    <li key={field}>{text}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {sendErrors.length ? (
               <div
                 role="alert"
@@ -832,7 +870,11 @@ export function QuoteBuilder({
               >
                 Cancel
               </Button>
-              <Button type="button" disabled={busy} onClick={() => void send()}>
+              <Button
+                type="button"
+                disabled={busy || Object.keys(gstProblems).length > 0}
+                onClick={() => void send()}
+              >
                 {busy ? "Sending…" : "Mark as sent"}
               </Button>
             </div>

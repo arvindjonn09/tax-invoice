@@ -62,6 +62,27 @@ export function nextStatuses(from: JobStatus): readonly JobStatus[] {
   return TRANSITIONS[from];
 }
 
+/**
+ * The usual forward step a person takes next (#301), offered as the form's
+ * default. Never a backward move or Cancelled. No entry means there's no
+ * clear next step (a review decides awaiting_review; a completed job is
+ * usually invoiced by the system, or closed), so nothing is pre-selected.
+ */
+const USUAL_NEXT: Readonly<Partial<Record<JobStatus, JobStatus>>> = {
+  draft: "quoted",
+  quoted: "approved",
+  approved: "assigned",
+  assigned: "in_progress",
+  in_progress: "awaiting_review",
+  invoiced: "closed",
+};
+
+/** The status to pre-select after `from`, or null when there's no clear one. */
+export function usualNextStatus(from: JobStatus): JobStatus | null {
+  const to = USUAL_NEXT[from];
+  return to && transitionProblem(from, to) === null ? to : null;
+}
+
 export type TransitionProblem =
   "same-status" | "not-allowed" | "system-only" | "review-only";
 
@@ -85,6 +106,41 @@ export function transitionProblem(
   if (!byReview && REVIEW_ONLY_MOVES.some(([a, b]) => a === from && b === to))
     return "review-only";
   return null;
+}
+
+/**
+ * Approving completion without worker evidence (#303, owner decision
+ * 6 November 2026). The wording and the roles are defaults the owner hasn't
+ * confirmed, kept here so they're one edit to change.
+ */
+export const NO_EVIDENCE = {
+  /** The red label on job detail and the job list. */
+  label: "No worker evidence",
+  /** Who may approve completion with no evidence (a note is required). */
+  approverRoles: ["owner", "manager"] as readonly string[],
+} as const;
+
+/** Statuses from review onwards: the label stays once work was reviewed. */
+const REVIEWED: readonly JobStatus[] = [
+  "awaiting_review",
+  "completed",
+  "invoiced",
+  "closed",
+];
+
+/**
+ * Show the "No worker evidence" label: workers were (or are) assigned, none
+ * of them submitted evidence, and the job has reached review or beyond.
+ * Evidence is append-only, so once approved the label stays.
+ */
+export function showsNoWorkerEvidence(job: {
+  status: JobStatus;
+  hadWorkers: boolean;
+  evidenceCount: number;
+}): boolean {
+  return (
+    job.hadWorkers && job.evidenceCount === 0 && REVIEWED.includes(job.status)
+  );
 }
 
 /** Details may still change (title, site, price, visits). */

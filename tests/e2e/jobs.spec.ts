@@ -191,6 +191,8 @@ test("owner creates a job, schedules a visit, assigns and ends work, and changes
     .getByRole("button", { name: "Update status", exact: true })
     .click();
   await expect(page.getByLabel("Next status")).not.toContainText("Assigned");
+  // #301: after Assigned the form offers In progress, never Approved.
+  await expect(page.getByLabel("Next status")).toHaveValue("in_progress");
   await page.getByRole("tab", { name: "Timeline", exact: true }).click();
   await expect(
     page.getByText("Approved → Assigned", { exact: true }),
