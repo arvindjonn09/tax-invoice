@@ -10,7 +10,11 @@ import {
   sendJson,
 } from "@/components/form/field";
 import { Button } from "@/components/ui/button";
-import { MoneyDisplay, formatAudCents } from "@/components/money-display";
+import {
+  MoneyDisplay,
+  formatAudCents,
+  totalBasis,
+} from "@/components/money-display";
 import { parseAudInput, audInput } from "@/lib/aud-input";
 import { time } from "@/features/jobs/types";
 import { taxLabel } from "@/features/invoices/types";
@@ -349,11 +353,11 @@ export function OfferHistory({
                     <dd>{formatAudCents(BigInt(offer.gstCents))} AUD</dd>
                   </div>
                   <div>
-                    <dt>Total incl GST</dt>
+                    <dt>Total</dt>
                     <dd>
                       <MoneyDisplay
                         cents={BigInt(offer.inclusiveCents)}
-                        basis="incl GST"
+                        basis={totalBasis(offer.gstCents)}
                       />
                     </dd>
                   </div>

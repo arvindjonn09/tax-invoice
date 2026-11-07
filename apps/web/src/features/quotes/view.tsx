@@ -5,7 +5,7 @@ import { useRef, useState } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Field, FormMessage, sendJson } from "@/components/form/field";
-import { formatAudCents } from "@/components/money-display";
+import { formatAudCents, totalBasis } from "@/components/money-display";
 import { QuoteSummary } from "./summary";
 import { type Quote, STATE_LABEL, taxLabel } from "./types";
 
@@ -212,7 +212,8 @@ export function QuoteView({
                   <p className="text-sm tabular-nums">
                     {formatAudCents(BigInt(line.exclusiveCents))} ex GST ·{" "}
                     {formatAudCents(BigInt(line.gstCents))} GST ·{" "}
-                    {formatAudCents(BigInt(line.inclusiveCents))} incl GST
+                    {formatAudCents(BigInt(line.inclusiveCents))}{" "}
+                    {totalBasis(line.gstCents)}
                   </p>
                   {line.estimatedCostCents !== "0" ? (
                     <p className="text-sm text-muted-foreground tabular-nums">
