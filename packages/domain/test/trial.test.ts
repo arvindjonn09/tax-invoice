@@ -7,6 +7,7 @@ import {
   sydneyDate,
   sydneyMidnight,
   trialStatus,
+  trialThreshold,
   trialWindow,
   validateDirectExtension,
 } from "../src";
@@ -225,5 +226,21 @@ describe("validateDirectExtension", () => {
     expect(() =>
       validateDirectExtension("2026-12-01", "2026-12-20", "bad"),
     ).toThrow(RangeError);
+  });
+});
+
+describe("trialThreshold (S10)", () => {
+  it.each([
+    [30, null],
+    [8, null],
+    [7, "d7"],
+    [4, "d7"],
+    [3, "d3"],
+    [2, "d3"],
+    [1, "d1"],
+    [0, "ended"],
+    [-40, "ended"],
+  ])("with %i days left it's %s", (days, threshold) => {
+    expect(trialThreshold(days)).toBe(threshold);
   });
 });

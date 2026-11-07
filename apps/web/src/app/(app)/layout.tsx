@@ -2,6 +2,8 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { trialStatus } from "@jobflow/domain";
+import { OneTimeNotices } from "@/components/shell/one-time-notices";
+import { loadNotices } from "@/server/trial/notices";
 import { AppShell } from "@/components/shell/app-shell";
 import { TrialBanner } from "@/components/shell/banners";
 import { supportEmail } from "@/server/email";
@@ -43,6 +45,15 @@ export default async function SignedInLayout({
     company.accessMode === "trial"
       ? (company.trialLastDay?.toISOString().slice(0, 10) ?? null)
       : null;
+  const notices = await loadNotices(getDatabase(), {
+    userId: actor.userId,
+    companyId: actor.companyId,
+    role: actor.role,
+    isDemo: company.isDemo,
+    trialLastDay,
+    support: supportEmail(),
+    now: new Date(),
+  });
   return (
     <AppShell
       companyName={company.name}
@@ -60,6 +71,7 @@ export default async function SignedInLayout({
         ) : null
       }
     >
+      <OneTimeNotices notices={notices} companyId={actor.companyId} />
       {children}
     </AppShell>
   );

@@ -89,6 +89,26 @@ test("a visitor signs up, is held at verification, then verifies", async ({
       name: "Signup Sparks",
       accessMode: "trial",
     });
+
+    // #233: three days left, so the owner sees a one-time notice.
+    const lastDay = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+    await db.company.update({
+      where: { id: company.id },
+      data: {
+        trialLastDay: new Date(lastDay.toISOString().slice(0, 10)),
+      },
+    });
+    await page.reload();
+    const notice = page
+      .getByRole("status")
+      .filter({ hasText: "left in your trial" });
+    await expect(notice).toBeVisible();
+    await notice.getByRole("button", { name: "Dismiss" }).click();
+    await expect(notice).toBeHidden();
+    await expect(page.getByRole("heading", { level: 1 })).toBeFocused();
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(notice).toBeHidden();
   } finally {
     await db.$disconnect();
   }
