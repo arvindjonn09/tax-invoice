@@ -84,6 +84,38 @@ describe("safe return path", () => {
     expect(safeNextPath(raw)).toBe(expected);
   });
 
+  // #319 Codex: the query and fragment are data, so encoded values stay.
+  it.each([
+    "/customers?q=Sample%20Customer",
+    "/customers?q=100%25",
+    "/customers?q=100%",
+    "/jobs?from=%2F%2Fevil.example",
+    "/jobs?q=%5Cx",
+    "/jobs#Sample%20note",
+    "/jobs?q=a%0Ab#c%20d",
+  ])("keeps %s, whose query or fragment is only data", (raw) => {
+    expect(safeNextPath(raw)).toBe(raw);
+    expect(loginFor(raw)).toBe(`/login?next=${encodeURIComponent(raw)}`);
+    expect(chooserFor(raw)).toBe(
+      `/choose-company?next=${encodeURIComponent(raw)}`,
+    );
+  });
+
+  it.each([
+    "/%2F%2Fevil.example?q=Sample%20Customer",
+    "/%5Cevil.example#Sample%20note",
+    "/%2e%2e//evil.example?q=1",
+    "/.//evil.example?q=1",
+    "/%0A/evil.example?q=1",
+    "/customers?q=Sample Customer",
+    "/customers?q=a\\b",
+    "/customers#a\tb",
+    "/login?q=Sample%20Customer",
+    "/%E0%A4%A?q=1",
+  ])("still refuses %j", (raw) => {
+    expect(safeNextPath(raw)).toBe("/home");
+  });
+
   it.each([
     undefined,
     null,

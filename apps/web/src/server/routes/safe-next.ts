@@ -33,8 +33,12 @@ function looksSafe(value: string): boolean {
 export function safeNextPath(raw: unknown): string {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > 2000)
     return HOME;
-  // Check every decoding of it, so an encoded `//` or `\` can't slip through.
-  let value = raw;
+  if (!looksSafe(raw)) return HOME;
+  // Check every decoding of the path, so an encoded `//` or `\` can't slip
+  // through. The query and fragment are data: they can't change where the
+  // browser goes, and encoded values like `?q=Sample%20Customer` must survive.
+  const pathEnd = raw.search(/[?#]/);
+  let value = pathEnd < 0 ? raw : raw.slice(0, pathEnd);
   for (let round = 0; round < 4; round += 1) {
     if (!looksSafe(value)) return HOME;
     let decoded: string;
