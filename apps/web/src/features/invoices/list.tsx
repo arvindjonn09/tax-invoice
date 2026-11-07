@@ -6,8 +6,9 @@ import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/form/field";
 import { useRemote } from "@/components/data/use-remote";
-import { MoneyDisplay } from "@/components/money-display";
+import { MoneyDisplay, formatAudCents } from "@/components/money-display";
 import { day } from "@/features/jobs/types";
+import { paymentState } from "./payment-state";
 import type { Invoice } from "./types";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -132,6 +133,9 @@ export function InvoiceList({
                   row.kind === "invoice" &&
                   row.dueOn &&
                   row.dueOn < today;
+                // #304: payment status and amount owing (payment.read only).
+                const paid = paymentState(row);
+                const settled = paid !== null && !("owingCents" in paid);
                 return (
                   <li
                     key={row.id}
@@ -149,8 +153,16 @@ export function InvoiceList({
                     </Link>
                     <p>
                       {STATUS_LABEL[row.status]}
-                      {due ? ` · Past due date (${day(row.dueOn)})` : ""}
+                      {paid ? ` · ${paid.label}` : ""}
+                      {due && !settled
+                        ? ` · Past due date (${day(row.dueOn)})`
+                        : ""}
                     </p>
+                    {paid && "owingCents" in paid ? (
+                      <p className="font-semibold tabular-nums">
+                        {formatAudCents(paid.owingCents)} AUD owing
+                      </p>
+                    ) : null}
                     <p>
                       {row.customer?.name ??
                         names.get(row.customerId) ??

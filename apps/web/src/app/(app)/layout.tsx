@@ -7,6 +7,8 @@ import { TrialBanner, type TrialViewer } from "@/components/shell/banners";
 import { CompanyAccessProvider } from "@/components/shell/company-access";
 import { supportEmail } from "@/server/email";
 import { getAuth, getDatabase, resolveActor } from "@/server/auth";
+import { PATH_HEADER } from "@/server/routes/public";
+import { chooserFor, loginFor } from "@/server/routes/safe-next";
 import { ROLE_LABELS, navLinksFor } from "@/server/shell";
 
 export const dynamic = "force-dynamic";
@@ -23,16 +25,19 @@ export default async function SignedInLayout({
 }: {
   children: ReactNode;
 }) {
+  const requestHeaders = await headers();
+  // The path asked for, so sign-in or the chooser can return to it (#223).
+  const path = requestHeaders.get(PATH_HEADER);
   const resolution = await resolveActor(
     getAuth(),
     getDatabase(),
-    await headers(),
+    requestHeaders,
   );
-  if (resolution.status === "signed-out") redirect("/login");
+  if (resolution.status === "signed-out") redirect(loginFor(path));
   if (resolution.status === "unverified") redirect("/verify-email/pending");
   // Verified, but no company yet: set one up (S1, S5).
   if (resolution.status === "no-membership") redirect("/onboarding");
-  if (resolution.status === "choose-company") redirect("/choose-company");
+  if (resolution.status === "choose-company") redirect(chooserFor(path));
   const { actor } = resolution;
   const company = await getDatabase().company.findUniqueOrThrow({
     where: { id: actor.companyId },

@@ -300,6 +300,8 @@ describe("receipts", () => {
       listed.invoices.find((invoice) => invoice.id === invoiceId),
     ).toMatchObject({
       receivedCents: "100000",
+      // #304: the list can tell part paid from credited.
+      creditedCents: "0",
       outstandingCents: "175000",
     });
   });
