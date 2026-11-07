@@ -145,3 +145,38 @@ If a restore fails part-way, the target may be partly restored. This can happen 
   - retention pruning
 
 Drills so far: [restore-drills/](restore-drills/).
+
+## Self-hosted site: a Windows file share (#351)
+
+The self-hosted site backs up to a Windows file share, which the owner's Windows computer syncs to cloud storage. Backups are encrypted before they leave this server, so the share and the cloud copy only ever hold ciphertext.
+
+**Each night at 02:15 Sydney time**, `jobflow-backup.timer` runs `infra/backup/host/run.sh` as `prod`. It:
+1. Makes and verifies an encrypted backup in `/home/prod/jobflow-backups`, and prunes that folder.
+2. Copies the backup to the share (under `.incoming`, then moved into place), verifies the copy there, and prunes the share to 30 daily and 12 monthly backups.
+
+If the share can't be reached, the local backup is kept and the run fails, so `systemctl status jobflow-backup.service` shows it. It's skipped while maintenance is on during a deploy.
+
+**Install** (once, after a deploy that includes it):
+
+```sh
+sudo bash /home/prod/tax-invoice-run/infra/backup/host/install.sh
+```
+
+It asks for the share (`//computer/folder`) and the Windows account that can write to it. Then it:
+- Installs `cifs-utils` and `postgresql-client-16`.
+- Saves the account in a root-only file under `/etc/jobflow`, and mounts the share on demand at `/mnt/jobflow-backup`. `/etc/fstab` is saved first as `/etc/fstab.before-jobflow-backup`.
+- Creates the read-only `jobflow_backup` database role.
+- Creates the encryption key if there isn't one yet, installs the timer, and makes the first backup.
+
+**Save the key it prints** somewhere other than this server and the share, such as a password manager. Without it, no backup can be restored. Running the script again keeps the existing key.
+
+**Check it:**
+
+```sh
+systemctl list-timers jobflow-backup.timer          # last and next run
+journalctl -u jobflow-backup.service -n 50          # results and failures
+ls /mnt/jobflow-backup                               # the copies on the share
+```
+
+**Restore:** see [Commands](#commands): `pnpm backup:restore <dir>` into an empty database and bucket, with the key from your password manager.
+
