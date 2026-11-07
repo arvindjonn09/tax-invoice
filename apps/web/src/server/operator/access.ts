@@ -17,24 +17,29 @@ export function operatorAllowlist(env: Env): ReadonlySet<string> {
   );
 }
 
+/** How long a session's TOTP counts in production (#323). */
+export const OPERATOR_MFA_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
 export type OperatorCheck = {
   env: Env;
   /** Production also needs TOTP; pass false only for the enrolment step. */
   production: boolean;
   /** The calling session. In production, it must itself have passed TOTP. */
   sessionId?: string;
+  now?: Date;
 };
 
 /**
  * ADR 0004 D5: an active platform_operators row AND the environment allowlist
  * AND a verified email, plus, in production, TOTP passed by this session. A
- * session from before enrolment never qualifies, even once the user has TOTP.
+ * session from before enrolment never qualifies, even once the user has TOTP,
+ * and TOTP must be recent, so a long-lived session has to pass it again.
  * Revocation takes effect on the next request, because nothing here is cached.
  */
 export async function isOperator(
   db: Db,
   userId: string,
-  { env, production, sessionId }: OperatorCheck,
+  { env, production, sessionId, now = new Date() }: OperatorCheck,
 ): Promise<boolean> {
   if (!operatorAllowlist(env).has(userId.toLowerCase())) return false;
   const operator = await db.platformOperator.findUnique({
@@ -53,7 +58,10 @@ export async function isOperator(
     where: { id: sessionId, userId },
     select: { mfaVerifiedAt: true },
   });
-  return Boolean(session?.mfaVerifiedAt);
+  if (!session?.mfaVerifiedAt) return false;
+  return (
+    now.getTime() - session.mfaVerifiedAt.getTime() < OPERATOR_MFA_MAX_AGE_MS
+  );
 }
 
 export const enrolmentCodeDigest = (code: string) =>
