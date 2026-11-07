@@ -17,6 +17,7 @@ import {
 } from "@/components/money-display";
 import { parseAudInput, audInput } from "@/lib/aud-input";
 import { time } from "@/features/jobs/types";
+import { taxLabel } from "@/features/invoices/types";
 import type { Contractor, Offer } from "./types";
 function JobPicker({
   value,
@@ -332,7 +333,7 @@ export function OfferHistory({
                   basis="ex GST"
                 />
                 {offer.estimatedHours ? ` · ${offer.estimatedHours} hours` : ""}{" "}
-                · {offer.taxCode}
+                · {taxLabel(offer.taxCode)}
               </p>
               {offer.exclusiveCents !== null &&
               offer.gstCents !== null &&

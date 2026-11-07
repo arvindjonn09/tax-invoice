@@ -6,8 +6,11 @@ import { Button } from "@/components/ui/button";
 /** Pick which company this session acts in; the server re-checks membership. */
 export function CompanyChooser({
   companies,
+  next = "/home",
 }: {
   companies: { companyId: string; name: string; role: string }[];
+  /** Already checked on the server (safeNextPath). */
+  next?: string;
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +24,7 @@ export function CompanyChooser({
       body: JSON.stringify({ companyId }),
     }).catch(() => undefined);
     if (response?.ok) {
-      router.push("/home");
+      router.push(next);
       router.refresh();
       return;
     }

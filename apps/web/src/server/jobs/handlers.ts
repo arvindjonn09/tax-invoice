@@ -9,6 +9,7 @@ import {
   JOB_STATUSES,
   formatJobReference,
   isJobEditable,
+  showsNoWorkerEvidence,
   transitionProblem,
 } from "@jobflow/domain";
 import { z } from "zod";
@@ -196,6 +197,52 @@ async function siteProblem(
     : ["locationId", "Choose one of this customer's sites"];
 }
 
+/**
+ * Evidence facts per job (#303): whether any worker (employee or
+ * subcontractor) was ever on the job and
+ * how much work evidence exists, for the status form and the label.
+ */
+async function evidenceFacts(
+  db: PrismaClient,
+  companyId: string,
+  jobIds: readonly string[],
+) {
+  // Workers are assigned employees and subcontractors with an accepted
+  // offer, as in workerScope.
+  const [assigned, subcontracted, evidence] = await Promise.all([
+    db.assignment.groupBy({
+      by: ["jobId"],
+      where: { companyId, jobId: { in: [...jobIds] } },
+      _count: { _all: true },
+    }),
+    db.contractorOffer.groupBy({
+      by: ["jobId"],
+      where: { companyId, jobId: { in: [...jobIds] }, status: "accepted" },
+      _count: { _all: true },
+    }),
+    db.workEvidence.groupBy({
+      by: ["jobId"],
+      where: { companyId, jobId: { in: [...jobIds] } },
+      _count: { _all: true },
+    }),
+  ]);
+  const workers = new Set(
+    [...assigned, ...subcontracted].map((row) => row.jobId),
+  );
+  const counts = new Map(evidence.map((row) => [row.jobId, row._count._all]));
+  return (job: Pick<Job, "id" | "status">) => {
+    const evidenceCount = counts.get(job.id) ?? 0;
+    return {
+      hasEvidence: evidenceCount > 0,
+      noWorkerEvidence: showsNoWorkerEvidence({
+        status: job.status,
+        hadWorkers: workers.has(job.id),
+        evidenceCount,
+      }),
+    };
+  };
+}
+
 function jobResponse(actor: Actor, job: Job): Response {
   return privateJson(visibleFields(actor, view(job), JOB_FIELDS));
 }
@@ -219,11 +266,19 @@ export function jobHandlers(db: () => PrismaClient) {
       }),
       db().job.count({ where }),
     ]);
+    const facts = await evidenceFacts(
+      db(),
+      actor.companyId,
+      rows.map((row) => row.id),
+    );
     return privateJson({
       page,
       pageSize: take,
       total,
-      jobs: rows.map((row) => visibleFields(actor, view(row), JOB_FIELDS)),
+      jobs: rows.map((row) => ({
+        ...visibleFields(actor, view(row), JOB_FIELDS),
+        ...facts(row),
+      })),
     });
   };
 
@@ -247,8 +302,10 @@ export function jobHandlers(db: () => PrismaClient) {
         orderBy: [{ assignedAt: "asc" }],
       }),
     ]);
+    const facts = await evidenceFacts(db(), actor.companyId, [job.id]);
     return privateJson({
       ...visibleFields(actor, view(job), JOB_FIELDS),
+      ...facts(job),
       statusHistory: events.map(eventView),
       visits: visits.map(visitView),
       assignments: assignments.map(assignmentView),

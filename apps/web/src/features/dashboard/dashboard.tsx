@@ -226,10 +226,10 @@ export function Dashboard({ today }: { today: string }) {
                 <Figure label="Customer overdue">
                   {amount(data.ledger.receivables.overdue, sales)}
                 </Figure>
-                <Figure label="Supplier bills owing">
+                <Figure label="Supplier money owing">
                   {amount(data.ledger.payables.total, mixed)}
                 </Figure>
-                <Figure label="Supplier bills overdue">
+                <Figure label="Supplier money overdue">
                   {amount(data.ledger.payables.overdue, mixed)}
                 </Figure>
               </dl>
