@@ -12,7 +12,11 @@ import {
 } from "@/components/form/field";
 import { useRemote } from "@/components/data/use-remote";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
-import { formatAudCents } from "@/components/money-display";
+import {
+  documentTotalText,
+  formatAudCents,
+  totalBasis,
+} from "@/components/money-display";
 import { EntityPicker } from "@/features/jobs/picker";
 import { audInput, parseAudInput } from "@/lib/aud-input";
 import { unregisteredGstProblems } from "@/features/invoices/gst-problems";
@@ -220,7 +224,11 @@ export function QuoteBuilder({
     setErrors({});
     setDirty(false);
     setMessage({ kind: "success", text: "Draft saved." });
-    if (!saved) window.history.replaceState(null, "", `/quotes/${next.id}`);
+    if (!saved) {
+      window.history.replaceState(null, "", `/quotes/${next.id}`);
+      // The tab names the saved quote, not "New quote" (#307).
+      document.title = `${next.kind === "variation" ? "Variation" : "Quote"} ${next.reference} · JobFlow`;
+    }
   }
 
   async function send() {
@@ -685,7 +693,7 @@ export function QuoteBuilder({
                           GST · {taxLabel(savedLine.taxCode)} ·{" "}
                           {formatAudCents(BigInt(savedLine.gstCents))} GST ·{" "}
                           {formatAudCents(BigInt(savedLine.inclusiveCents))}{" "}
-                          incl GST
+                          {totalBasis(savedLine.gstCents)}
                         </p>
                       ) : (
                         <p className="text-sm text-muted-foreground">
@@ -816,8 +824,8 @@ export function QuoteBuilder({
               Send {saved.reference}?
             </h2>
             <p>
-              {saved.title} · {formatAudCents(BigInt(saved.inclusiveCents))}{" "}
-              incl GST
+              {saved.title} ·{" "}
+              {documentTotalText(saved.inclusiveCents, saved.gstCents)}
               {saved.validUntil ? ` · valid until ${saved.validUntil}` : ""}
             </p>
             <TextField

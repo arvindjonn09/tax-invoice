@@ -12,7 +12,11 @@ import {
 } from "@/components/form/field";
 import { useRemote } from "@/components/data/use-remote";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
-import { formatAudCents } from "@/components/money-display";
+import {
+  documentTotalText,
+  formatAudCents,
+  totalBasis,
+} from "@/components/money-display";
 import { EntityPicker } from "@/features/jobs/picker";
 import {
   type GstRegistrationPeriod,
@@ -27,6 +31,7 @@ import {
   type Invoice,
   TAX_CODE_OPTIONS,
   type TaxCode,
+  documentName,
   taxLabel,
 } from "./types";
 
@@ -227,7 +232,11 @@ export function InvoiceBuilder({
     setMessage({ kind: "success", text: "Draft saved." });
     // Give the new draft its own URL without remounting this form (a
     // navigation would swap the builder out from under the user).
-    if (!saved) window.history.replaceState(null, "", `/invoices/${next.id}`);
+    if (!saved) {
+      window.history.replaceState(null, "", `/invoices/${next.id}`);
+      // The tab names the saved draft, not "New invoice" (#307).
+      document.title = `Draft ${documentName(next)} · JobFlow`;
+    }
     return next;
   }
 
@@ -611,7 +620,7 @@ export function InvoiceBuilder({
                           GST · {taxLabel(savedLine.taxCode)} ·{" "}
                           {formatAudCents(BigInt(savedLine.gstCents))} GST ·{" "}
                           {formatAudCents(BigInt(savedLine.inclusiveCents))}{" "}
-                          incl GST
+                          {totalBasis(savedLine.gstCents)}
                         </p>
                       ) : (
                         <p className="text-sm text-muted-foreground">
@@ -743,8 +752,10 @@ export function InvoiceBuilder({
       {saved ? (
         <div className="sticky bottom-0 flex items-center justify-between gap-3 border-t bg-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:hidden">
           <span className="tabular-nums">
-            Total incl GST{" "}
-            {dirty ? "(unsaved)" : formatAudCents(BigInt(saved.inclusiveCents))}
+            Total{" "}
+            {dirty
+              ? "(unsaved)"
+              : documentTotalText(saved.inclusiveCents, saved.gstCents)}
           </span>
           <a
             className="inline-flex min-h-11 items-center underline"
@@ -788,7 +799,7 @@ export function InvoiceBuilder({
               </dd>
               <dt>Total</dt>
               <dd className="font-semibold tabular-nums">
-                {formatAudCents(BigInt(saved.inclusiveCents))} incl GST
+                {documentTotalText(saved.inclusiveCents, saved.gstCents)}
               </dd>
             </dl>
             <TextField
