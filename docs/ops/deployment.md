@@ -118,4 +118,5 @@ Add a line to the release log in [CHANGELOG.md](../../CHANGELOG.md) under the ve
 
 - [staging.md](staging.md): the host, TLS, secrets and CI deploy setup.
 - [backups.md](backups.md): nightly encrypted backups, restore and drills.
+- [maintenance.md](maintenance.md): the maintenance page and deploys on the self-hosted site.
 - [documents.md](documents.md): the daily cleanup of unattached uploads.

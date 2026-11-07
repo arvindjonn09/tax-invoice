@@ -6,6 +6,9 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- A timer runs the scheduled jobs every 5 minutes on the self-hosted site, so trial reminders go out, with one install script for it and the maintenance page ([#234](https://github.com/arvindjonn09/tax-invoice/issues/234)).
+- A "We'll be back soon" page during deploys and whenever the app is down, with a deploy script for the self-hosted site that keeps it up until the new build is ready ([#326](https://github.com/arvindjonn09/tax-invoice/issues/326)).
+- Trial reminder emails at 7, 3 and 1 days left and when the trial ends, sent by `pnpm jobs:run`, plus one-time notices for owners ([#233](https://github.com/arvindjonn09/tax-invoice/issues/233)).
 - The Terms of Service and Privacy Policy are published, in effect from 7 November 2026, after the owner's approval ([#212](https://github.com/arvindjonn09/tax-invoice/issues/212)).
 - Onboarding shows "Step 1 of 2", explains the one-company limit with the support address, then offers the optional details or "Skip for now"; owners see "Finish setting up your company" on their dashboard until it's done or dismissed ([#225](https://github.com/arvindjonn09/tax-invoice/issues/225)).
 - Company phone, business email, website, about text and logo API. Logos must be real PNG or JPEG files, have their metadata removed, and old ones are kept for documents already sent; the screens follow in #229 ([#227](https://github.com/arvindjonn09/tax-invoice/issues/227)).
