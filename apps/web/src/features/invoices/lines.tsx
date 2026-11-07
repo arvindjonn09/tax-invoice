@@ -1,4 +1,4 @@
-import { formatAudCents } from "@/components/money-display";
+import { formatAudCents, totalBasis } from "@/components/money-display";
 import { type Invoice, taxLabel } from "./types";
 
 /** A document's saved lines with the server's per-line amounts. */
@@ -27,7 +27,8 @@ export function InvoiceLines({
           <p className="text-sm tabular-nums">
             {formatAudCents(BigInt(line.exclusiveCents))} ex GST ·{" "}
             {formatAudCents(BigInt(line.gstCents))} GST ·{" "}
-            {formatAudCents(BigInt(line.inclusiveCents))} incl GST
+            {formatAudCents(BigInt(line.inclusiveCents))}{" "}
+            {totalBasis(line.gstCents)}
           </p>
         </li>
       ))}

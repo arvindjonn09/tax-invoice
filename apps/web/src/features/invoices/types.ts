@@ -63,6 +63,7 @@ export type Invoice = {
     status: string;
     reference: string | null;
     inclusiveCents: string;
+    gstCents: string;
   }[];
 };
 
