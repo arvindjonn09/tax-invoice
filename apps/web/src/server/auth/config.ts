@@ -5,6 +5,7 @@ import {
   createAuthMiddleware,
   getSessionFromCtx,
 } from "better-auth/api";
+import { verifyPassword } from "better-auth/crypto";
 import { nextCookies } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins/two-factor";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
@@ -198,6 +199,24 @@ export function createAuth(settings: AuthSettings) {
           }));
         if (!allowed) throw new APIError("NOT_FOUND");
         if (ctx.path !== "/two-factor/enable") return;
+        // The plugin checks the password after this hook, so check it here too:
+        // a typo mustn't spend the one-time code.
+        const password = (ctx.body as { password?: unknown } | undefined)
+          ?.password;
+        const account = await db.authAccount.findFirst({
+          where: { userId: session.user.id, providerId: "credential" },
+          select: { password: true },
+        });
+        if (
+          typeof password !== "string" ||
+          !account?.password ||
+          !(await verifyPassword({ hash: account.password, password }))
+        ) {
+          throw new APIError("BAD_REQUEST", {
+            code: "INVALID_PASSWORD",
+            message: "Invalid password",
+          });
+        }
         const code = ctx.headers?.get(ENROLMENT_CODE_HEADER);
         if (!code || !(await consumeEnrolmentCode(db, session.user.id, code))) {
           throw new APIError("FORBIDDEN", {

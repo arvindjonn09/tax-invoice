@@ -330,6 +330,23 @@ describe("TOTP enrolment", () => {
     expect(await db.twoFactor.count({ where: { userId: user.id } })).toBe(0);
   });
 
+  it("keeps the code usable after a mistyped password", async () => {
+    const user = await newOperator();
+    const cookie = cookieFrom(await signIn(user.email));
+    const code = await issueCode(user.id);
+    const typo = await auth.handler(
+      authRequest(
+        "/two-factor/enable",
+        { password: "not the right password" },
+        { cookie, [ENROLMENT_CODE_HEADER]: code },
+      ),
+    );
+    expect(typo.status).toBe(400);
+    expect((await typo.json()).code).toBe("INVALID_PASSWORD");
+    expect(await db.twoFactor.count({ where: { userId: user.id } })).toBe(0);
+    expect((await enable(cookie, code)).status).toBe(200);
+  });
+
   it("refuses an expired code and a used code", async () => {
     const user = await newOperator();
     const code = await issueCode(user.id);
