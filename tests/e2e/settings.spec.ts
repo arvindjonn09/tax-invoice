@@ -1,5 +1,7 @@
+import { deflateSync } from "node:zlib";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { IEND, PNG_SIGNATURE, ihdr, pngChunk } from "../helpers/logo-fixtures";
 import { requireAccounts, signIn } from "./accounts";
 
 // #26: company and GST settings screens. Runs against the per-run synthetic
@@ -162,10 +164,13 @@ test("owner uploads, replaces and removes the logo", async ({ page }) => {
   await file.setInputFiles({
     name: "logo.png",
     mimeType: "image/png",
-    buffer: Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/AAAMBAQAY3Y2wAAAAAElFTkSuQmCC",
-      "base64",
-    ),
+    // One real red pixel, so the preview has to decode it.
+    buffer: Buffer.concat([
+      PNG_SIGNATURE,
+      ihdr(1, 1),
+      pngChunk("IDAT", deflateSync(Buffer.from([0, 255, 0, 0, 255]))),
+      IEND,
+    ]),
   });
   await expect(page.getByText("Logo saved.")).toBeVisible();
   const preview = page.getByRole("img", { name: "Your logo" });
@@ -185,9 +190,9 @@ test("an accountant sees the details but can't change them", async ({
   await signIn(page, "accountant");
   await page.goto("/settings");
   await expect(page.getByLabel("Phone")).toBeDisabled();
-  await expect(
-    page.getByRole("button", { name: "Upload logo" }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Upload logo" })).toHaveCount(
+    0,
+  );
   await expect(
     page.getByText("Only the owner can change contact details."),
   ).toBeVisible();
