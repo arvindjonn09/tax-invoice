@@ -194,6 +194,33 @@ export async function onAccountExpensesSource(
   asAt: string,
   { bounded = true }: { bounded?: boolean } = {},
 ): Promise<AgeingSource> {
+  // Bounded reads narrow in SQL first, like bills, so settled history isn't
+  // loaded with its allocations (Codex review). Same rule as owedAsAt.
+  const ids = bounded
+    ? (
+        await tx.$queryRaw<{ id: string }[]>`
+      SELECT e.id FROM expenses e
+      WHERE e.company_id = ${companyId}::uuid
+        AND e.status = 'approved' AND e.settlement = 'on_account'
+        AND e.reverses_id IS NULL
+        AND e.purchased_on <= ${asAt}::date
+        AND (e.decided_at AT TIME ZONE 'Australia/Sydney')::date <= ${asAt}::date
+        AND NOT EXISTS (
+          SELECT 1 FROM expenses r
+          WHERE r.company_id = e.company_id AND r.reverses_id = e.id
+            AND r.status = 'approved' AND r.settlement = 'on_account'
+            AND (r.decided_at AT TIME ZONE 'Australia/Sydney')::date <= ${asAt}::date)
+        AND e.inclusive_cents > COALESCE((
+          SELECT SUM(a.amount_cents)
+          FROM supplier_payment_expense_allocations a
+          JOIN supplier_payments p ON p.id = a.payment_id
+          WHERE a.expense_id = e.id
+            AND p.paid_on <= ${asAt}::date
+            AND (p.voided_at IS NULL
+              OR (p.voided_at AT TIME ZONE 'Australia/Sydney')::date > ${asAt}::date)
+        ), 0)`
+      ).map((row) => row.id)
+    : undefined;
   const rows = await tx.expense.findMany({
     where: {
       companyId,
@@ -201,6 +228,7 @@ export async function onAccountExpensesSource(
       settlement: "on_account",
       reversesId: null,
       purchasedOn: { lte: fromDay(asAt) },
+      ...(ids ? { id: { in: ids } } : {}),
     },
     select: {
       id: true,
