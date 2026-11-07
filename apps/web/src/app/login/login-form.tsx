@@ -2,9 +2,14 @@
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { TwoFactorStep } from "./two-factor-step";
 
 type State =
-  { kind: "idle" } | { kind: "pending" } | { kind: "error"; message: string };
+  | { kind: "idle" }
+  | { kind: "pending" }
+  | { kind: "error"; message: string }
+  /** An operator's correct password: the code comes next (§13e, ADR D5). */
+  | { kind: "two-factor" };
 
 // Posts to Better Auth's HTTP endpoint so origin checks and sign-in throttling apply.
 export function LoginForm({ next = "/home" }: { next?: string }) {
@@ -24,6 +29,14 @@ export function LoginForm({ next = "/home" }: { next?: string }) {
       }),
     }).catch(() => undefined);
     if (response?.ok) {
+      const result = (await response
+        .clone()
+        .json()
+        .catch(() => null)) as { twoFactorRedirect?: boolean } | null;
+      if (result?.twoFactorRedirect) {
+        setState({ kind: "two-factor" });
+        return;
+      }
       // Checked on the server (safeNextPath): a same-origin path.
       router.push(next);
       router.refresh();
@@ -37,6 +50,16 @@ export function LoginForm({ next = "/home" }: { next?: string }) {
           : "Email or password is incorrect.",
     });
   }
+
+  if (state.kind === "two-factor")
+    return (
+      <TwoFactorStep
+        next={next}
+        onRestart={(message) =>
+          setState(message ? { kind: "error", message } : { kind: "idle" })
+        }
+      />
+    );
 
   return (
     <form onSubmit={onSubmit} noValidate className="space-y-4">
