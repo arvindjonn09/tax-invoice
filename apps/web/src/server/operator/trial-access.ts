@@ -1,4 +1,9 @@
-import { addDays, sydneyDate, validateDirectExtension } from "@jobflow/domain";
+import {
+  addDays,
+  extensionLastDay,
+  sydneyDate,
+  validateDirectExtension,
+} from "@jobflow/domain";
 import type {
   Prisma,
   PrismaClient,
@@ -15,7 +20,10 @@ export class TrialAccessError extends Error {
       | "not_on_trial"
       | "already_in_mode"
       | "invalid_date"
-      | "invalid_reason",
+      | "invalid_reason"
+      | "invalid_days"
+      | "unknown_request"
+      | "already_decided",
     message: string,
   ) {
     super(message);
@@ -93,18 +101,28 @@ async function lockCompany(tx: Prisma.TransactionClient, companyId: string) {
   return company;
 }
 
-/** Fixed wording only, as for other account email (S2 AC9). */
-async function emailOwners(
+/**
+ * The outcome goes to every active owner with a verified email (S14 AC9), by
+ * email and as a notice shown until it's dismissed. Only the decline reason is
+ * operator-written; nothing here comes from a company member.
+ */
+async function tellOwners(
   tx: Prisma.TransactionClient,
   deps: TrialAccessDependencies,
   companyId: string,
-  kind: "trial_extended" | "access_changed",
+  kind: "trial_extended" | "access_changed" | "trial_extension_declined",
   key: string,
   subject: string,
   lines: readonly string[],
+  noticeKey?: string,
 ) {
   const owners = await tx.membership.findMany({
-    where: { companyId, role: "owner", isActive: true },
+    where: {
+      companyId,
+      role: "owner",
+      isActive: true,
+      user: { emailVerified: true },
+    },
     select: { userId: true, user: { select: { email: true } } },
   });
   for (const owner of owners) {
@@ -118,6 +136,16 @@ async function emailOwners(
         subject,
         text: [...lines, "", `Sign in: ${deps.appUrl}/login`].join("\n"),
       },
+    });
+  }
+  if (noticeKey) {
+    await tx.userNotice.createMany({
+      data: owners.map((owner) => ({
+        userId: owner.userId,
+        companyId,
+        noticeKey,
+      })),
+      skipDuplicates: true,
     });
   }
 }
@@ -182,7 +210,7 @@ export async function extendTrial(
         before: { trialLastDay: current, reason: null },
         after: { trialLastDay: lastDay, reason },
       });
-      await emailOwners(
+      await tellOwners(
         tx,
         deps,
         input.companyId,
@@ -193,6 +221,7 @@ export async function extendTrial(
           `Your JobFlow trial now runs until ${lastDay}.`,
           "Your company can keep adding and changing records until then.",
         ],
+        `trial.extended:${lastDay}`,
       );
     },
     { readOnlyExemption: "operator" },
@@ -263,7 +292,7 @@ export async function setAccessMode(
           reason,
         },
       });
-      await emailOwners(
+      await tellOwners(
         tx,
         deps,
         input.companyId,
@@ -275,6 +304,177 @@ export async function setAccessMode(
             ? `Your company is now on a JobFlow trial until ${lastDay}.`
             : "Your company's JobFlow access no longer has a trial end date.",
         ],
+      );
+    },
+    { readOnlyExemption: "operator" },
+  );
+}
+
+/** Finds the request, then locks its company and re-reads it (S14 AC7). */
+async function lockPendingRequest(
+  tx: Prisma.TransactionClient,
+  requestId: string,
+) {
+  const found = await tx.trialExtensionRequest.findUnique({
+    where: { id: requestId },
+    select: { companyId: true },
+  });
+  if (!found) {
+    throw new TrialAccessError("unknown_request", "No request has that ID");
+  }
+  const company = await lockCompany(tx, found.companyId);
+  const request = await tx.trialExtensionRequest.findUniqueOrThrow({
+    where: { id: requestId },
+  });
+  if (request.status !== "pending") {
+    throw new TrialAccessError(
+      "already_decided",
+      "This request has already been decided",
+    );
+  }
+  return { company, request };
+}
+
+/** S14 AC7: later of the current last day and yesterday, plus the days. */
+export async function approveExtensionRequest(
+  deps: TrialAccessDependencies,
+  input: {
+    operatorUserId: string;
+    requestId: string;
+    days: number;
+    note?: string | undefined;
+    auditRequestId?: string | undefined;
+  },
+): Promise<{ lastDay: string }> {
+  if (!Number.isInteger(input.days) || input.days < 1 || input.days > 365) {
+    throw new TrialAccessError("invalid_days", "Choose 1–365 days");
+  }
+  const note = input.note?.trim() || null;
+  if (note && note.length > 500) {
+    throw new TrialAccessError(
+      "invalid_reason",
+      "Use 500 characters or fewer for the note",
+    );
+  }
+  const now = deps.now?.() ?? new Date();
+  return withAudit(
+    deps.db,
+    async (tx, audit) => {
+      const { company, request } = await lockPendingRequest(
+        tx,
+        input.requestId,
+      );
+      if (company.access_mode !== "trial" || !company.trial_last_day) {
+        throw new TrialAccessError(
+          "not_on_trial",
+          "This company isn't on a trial",
+        );
+      }
+      const current = asDay(company.trial_last_day);
+      const lastDay = extensionLastDay(current, sydneyDate(now), input.days);
+      await tx.company.update({
+        where: { id: company.id },
+        data: {
+          trialLastDay: asDate(lastDay),
+          trialExtensionCount: { increment: 1 },
+        },
+      });
+      await tx.trialExtensionRequest.update({
+        where: { id: request.id },
+        data: {
+          status: "approved",
+          decidedAt: now,
+          decidedBy: input.operatorUserId,
+          extensionDays: input.days,
+          decisionNote: note,
+          newLastDay: asDate(lastDay),
+        },
+      });
+      await audit({
+        companyId: company.id,
+        actor: { kind: "operator", operatorUserId: input.operatorUserId },
+        action: "trial_extension.approved",
+        target: { type: "trial_extension_request", id: request.id },
+        ...(input.auditRequestId ? { requestId: input.auditRequestId } : {}),
+        before: { trialLastDay: current, status: "pending" },
+        // Owners can export audit events, and the note is for operators only.
+        after: {
+          trialLastDay: lastDay,
+          status: "approved",
+          hasNote: note !== null,
+        },
+      });
+      await tellOwners(
+        tx,
+        deps,
+        company.id,
+        "trial_extended",
+        // Not the last day alone: after a direct extension to the same day, the
+        // outbox would drop this email as a duplicate.
+        `${lastDay}:${request.id}`,
+        "Your JobFlow trial was extended",
+        [
+          `Your request was approved. Your JobFlow trial now runs until ${lastDay}.`,
+          "Your company can keep adding and changing records until then.",
+        ],
+        `trial.extended:${lastDay}`,
+      );
+      return { lastDay };
+    },
+    { readOnlyExemption: "operator" },
+  );
+}
+
+/** S14 AC7: a reason is required, and the trial is unchanged. */
+export async function declineExtensionRequest(
+  deps: TrialAccessDependencies,
+  input: {
+    operatorUserId: string;
+    requestId: string;
+    reason: string;
+    auditRequestId?: string | undefined;
+  },
+): Promise<void> {
+  const reason = checkedReason(input.reason);
+  const now = deps.now?.() ?? new Date();
+  await withAudit(
+    deps.db,
+    async (tx, audit) => {
+      const { company, request } = await lockPendingRequest(
+        tx,
+        input.requestId,
+      );
+      await tx.trialExtensionRequest.update({
+        where: { id: request.id },
+        data: {
+          status: "declined",
+          decidedAt: now,
+          decidedBy: input.operatorUserId,
+          decisionNote: reason,
+        },
+      });
+      await audit({
+        companyId: company.id,
+        actor: { kind: "operator", operatorUserId: input.operatorUserId },
+        action: "trial_extension.declined",
+        target: { type: "trial_extension_request", id: request.id },
+        ...(input.auditRequestId ? { requestId: input.auditRequestId } : {}),
+        before: { status: "pending", reason: null },
+        after: { status: "declined", reason },
+      });
+      await tellOwners(
+        tx,
+        deps,
+        company.id,
+        "trial_extension_declined",
+        request.id,
+        "Your JobFlow trial extension request",
+        [
+          "Your request for more trial time was declined.",
+          "",
+          `Reason: ${reason}`,
+        ],
+        `trial.declined:${request.id}`,
       );
     },
     { readOnlyExemption: "operator" },
