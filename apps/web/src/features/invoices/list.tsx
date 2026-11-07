@@ -10,6 +10,7 @@ import { MoneyDisplay, formatAudCents } from "@/components/money-display";
 import { day } from "@/features/jobs/types";
 import { paymentState } from "./payment-state";
 import type { Invoice } from "./types";
+import { count } from "@/lib/plural";
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "Draft · not issued",
@@ -122,7 +123,7 @@ export function InvoiceList({
       ) : data ? (
         <>
           <p className="text-sm text-muted-foreground">
-            {data.total} documents · Page {page} of{" "}
+            {count(data.total, "document")} · Page {page} of{" "}
             {Math.max(1, Math.ceil(data.total / data.pageSize))} · Newest first
           </p>
           {rows.length ? (
