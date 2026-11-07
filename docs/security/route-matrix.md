@@ -29,6 +29,7 @@ Generated from the route files and `packages/authz/src/policy.ts` by `pnpm exec 
 | `/api/company/gst` | PATCH | `gst_settings.update` | owner, accountant |
 | `/api/company/gst/registrations` | POST | `gst_settings.update` | owner, accountant |
 | `/api/company/gst/registrations/[id]` | PATCH | `gst_settings.update` | owner, accountant |
+| `/api/company/setup-checklist/dismiss` | POST | `company.update` | owner |
 | `/api/company/trial` | GET | `company.read` | owner, manager, accountant, employee, subcontractor |
 | `/api/company/trial/extension-requests` | GET | `trial.request_extension` | owner |
 | `/api/company/trial/extension-requests` | POST | `trial.request_extension` | owner |

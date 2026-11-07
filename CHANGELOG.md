@@ -6,6 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- Onboarding shows "Step 1 of 2", explains the one-company limit with the support address, then offers the optional details or "Skip for now"; owners see "Finish setting up your company" on their dashboard until it's done or dismissed ([#225](https://github.com/arvindjonn09/tax-invoice/issues/225)).
 - Trial extension requests: owners can ask for more time, including while read-only, and the operator API approves or declines them; the screens follow in #232 ([#231](https://github.com/arvindjonn09/tax-invoice/issues/231)).
 - Accepting an invitation no longer reveals whether an email address has an account. People now set their password from an emailed link and sign in before they join a company ([#263](https://github.com/arvindjonn09/tax-invoice/issues/263)).
 - Platform operator role with a two-key check, TOTP enrolment by host-issued code, and `pnpm operator` to grant access and extend trials; the screens follow in #232 ([#230](https://github.com/arvindjonn09/tax-invoice/issues/230)).
