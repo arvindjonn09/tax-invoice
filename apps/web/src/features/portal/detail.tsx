@@ -4,7 +4,11 @@ import { useState } from "react";
 import { useRemote } from "@/components/data/use-remote";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
 import { PageHeader } from "@/components/shell/page-header";
-import { MoneyDisplay, formatAudCents } from "@/components/money-display";
+import {
+  MoneyDisplay,
+  formatAudCents,
+  totalBasis,
+} from "@/components/money-display";
 import { Field, FormMessage, sendJson } from "@/components/form/field";
 import { Button } from "@/components/ui/button";
 import { day, time, statusLabel } from "@/features/jobs/types";
@@ -84,11 +88,11 @@ export function PortalDetail({ id }: { id: string }) {
               <dd>{formatAudCents(BigInt(data.gstCents))} AUD</dd>
             </div>
             <div>
-              <dt>Your total incl GST</dt>
+              <dt>Your total</dt>
               <dd>
                 <MoneyDisplay
                   cents={BigInt(data.inclusiveCents)}
-                  basis="incl GST"
+                  basis={totalBasis(data.gstCents)}
                 />
               </dd>
             </div>

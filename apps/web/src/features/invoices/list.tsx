@@ -6,7 +6,11 @@ import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/form/field";
 import { useRemote } from "@/components/data/use-remote";
-import { MoneyDisplay, formatAudCents } from "@/components/money-display";
+import {
+  MoneyDisplay,
+  formatAudCents,
+  totalBasis,
+} from "@/components/money-display";
 import { day } from "@/features/jobs/types";
 import { paymentState } from "./payment-state";
 import type { Invoice } from "./types";
@@ -175,7 +179,7 @@ export function InvoiceList({
                       ) : (
                         <MoneyDisplay
                           cents={BigInt(row.inclusiveCents)}
-                          basis="incl GST"
+                          basis={totalBasis(row.gstCents)}
                         />
                       )}
                       {row.issueDate ? ` · ${day(row.issueDate)}` : ""}
