@@ -273,6 +273,9 @@ test("standalone account and sign-in pages pass axe and reflow", async ({
     }
   };
   await check("/login");
+  // #224: forgot and reset (with no token, the invalid-link state).
+  await check("/forgot-password");
+  await check("/reset-password");
   await signIn(page, "employee");
   await check("/account");
   expect(problems).toEqual([]);
