@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 import type { ShownNotice } from "@/server/trial/notices";
 
@@ -8,9 +7,11 @@ import type { ShownNotice } from "@/server/trial/notices";
 export function OneTimeNotices({
   notices,
   companyId,
+  supportEmail,
 }: {
   notices: readonly ShownNotice[];
   companyId: string;
+  supportEmail: string;
 }) {
   const [dismissed, setDismissed] = useState<readonly string[]>([]);
   const visible = notices.filter((n) => !dismissed.includes(n.noticeKey));
@@ -27,12 +28,14 @@ export function OneTimeNotices({
             {notice.text}
           </p>
           {notice.canRequest ? (
-            <Link
-              href="/settings/trial"
+            // Email until the request form at /settings/trial lands (#232),
+            // as the trial banner does.
+            <a
+              href={`mailto:${supportEmail}?subject=${encodeURIComponent("Trial extension request")}`}
               className="inline-flex min-h-11 items-center underline"
             >
               Request extension
-            </Link>
+            </a>
           ) : null}
           <button
             type="button"

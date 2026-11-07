@@ -71,7 +71,11 @@ export default async function SignedInLayout({
         ) : null
       }
     >
-      <OneTimeNotices notices={notices} companyId={actor.companyId} />
+      <OneTimeNotices
+        notices={notices}
+        companyId={actor.companyId}
+        supportEmail={supportEmail()}
+      />
       {children}
     </AppShell>
   );
