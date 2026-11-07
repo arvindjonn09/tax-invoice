@@ -5,6 +5,7 @@ import {
   createAuthMiddleware,
   getSessionFromCtx,
 } from "better-auth/api";
+import { verifyPassword } from "better-auth/crypto";
 import { nextCookies } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins/two-factor";
 import type { PrismaClient } from "../../../../../packages/database/src/generated/prisma/client";
@@ -12,6 +13,7 @@ import { log } from "../log";
 import {
   ENROLMENT_CODE_HEADER,
   consumeEnrolmentCode,
+  hasEnrolmentCode,
   isOperator,
 } from "../operator/access";
 
@@ -198,12 +200,35 @@ export function createAuth(settings: AuthSettings) {
           }));
         if (!allowed) throw new APIError("NOT_FOUND");
         if (ctx.path !== "/two-factor/enable") return;
-        const code = ctx.headers?.get(ENROLMENT_CODE_HEADER);
-        if (!code || !(await consumeEnrolmentCode(db, session.user.id, code))) {
-          throw new APIError("FORBIDDEN", {
+        // Order matters (#346). The code is checked first, so nobody without
+        // one can test passwords here; then the password, because the plugin
+        // only checks it after this hook and a typo mustn't spend the code;
+        // then the code is spent, atomically, in case of a race.
+        const refused = () =>
+          new APIError("FORBIDDEN", {
             message: "Enter a valid enrolment code",
           });
+        const code = ctx.headers?.get(ENROLMENT_CODE_HEADER);
+        if (!code || !(await hasEnrolmentCode(db, session.user.id, code)))
+          throw refused();
+        const password = (ctx.body as { password?: unknown } | undefined)
+          ?.password;
+        const account = await db.authAccount.findFirst({
+          where: { userId: session.user.id, providerId: "credential" },
+          select: { password: true },
+        });
+        if (
+          typeof password !== "string" ||
+          !account?.password ||
+          !(await verifyPassword({ hash: account.password, password }))
+        ) {
+          throw new APIError("BAD_REQUEST", {
+            code: "INVALID_PASSWORD",
+            message: "Invalid password",
+          });
         }
+        if (!(await consumeEnrolmentCode(db, session.user.id, code)))
+          throw refused();
         await db.platformAuditEvent.create({
           data: {
             actorKind: "user",
