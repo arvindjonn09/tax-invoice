@@ -18,9 +18,15 @@ if [ ! -f "$root/scripts/jobs/cli.ts" ]; then
 fi
 
 echo "==> Installing nginx"
-apt-get install -y nginx
-# Ubuntu's sample site listens on every network address; JobFlow doesn't need it.
-rm -f /etc/nginx/sites-enabled/default
+if dpkg-query -W -f='${Status}' nginx 2>/dev/null | grep -q "ok installed"; then
+  # Already here, so its sites may be in use: leave them all alone. JobFlow's
+  # gate is a separate file that listens only on 127.0.0.1:3299.
+  echo "nginx was already installed; its existing sites are unchanged."
+else
+  apt-get install -y nginx
+  # Ubuntu's sample site, just installed, listens on every network address.
+  rm -f /etc/nginx/sites-enabled/default
+fi
 
 echo "==> Installing the maintenance page"
 install -d -o root -g root -m 0755 /usr/share/jobflow-maintenance

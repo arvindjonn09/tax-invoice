@@ -119,6 +119,18 @@ describe("starting at boot (#234)", () => {
     }
   });
 
+  it("removes nginx's sample site only when it has just installed nginx", () => {
+    const nginx = install.slice(
+      install.indexOf("Installing nginx"),
+      install.indexOf("Installing the maintenance page"),
+    );
+    const [kept, fresh] = nginx.split("else");
+    expect(kept).toContain("ok installed");
+    expect(kept).not.toContain("rm -f");
+    expect(fresh).toContain("apt-get install -y nginx");
+    expect(fresh).toContain("rm -f /etc/nginx/sites-enabled/default");
+  });
+
   it("is installed and enabled by the install script", () => {
     expect(install).toContain(
       "systemctl enable --now jobflow-services.service",
