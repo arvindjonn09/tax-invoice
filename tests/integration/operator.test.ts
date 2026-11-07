@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
 import { createAuth } from "../../apps/web/src/server/auth/config";
@@ -24,6 +24,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { totp } from "../helpers/totp";
 
 // #230 (ADR 0004 D5, D6): the platform operator, TOTP, trialAccess and the CLI.
 const ORIGIN = "http://127.0.0.1:3000";
@@ -135,28 +136,6 @@ const lastDayOf = async (id: string) =>
   (await db.company.findUniqueOrThrow({ where: { id } })).trialLastDay
     ?.toISOString()
     .slice(0, 10);
-
-/** RFC 6238 from the URI the plugin hands back, as an authenticator app does. */
-function totp(uri: string, at = Date.now()) {
-  const encoded = new URL(uri).searchParams.get("secret")!;
-  let bits = "";
-  for (const char of encoded.replace(/=+$/, "")) {
-    bits += "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-      .indexOf(char)
-      .toString(2)
-      .padStart(5, "0");
-  }
-  const key = Buffer.from(
-    (bits.match(/.{8}/g) ?? []).map((byte) => parseInt(byte, 2)),
-  );
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(at / 30_000)));
-  const digest = createHmac("sha1", key).update(counter).digest();
-  const offset = digest[digest.length - 1]! & 0xf;
-  return String(
-    (digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000,
-  ).padStart(6, "0");
-}
 
 beforeAll(async () => {
   database = await withCommittedDatabase();

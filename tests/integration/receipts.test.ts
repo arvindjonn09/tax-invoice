@@ -8,7 +8,7 @@ import { createWithPolicy } from "../../apps/web/src/server/authz/policy";
 import { invoiceHandlers } from "../../apps/web/src/server/invoices/handlers";
 import { lockRow } from "../../apps/web/src/server/db/locks";
 import { receiptHandlers } from "../../apps/web/src/server/receipts/handlers";
-import { syntheticAbn } from "../helpers/abn";
+import { SYNTHETIC_ADDRESS, syntheticAbn } from "../helpers/abn";
 import {
   type CommittedDatabase,
   withCommittedDatabase,
@@ -76,7 +76,11 @@ beforeAll(async () => {
   companyId = own.id;
   await db.company.update({
     where: { id: companyId },
-    data: { legalName: "Sample Pty Ltd", abn: syntheticAbn("505050505") },
+    data: {
+      legalName: "Sample Pty Ltd",
+      abn: syntheticAbn("505050505"),
+      ...SYNTHETIC_ADDRESS,
+    },
   });
   await db.companyGstRegistration.create({
     data: {

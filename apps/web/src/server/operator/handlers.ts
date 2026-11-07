@@ -16,7 +16,8 @@ import {
   setAccessMode,
 } from "./trial-access";
 
-const PAGE_SIZE = 20;
+export const OPERATOR_PAGE_SIZE = 20;
+const PAGE_SIZE = OPERATOR_PAGE_SIZE;
 type IdContext = { params: Promise<{ id: string }> };
 
 const Approve = z
@@ -73,6 +74,110 @@ export function companyProjection(company: CompanyRow, now: Date) {
   };
 }
 
+const REQUEST_SELECT = {
+  id: true,
+  status: true,
+  message: true,
+  lastDayAtRequest: true,
+  createdAt: true,
+  decidedAt: true,
+  extensionDays: true,
+  decisionNote: true,
+  newLastDay: true,
+  closedReason: true,
+  company: { select: COMPANY_SELECT },
+  requester: { select: { user: { select: { name: true, email: true } } } },
+  decider: { select: { user: { select: { email: true } } } },
+} satisfies Prisma.TrialExtensionRequestSelect;
+type RequestRow = Prisma.TrialExtensionRequestGetPayload<{
+  select: typeof REQUEST_SELECT;
+}>;
+
+function requestProjection(row: RequestRow, now: Date) {
+  return {
+    id: row.id,
+    status: row.status,
+    message: row.message,
+    lastDayAtRequest: row.lastDayAtRequest.toISOString().slice(0, 10),
+    createdAt: row.createdAt.toISOString(),
+    decidedAt: row.decidedAt?.toISOString() ?? null,
+    extensionDays: row.extensionDays,
+    decisionNote: row.decisionNote,
+    newLastDay: row.newLastDay?.toISOString().slice(0, 10) ?? null,
+    closedReason: row.closedReason,
+    company: companyProjection(row.company, now),
+    owner: { name: row.requester.user.name, email: row.requester.user.email },
+    decidedByEmail: row.decider?.user.email ?? null,
+  };
+}
+export type OperatorRequest = ReturnType<typeof requestProjection>;
+export type OperatorCompany = ReturnType<typeof companyProjection>;
+
+/** Pending oldest first, or decided newest first (API and /operator). */
+export async function loadRequests(
+  db: PrismaClient,
+  { decided, page, now }: { decided: boolean; page: number; now: Date },
+): Promise<OperatorRequest[]> {
+  const rows = await db.trialExtensionRequest.findMany({
+    where: decided ? { status: { not: "pending" } } : { status: "pending" },
+    orderBy: decided ? { decidedAt: "desc" } : { createdAt: "asc" },
+    take: PAGE_SIZE,
+    skip: (page - 1) * PAGE_SIZE,
+    select: REQUEST_SELECT,
+  });
+  return rows.map((row) => requestProjection(row, now));
+}
+
+export const countPendingRequests = (db: PrismaClient) =>
+  db.trialExtensionRequest.count({ where: { status: "pending" } });
+
+/** One request, or null for an unknown or malformed id (/operator/requests/[id]). */
+export async function loadRequest(
+  db: PrismaClient,
+  id: string,
+  now: Date,
+): Promise<OperatorRequest | null> {
+  if (!Id.safeParse(id).success) return null;
+  const row = await db.trialExtensionRequest.findUnique({
+    where: { id },
+    select: REQUEST_SELECT,
+  });
+  return row ? requestProjection(row, now) : null;
+}
+
+/** Non-demo companies by name (API and /operator/companies). */
+export async function loadCompanies(
+  db: PrismaClient,
+  { q, page, now }: { q: string; page: number; now: Date },
+): Promise<OperatorCompany[]> {
+  const search = q.trim().slice(0, 200);
+  const rows = await db.company.findMany({
+    where: {
+      isDemo: false,
+      ...(search ? { name: { contains: search, mode: "insensitive" } } : {}),
+    },
+    orderBy: { name: "asc" },
+    take: PAGE_SIZE,
+    skip: (page - 1) * PAGE_SIZE,
+    select: COMPANY_SELECT,
+  });
+  return rows.map((row) => companyProjection(row, now));
+}
+
+/** One non-demo company, or null (/operator/companies/[id]). */
+export async function loadCompany(
+  db: PrismaClient,
+  id: string,
+  now: Date,
+): Promise<OperatorCompany | null> {
+  if (!Id.safeParse(id).success) return null;
+  const row = await db.company.findFirst({
+    where: { id, isDemo: false },
+    select: COMPANY_SELECT,
+  });
+  return row ? companyProjection(row, now) : null;
+}
+
 const REFUSAL_STATUS: Record<TrialAccessError["code"], number> = {
   unknown_company: 400,
   demo_company: 400,
@@ -108,48 +213,12 @@ export function operatorHandlers(
   const listRequests: OperatorHandler<unknown> = async ({ request }) => {
     const { db, now } = deps();
     const url = new URL(request.url);
-    const decided = url.searchParams.get("status") === "decided";
-    const rows = await db.trialExtensionRequest.findMany({
-      where: decided ? { status: { not: "pending" } } : { status: "pending" },
-      orderBy: decided ? { decidedAt: "desc" } : { createdAt: "asc" },
-      take: PAGE_SIZE,
-      skip: (page(url) - 1) * PAGE_SIZE,
-      select: {
-        id: true,
-        status: true,
-        message: true,
-        lastDayAtRequest: true,
-        createdAt: true,
-        decidedAt: true,
-        extensionDays: true,
-        decisionNote: true,
-        newLastDay: true,
-        closedReason: true,
-        company: { select: COMPANY_SELECT },
-        requester: {
-          select: { user: { select: { name: true, email: true } } },
-        },
-      },
-    });
-    const at = now?.() ?? new Date();
     return privateJson({
-      requests: rows.map((row) => ({
-        id: row.id,
-        status: row.status,
-        message: row.message,
-        lastDayAtRequest: row.lastDayAtRequest.toISOString().slice(0, 10),
-        createdAt: row.createdAt.toISOString(),
-        decidedAt: row.decidedAt?.toISOString() ?? null,
-        extensionDays: row.extensionDays,
-        decisionNote: row.decisionNote,
-        newLastDay: row.newLastDay?.toISOString().slice(0, 10) ?? null,
-        closedReason: row.closedReason,
-        company: companyProjection(row.company, at),
-        owner: {
-          name: row.requester.user.name,
-          email: row.requester.user.email,
-        },
-      })),
+      requests: await loadRequests(db, {
+        decided: url.searchParams.get("status") === "decided",
+        page: page(url),
+        now: now?.() ?? new Date(),
+      }),
     });
   };
 
@@ -191,20 +260,12 @@ export function operatorHandlers(
   const listCompanies: OperatorHandler<unknown> = async ({ request }) => {
     const { db, now } = deps();
     const url = new URL(request.url);
-    const q = url.searchParams.get("q")?.trim().slice(0, 200);
-    const rows = await db.company.findMany({
-      where: {
-        isDemo: false,
-        ...(q ? { name: { contains: q, mode: "insensitive" } } : {}),
-      },
-      orderBy: { name: "asc" },
-      take: PAGE_SIZE,
-      skip: (page(url) - 1) * PAGE_SIZE,
-      select: COMPANY_SELECT,
-    });
-    const at = now?.() ?? new Date();
     return privateJson({
-      companies: rows.map((row) => companyProjection(row, at)),
+      companies: await loadCompanies(db, {
+        q: url.searchParams.get("q") ?? "",
+        page: page(url),
+        now: now?.() ?? new Date(),
+      }),
     });
   };
 

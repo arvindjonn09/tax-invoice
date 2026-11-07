@@ -1,3 +1,4 @@
+import { SYNTHETIC_ADDRESS, syntheticAbn } from "../helpers/abn";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createDatabaseClient } from "../../packages/database/src/index";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
@@ -46,6 +47,10 @@ export default async function globalSetup() {
           name: `E2E Sample Company ${run}`,
           createdBy: users.owner,
           isDemo: true,
+          // Every company needs these before it can issue an invoice (#348).
+          legalName: "Sample Contracting Pty Ltd",
+          abn: syntheticAbn("494949494"),
+          ...SYNTHETIC_ADDRESS,
         },
       });
       await tx.membership.create({
