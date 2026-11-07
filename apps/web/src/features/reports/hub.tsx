@@ -74,6 +74,8 @@ type Gst = {
 };
 type AgeingRow = {
   id: string;
+  /** "expense" for an on-account expense; otherwise a bill or invoice. */
+  kind?: "expense";
   reference: string;
   partyName: string;
   issuedOn: string;
@@ -133,6 +135,16 @@ const SOURCE_TYPE: Record<string, string> = {
   supplier_payment: "Supplier payment",
   bill_evidence: "Late tax invoice for bill",
 };
+/** Where an ageing row opens: invoice, supplier bill or expense (#300). */
+export const ageingHref = (
+  side: "receivables" | "payables",
+  row: Pick<AgeingRow, "id" | "kind">,
+) =>
+  side === "receivables"
+    ? `/invoices/${row.id}`
+    : row.kind === "expense"
+      ? `/expenses/${row.id}`
+      : `/payments/bills/${row.id}`;
 const sourceHref = (id: string, source?: Source) =>
   source?.type === "invoice" || source?.type === "credit_note"
     ? `/invoices/${id}`
@@ -750,14 +762,7 @@ function AgeingView({
                   className={`${CARD} grid gap-1 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:items-center`}
                 >
                   <span className="min-w-0">
-                    <Link
-                      className={LINK}
-                      href={
-                        side === "receivables"
-                          ? `/invoices/${row.id}`
-                          : `/payments/bills/${row.id}`
-                      }
-                    >
+                    <Link className={LINK} href={ageingHref(side, row)}>
                       {row.partyName}
                       {row.reference ? ` · ${row.reference}` : ""}
                     </Link>
