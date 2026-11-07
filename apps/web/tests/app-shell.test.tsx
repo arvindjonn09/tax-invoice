@@ -93,11 +93,8 @@ describe("TrialBanner (S8, docs/design/signup-trial.md)", () => {
   });
 
   it("offers Request extension to owners only, and never in the normal phase", () => {
-    // Email until #232's /settings/trial exists.
-    expect(banner("warning", 5, "owner")).toContain(
-      "mailto:support@example.test?subject=Trial%20extension%20request",
-    );
-    expect(banner("warning", 5, "owner")).not.toContain("/settings/trial");
+    // The request form at /settings/trial (#232).
+    expect(banner("warning", 5, "owner")).toContain('href="/settings/trial"');
     expect(banner("expired", -1, "owner")).toContain("Request extension");
     expect(banner("normal", 12, "owner")).not.toContain("Request extension");
     expect(banner("warning", 5, "staff")).not.toContain("Request extension");

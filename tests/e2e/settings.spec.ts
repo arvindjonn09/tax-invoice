@@ -1,5 +1,7 @@
+import { deflateSync } from "node:zlib";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { IEND, PNG_SIGNATURE, ihdr, pngChunk } from "../helpers/logo-fixtures";
 import { requireAccounts, signIn } from "./accounts";
 
 // #26: company and GST settings screens. Runs against the per-run synthetic
@@ -119,3 +121,79 @@ for (const role of ["manager", "employee", "subcontractor"] as const) {
     await expect(page.getByRole("link", { name: "Settings" })).toHaveCount(0);
   });
 }
+
+// #228: each organisation sets its own contact details and logo.
+test("owner sets contact details, and about stays plain text", async ({
+  page,
+}) => {
+  await signIn(page, "owner");
+  await page.goto("/settings");
+  await page.getByLabel("Website").fill("javascript:alert(1)");
+  await page.getByRole("button", { name: "Save contact details" }).click();
+  await expect(page.getByLabel("Website")).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+  await page.getByLabel("Website").fill("https://sample.invalid");
+  await page.getByLabel("Phone").fill("02 5550 0100");
+  await page.getByLabel("Business email").fill("office@sample.invalid");
+  const html = "<b>Licensed</b> since 2010";
+  await page.getByLabel("About your business").fill(html);
+  await expect(
+    page.getByText(`${html.length} of 1000 characters`),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Save contact details" }).click();
+  await expect(page.getByText("Contact details saved.")).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("About your business")).toHaveValue(html);
+  await expect(page.getByLabel("Phone")).toHaveValue("02 5550 0100");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test("owner uploads, replaces and removes the logo", async ({ page }) => {
+  await signIn(page, "owner");
+  await page.goto("/settings");
+  const file = page.getByLabel("Logo file");
+  // Refused by the server, with its message.
+  await file.setInputFiles({
+    name: "logo.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"),
+  });
+  await expect(page.getByText("Upload a PNG or JPEG file")).toBeVisible();
+  await file.setInputFiles({
+    name: "logo.png",
+    mimeType: "image/png",
+    // One real red pixel, so the preview has to decode it.
+    buffer: Buffer.concat([
+      PNG_SIGNATURE,
+      ihdr(1, 1),
+      pngChunk("IDAT", deflateSync(Buffer.from([0, 255, 0, 0, 255]))),
+      IEND,
+    ]),
+  });
+  await expect(page.getByText("Logo saved.")).toBeVisible();
+  const preview = page.getByRole("img", { name: "Your logo" });
+  await expect(preview).toBeVisible();
+  await expect
+    .poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth))
+    .toBe(1);
+  await page.getByRole("button", { name: "Remove logo" }).click();
+  await expect(page.getByText("Logo removed.")).toBeVisible();
+  await expect(preview).toBeHidden();
+  await expect(page.getByText("No logo yet.")).toBeVisible();
+});
+
+test("an accountant sees the details but can't change them", async ({
+  page,
+}) => {
+  await signIn(page, "accountant");
+  await page.goto("/settings");
+  await expect(page.getByLabel("Phone")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Upload logo" })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByText("Only the owner can change contact details."),
+  ).toBeVisible();
+});

@@ -119,6 +119,7 @@ function cleanJpeg(file: Buffer): LogoCheck {
   let height = 0;
   let seenFrame = false;
   let seenScan = false;
+  let seenAdobe = false;
   for (;;) {
     if (offset + 2 > file.length || file[offset] !== 0xff) return NOT_AN_IMAGE;
     const marker = file[offset + 1]!;
@@ -168,6 +169,23 @@ function cleanJpeg(file: Buffer): LogoCheck {
         header.writeUInt16BE(16, 2);
         header.writeUInt16BE(0, 16);
         kept.push(header);
+      }
+      offset = end;
+    } else if (marker === 0xee) {
+      // Adobe's colour-transform byte, which decoders need to read CMYK and
+      // YCCK colours. Only the first one, rebuilt from that byte alone.
+      const transform = file[offset + 15]!;
+      if (
+        !seenAdobe &&
+        end === offset + 16 &&
+        file.toString("latin1", offset + 4, offset + 9) === "Adobe" &&
+        transform <= 2
+      ) {
+        seenAdobe = true;
+        kept.push(
+          file.subarray(offset, offset + 9),
+          Buffer.from([0, 100, 0, 0, 0, 0, transform]),
+        );
       }
       offset = end;
     } else if (marker === 0xfe || (marker >= 0xe1 && marker <= 0xef)) {
