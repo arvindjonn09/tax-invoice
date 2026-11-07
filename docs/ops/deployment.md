@@ -56,8 +56,9 @@ The script (`infra/staging/deploy.sh`) does the following, in order:
 2. Checks out the commit and runs `docker compose build migrate web`.
 3. Runs `docker compose up -d --wait postgres`.
 4. Runs `docker compose run --rm migrate`. That's `prisma migrate deploy` as the owner, then the runtime-role grants. **If it fails, the script stops and the old app is still running.**
-5. Runs `docker compose up -d --no-deps --wait web`. This replaces the app. If the new container fails its health check, the old one is already gone, so that's an outage: roll back straight away (below).
-6. Runs `docker compose up -d --no-deps --force-recreate --wait nginx`.
+5. Runs `docker compose up -d --wait --wait-timeout 900 freshclam clamav`, with `CLAMD_CONF_SHA` set from `clamd.conf` so a changed config recreates clamd. Malware scanning (#136) is then up, and its image is rolled out, before the app that needs it. The image bundles the signatures, and freshclam updates them in the background.
+6. Runs `docker compose up -d --no-deps --wait web`. This replaces the app. If the new container fails its health check, the old one is already gone, so that's an outage: roll back straight away (below).
+7. Runs `docker compose up -d --no-deps --force-recreate --wait nginx`.
 
 When `infra/staging/deploy.sh` changes, re-install the gate:
 
@@ -69,7 +70,7 @@ sudo install -o root -g root -m 0755 infra/staging/deploy.sh /usr/local/sbin/job
 
 ```sh
 curl -fsS https://<host>/api/health          # liveness
-curl -fsS https://<host>/api/health/ready    # database + storage
+curl -fsS https://<host>/api/health/ready    # database + storage (+ clamd where scanning is required)
 docker compose -f /opt/jobflow/infra/staging/compose.yml ps
 docker compose -f /opt/jobflow/infra/staging/compose.yml logs --since 10m web | grep '"level":"error"' || echo "no errors"
 ```

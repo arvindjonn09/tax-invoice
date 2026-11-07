@@ -26,7 +26,12 @@ Performed on 2 November 2026 by Claude B, on `main` after #198 (pinned images), 
 
 ## Open before real data (owner and operations)
 
-1. **Malware scanning of uploads (#136).** Deferred by the owner on 24 October. This is an open risk, not an accepted one: uploads are private and never executed, but files are not scanned.
+1. ~~**Malware scanning of uploads (#136).**~~ Built on 5 November 2026 (owner decision: ClamAV). Every upload that **reaches a running scanner** is scanned before storage. Infected files are refused, and so are files clamd can't fully check. Every production build (`NODE_ENV=production`) fails closed when the scanner is missing or can't answer. Still to do on the host:
+   - Compose staging: add `CLAMAV_HOST`/`CLAMAV_PORT` to `web.env` and deploy. This starts freshclam and clamd; the image is pinned in `compose.yml`.
+   - The `jobflow.service` host: run clamd on loopback first (`docs/ops/staging.md`, "Malware scanning on a host without Compose"). The owner decides how.
+   - Upload a clean PDF and a password-protected PDF, and expect 201 and 422.
+
+   **Until clamd runs, a deployed build refuses uploads (503).** There is no switch to skip scanning in a built app, so #136 isn't deployed to the live host before the 6 November demo. Password-protected files are refused (owner decision, 5 November 2026). A real-clamd contract test runs in CI (`clamav-contract`).
 2. **Staging host hardening (#168).** Still to do: a non-superuser migration owner, the SCRAM password-verifier handoff, a policy blocking access to the cloud metadata service, Postgres/nginx privilege limits, and IPv6 rollout checks. These need the real host.
 3. **Maintenance credentials (#170).** Provision the separate maintenance database login, the delete-only S3 credential and the cleanup timer when staging is set up.
 4. ~~**Development audit exception.**~~ Closed on 2 November 2026: braces is no longer installed, and neither audit has exceptions (see [audit exceptions](audit-exceptions.md)).
