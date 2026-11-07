@@ -98,6 +98,13 @@ export async function seedDemo(
         data: {
           id: DEMO_COMPANY_ID,
           name: DEMO_COMPANY_NAME,
+          // Synthetic details, so a demo invoice can be issued (#348).
+          legalName: DEMO_COMPANY_NAME,
+          abn: "80000000001",
+          addressLine1: "1 Sample Street",
+          suburb: "Sampleton",
+          state: "NSW",
+          postcode: "2000",
           isDemo: true,
           createdBy: ownerId,
         },
