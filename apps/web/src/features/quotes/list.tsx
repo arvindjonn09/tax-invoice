@@ -108,7 +108,7 @@ export function QuotesList({ editable }: { editable: boolean }) {
                     <tr className="border-b bg-muted">
                       <th className="p-4">Quote</th>
                       <th className="p-4">Status</th>
-                      <th className="p-4">Total (incl GST)</th>
+                      <th className="p-4">Total</th>
                       <th className="p-4">Est. margin (ex GST)</th>
                     </tr>
                   </thead>

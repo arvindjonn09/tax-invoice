@@ -1,11 +1,22 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { companyBasis, totalBasis } from "@/components/money-display";
+import { InvoiceLines } from "@/features/invoices/lines";
 import { Totals } from "@/features/invoices/totals";
+import type { Invoice } from "@/features/invoices/types";
 
 // #305: "incl GST" only where GST was charged (documents) or could have
 // been (a company that has ever been registered).
-const text = (html: string) => html.replace(/<[^>]+>/g, "");
+const text = (html: string) => {
+  let out = "";
+  let inTag = false;
+  for (const character of html) {
+    if (character === "<") inTag = true;
+    else if (character === ">") inTag = false;
+    else if (!inTag) out += character;
+  }
+  return out;
+};
 
 describe("GST basis labels (#305)", () => {
   it("a document total says incl GST only when it charged GST", () => {
@@ -56,5 +67,31 @@ describe("GST basis labels (#305)", () => {
       ),
     );
     expect(html).toContain("$2,750.00 AUD incl GST");
+  });
+
+  const line = (gstCents: string, inclusiveCents: string) =>
+    ({
+      description: "Synthetic work",
+      quantityThousandths: "1000",
+      unitPriceCents: "100000",
+      taxCode: "taxable",
+      exclusiveCents: "100000",
+      gstCents,
+      inclusiveCents,
+    }) as unknown as Invoice["lines"][number];
+
+  it("an invoice line says incl GST only when it charged GST", () => {
+    const html = text(
+      renderToStaticMarkup(
+        <InvoiceLines
+          invoice={{
+            priceEntry: "exclusive",
+            lines: [line("0", "100000"), line("10000", "110000")],
+          }}
+        />,
+      ),
+    );
+    expect(html).toContain("$1,000.00 no GST");
+    expect(html).toContain("$1,100.00 incl GST");
   });
 });

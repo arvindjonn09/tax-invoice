@@ -12,7 +12,7 @@ import {
 } from "@/components/form/field";
 import { useRemote } from "@/components/data/use-remote";
 import { useUnsavedChanges } from "@/components/form/use-unsaved-changes";
-import { formatAudCents } from "@/components/money-display";
+import { formatAudCents, totalBasis } from "@/components/money-display";
 import { EntityPicker } from "@/features/jobs/picker";
 import { audInput, parseAudInput } from "@/lib/aud-input";
 import { unregisteredGstProblems } from "@/features/invoices/gst-problems";
@@ -685,7 +685,7 @@ export function QuoteBuilder({
                           GST · {taxLabel(savedLine.taxCode)} ·{" "}
                           {formatAudCents(BigInt(savedLine.gstCents))} GST ·{" "}
                           {formatAudCents(BigInt(savedLine.inclusiveCents))}{" "}
-                          incl GST
+                          {totalBasis(savedLine.gstCents)}
                         </p>
                       ) : (
                         <p className="text-sm text-muted-foreground">
@@ -817,7 +817,7 @@ export function QuoteBuilder({
             </h2>
             <p>
               {saved.title} · {formatAudCents(BigInt(saved.inclusiveCents))}{" "}
-              incl GST
+              {totalBasis(saved.gstCents)}
               {saved.validUntil ? ` · valid until ${saved.validUntil}` : ""}
             </p>
             <TextField
