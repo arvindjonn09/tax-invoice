@@ -1,5 +1,5 @@
 import { GstRow } from "@/components/gst-row";
-import { MoneyDisplay } from "@/components/money-display";
+import { MoneyDisplay, totalBasis } from "@/components/money-display";
 
 /**
  * Totals exactly as the server last confirmed them. Unsaved edits mark them
@@ -61,7 +61,7 @@ export function Totals({
               <dd>
                 <MoneyDisplay
                   cents={BigInt(totals.inclusiveCents)}
-                  basis="incl GST"
+                  basis={totalBasis(totals.gstCents)}
                 />
               </dd>
             </div>

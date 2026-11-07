@@ -1,5 +1,9 @@
 import { GstRow } from "@/components/gst-row";
-import { MoneyDisplay, formatAudCents } from "@/components/money-display";
+import {
+  MoneyDisplay,
+  formatAudCents,
+  totalBasis,
+} from "@/components/money-display";
 import { type Quote, percent } from "./types";
 
 /**
@@ -58,7 +62,7 @@ export function QuoteSummary({
                 <dd>
                   <MoneyDisplay
                     cents={BigInt(quote.inclusiveCents)}
-                    basis="incl GST"
+                    basis={totalBasis(quote.gstCents)}
                   />
                 </dd>
               </div>

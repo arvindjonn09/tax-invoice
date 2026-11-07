@@ -334,7 +334,13 @@ export function invoiceHandlers(
     );
     const credits = await db().invoice.findMany({
       where: { companyId: actor.companyId, creditsId: row.id },
-      select: { id: true, status: true, reference: true, inclusiveCents: true },
+      select: {
+        id: true,
+        status: true,
+        reference: true,
+        inclusiveCents: true,
+        gstCents: true,
+      },
     });
     const money_ =
       row.kind === "invoice" && row.status === "issued"
@@ -346,6 +352,7 @@ export function invoiceHandlers(
       creditNotes: credits.map((credit) => ({
         ...credit,
         inclusiveCents: money(credit.inclusiveCents),
+        gstCents: money(credit.gstCents),
       })),
     });
   };
