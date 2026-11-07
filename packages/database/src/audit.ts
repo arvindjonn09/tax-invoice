@@ -44,9 +44,12 @@ function actorColumns(event: AuditEventInput) {
 export type AuditRecorder = (event: AuditEventInput) => Promise<AuditEvent>;
 
 export const REDACTED = "[redacted]";
-/** Sensitive values are never stored; the change itself is still recorded. */
+/**
+ * Sensitive values are never stored; the change itself is still recorded.
+ * `about` is free text, so it may hold a phone number or email address.
+ */
 const SENSITIVE_KEY =
-  /password|secret|token|session|cookie|bank|bsb|account_?number|card|tfn|abn|email|phone|address/i;
+  /password|secret|token|session|cookie|bank|bsb|account_?number|card|tfn|abn|email|phone|address|^about$/i;
 const ACTION = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
 const TARGET_TYPE = /^[a-z][a-z0-9_]{0,99}$/;
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,100}$/;

@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { Field } from "@/components/form/field";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   MoneyDisplay,
+  companyBasis,
   formatAudCents,
   type MoneyBasis,
 } from "@/components/money-display";
@@ -111,17 +112,25 @@ const BUCKETS: { key: Bucket; label: string }[] = [
 const CHANNEL: Record<string, string> = {
   invoiced: "Invoiced (ex GST)",
   incurred: "Job cost",
-  received: "Received (incl GST)",
-  paid: "Paid (incl GST)",
+  received: "Received",
+  paid: "Paid",
   gst_sales: "1A GST on sales",
   gst_purchases: "1B GST credits",
 };
-const BASIS: Record<string, MoneyBasis> = {
+const BASIS: Record<string, MoneyBasis | "sales" | "mixed"> = {
   invoiced: "ex GST",
   incurred: "ex GST",
-  received: "incl GST",
-  paid: "incl GST",
+  received: "sales",
+  paid: "mixed",
 };
+
+/** #305: whether the company has ever been GST-registered (wording only). */
+const GstHistory = createContext(true);
+/** "incl GST" for a registered company; true wording otherwise. */
+function useCompanyBasis() {
+  const ever = useContext(GstHistory);
+  return (side: "sales" | "mixed") => companyBasis(ever, side);
+}
 const SOURCE_TYPE: Record<string, string> = {
   invoice: "Invoice",
   credit_note: "Credit note",
@@ -320,6 +329,7 @@ function Events({
   onPage: (page: number) => void;
   label: string;
 }) {
+  const basis = useCompanyBasis();
   if (!events.length)
     return <p className="text-muted-foreground">Nothing in this range.</p>;
   return (
@@ -358,7 +368,13 @@ function Events({
               </span>
               <span className="sm:text-right">
                 {BASIS[event.channel]
-                  ? money(event.amount, BASIS[event.channel]!)
+                  ? money(
+                      event.amount,
+                      BASIS[event.channel] === "sales" ||
+                        BASIS[event.channel] === "mixed"
+                        ? basis(BASIS[event.channel] as "sales" | "mixed")
+                        : (BASIS[event.channel] as MoneyBasis),
+                    )
                   : gstMoney(event.amount)}
               </span>
             </li>
@@ -451,6 +467,7 @@ function ProfitView({
   range: { from: string; to: string };
   canExport: boolean;
 }) {
+  const basis = useCompanyBasis();
   const [jobId, setJobId] = useState("");
   const [page, setPage] = useState(1);
   const query = new URLSearchParams({
@@ -526,8 +543,8 @@ function ProfitView({
           Cash in this range — not profit
         </h2>
         <p>
-          Received {money(t.receivedInclusive, "incl GST")} · Paid{" "}
-          {money(t.paidInclusive, "incl GST")}
+          Received {money(t.receivedInclusive, basis("sales"))} · Paid{" "}
+          {money(t.paidInclusive, basis("mixed"))}
         </p>
       </section>
       {data.jobs.length ? (
@@ -662,6 +679,9 @@ function AgeingView({
     valid ? `/api/reports/ageing?${query}` : null,
   );
   const who = side === "receivables" ? "Customers" : "Suppliers";
+  const owedBasis = useCompanyBasis()(
+    side === "receivables" ? "sales" : "mixed",
+  );
   return (
     <div className="space-y-6">
       <div className={`${CARD} grid items-end gap-4 sm:grid-cols-3`}>
@@ -719,12 +739,10 @@ function AgeingView({
           <dl className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {BUCKETS.map((b) => (
               <Figure key={b.key} label={b.label}>
-                {money(data.totals[b.key], "incl GST")}
+                {money(data.totals[b.key], owedBasis)}
               </Figure>
             ))}
-            <Figure label="Total">
-              {money(data.totals.total, "incl GST")}
-            </Figure>
+            <Figure label="Total">{money(data.totals.total, owedBasis)}</Figure>
           </dl>
           <section className="space-y-3" aria-labelledby="ageing-parties">
             <h2 id="ageing-parties" className="text-xl font-semibold">
@@ -743,10 +761,10 @@ function AgeingView({
                     Overdue{" "}
                     {money(
                       (BigInt(p.total) - BigInt(p.current)).toString(),
-                      "incl GST",
+                      owedBasis,
                     )}
                   </span>
-                  <span>Total {money(p.total, "incl GST")}</span>
+                  <span>Total {money(p.total, owedBasis)}</span>
                 </li>
               ))}
             </ul>
@@ -776,7 +794,7 @@ function AgeingView({
                       : "Not yet due"}
                   </span>
                   <span className="sm:text-right">
-                    {money(row.owed, "incl GST")}
+                    {money(row.owed, owedBasis)}
                   </span>
                 </li>
               ))}
@@ -800,6 +818,7 @@ function CashView({
   range: { from: string; to: string };
   canExport: boolean;
 }) {
+  const basis = useCompanyBasis();
   const { data, error, reload } = useRemote<Cash>(
     `/api/reports/cash?${new URLSearchParams(range)}`,
   );
@@ -816,10 +835,12 @@ function CashView({
         ) : null}
       </div>
       <dl className="grid gap-3 sm:grid-cols-3">
-        <Figure label="Money in">{money(data.moneyIn, "incl GST")}</Figure>
-        <Figure label="Money out">{money(data.moneyOut, "incl GST")}</Figure>
+        <Figure label="Money in">{money(data.moneyIn, basis("sales"))}</Figure>
+        <Figure label="Money out">
+          {money(data.moneyOut, basis("mixed"))}
+        </Figure>
         <Figure label="Net cash" note="Not profit: see Job profit">
-          {money(data.net, "incl GST")}
+          {money(data.net, basis("mixed"))}
         </Figure>
       </dl>
       {data.months.length ? (
@@ -836,10 +857,10 @@ function CashView({
                   timeZone: "UTC",
                 }).format(new Date(`${m.month}-01T00:00:00Z`))}
               </span>
-              <span>In {money(m.moneyIn, "incl GST")}</span>
-              <span>Out {money(m.moneyOut, "incl GST")}</span>
+              <span>In {money(m.moneyIn, basis("sales"))}</span>
+              <span>Out {money(m.moneyOut, basis("mixed"))}</span>
               <span className="font-semibold">
-                Net {money(m.net, "incl GST")}
+                Net {money(m.net, basis("mixed"))}
               </span>
             </li>
           ))}
@@ -859,11 +880,14 @@ export function ReportsHub({
   view,
   today,
   canExport,
+  gstEverRegistered = true,
 }: {
   views: readonly ReportView[];
   view: ReportView;
   today: string;
   canExport: boolean;
+  /** #305: wording only; figures are unchanged. */
+  gstEverRegistered?: boolean;
 }) {
   const [range, setRange] = useState(() => {
     const quarter = presets(today)[0]!;
@@ -871,39 +895,41 @@ export function ReportsHub({
   });
   const key = `${range.from}:${range.to}`;
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Reports"
-        description="Job profit ex GST, the draft GST summary, what's owed and cash movement. Figures come straight from your records; nothing is lodged."
-      />
-      <nav aria-label="Reports" className="flex flex-wrap gap-2">
-        {views.map((item) => (
-          <Link
-            key={item}
-            href={`/reports?view=${item}`}
-            aria-current={item === view ? "page" : undefined}
-            className={buttonVariants({
-              variant: item === view ? "default" : "outline",
-            })}
-          >
-            {VIEW_LABEL[item]}
-          </Link>
-        ))}
-      </nav>
-      {view === "ageing" ? (
-        <AgeingView today={today} canExport={canExport} />
-      ) : (
-        <>
-          <RangeFilter today={today} range={range} onChange={setRange} />
-          {view === "profitability" ? (
-            <ProfitView key={key} range={range} canExport={canExport} />
-          ) : view === "gst" ? (
-            <GstView key={key} range={range} canExport={canExport} />
-          ) : (
-            <CashView key={key} range={range} canExport={canExport} />
-          )}
-        </>
-      )}
-    </div>
+    <GstHistory.Provider value={gstEverRegistered}>
+      <div className="space-y-6">
+        <PageHeader
+          title="Reports"
+          description="Job profit ex GST, the draft GST summary, what's owed and cash movement. Figures come straight from your records; nothing is lodged."
+        />
+        <nav aria-label="Reports" className="flex flex-wrap gap-2">
+          {views.map((item) => (
+            <Link
+              key={item}
+              href={`/reports?view=${item}`}
+              aria-current={item === view ? "page" : undefined}
+              className={buttonVariants({
+                variant: item === view ? "default" : "outline",
+              })}
+            >
+              {VIEW_LABEL[item]}
+            </Link>
+          ))}
+        </nav>
+        {view === "ageing" ? (
+          <AgeingView today={today} canExport={canExport} />
+        ) : (
+          <>
+            <RangeFilter today={today} range={range} onChange={setRange} />
+            {view === "profitability" ? (
+              <ProfitView key={key} range={range} canExport={canExport} />
+            ) : view === "gst" ? (
+              <GstView key={key} range={range} canExport={canExport} />
+            ) : (
+              <CashView key={key} range={range} canExport={canExport} />
+            )}
+          </>
+        )}
+      </div>
+    </GstHistory.Provider>
   );
 }
