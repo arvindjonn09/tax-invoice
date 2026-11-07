@@ -35,6 +35,10 @@ export default async function OnboardingDetailsPage() {
   const { actor } = resolution;
   if (!can(actor.role, "company.update") || actor.access.readOnly)
     redirect("/home");
+  const owner = await getDatabase().user.findUniqueOrThrow({
+    where: { id: actor.userId },
+    select: { email: true },
+  });
   const company = await getDatabase().company.findUniqueOrThrow({
     where: { id: actor.companyId },
     select: {
@@ -63,7 +67,7 @@ export default async function OnboardingDetailsPage() {
             details={{
               phone: company.phone,
               // Prefilled with the login email; it's only a display value.
-              businessEmail: company.businessEmail ?? actor.email ?? null,
+              businessEmail: company.businessEmail ?? owner.email,
               website: company.website,
               about: company.about,
             }}
