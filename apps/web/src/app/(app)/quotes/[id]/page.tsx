@@ -25,13 +25,14 @@ export default async function QuoteDetailPage({
     }))
   )
     notFound();
-  const { today, registeredToday } = await quoteDay(actor.companyId);
+  const { today, registeredToday, periods } = await quoteDay(actor.companyId);
   return (
     <QuotePage
       key={id}
       id={id}
       editable={can(actor.role, "quote.write")}
       registeredToday={registeredToday}
+      periods={periods}
       today={today}
     />
   );

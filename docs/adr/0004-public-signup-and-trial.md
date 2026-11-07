@@ -296,8 +296,9 @@ Enforcement has two layers, and the database layer is authoritative.
     as `admin@shivomsangha.com` through `smtppro.zoho.com.au:465` with implicit TLS, authenticated with a Zoho
     **app-specific password**, never the account password. Settings: `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`,
     `SMTP_USER` and `SMTP_PASSWORD`, all from the environment only. Certificate verification stays on.
-  - Zoho caps sending per user per day. The dispatcher treats throttling replies (SMTP 4xx and 554 rate replies) as
-    retryable and alerts when limits are hit. Move to a transactional provider if volume outgrows the mailbox.
+  - Zoho caps sending per rolling hour (50–500, set dynamically). The dispatcher treats throttling replies (SMTP 4xx,
+    and 5xx replies naming a limit or quota) and Zoho's block reply (`5.1.8`) as retryable, pauses all sending, and
+    alerts when limits are hit (`docs/ops/email.md`). Move to a transactional provider if volume outgrows the mailbox.
   - Bounces and complaints: Zoho SMTP has no signed webhook, so bounces arrive as mail in the `admin@` mailbox and
     the suppression list is fed manually (or by a later IMAP reader). `POST /api/webhooks/email` (`withWebhook`)
     ships only with a provider that signs callbacks. A hard bounce or complaint adds the address HMAC to
@@ -306,7 +307,7 @@ Enforcement has two layers, and the database layer is authoritative.
     reputation, and bulk sending isn't supported. Exceeding it blocks sending for up to an hour. So the dispatcher
     sends at most `EMAIL_MAX_PER_HOUR` (default 40) and sends account emails (verification, reset, password
     changed, account exists) before trial reminders and notices. A reminder that misses its hour simply waits for
-    the next sweep. See `docs/research/email-provider.md`. **Not built yet: tracked in #259.**
+    the next sweep. See `docs/research/email-provider.md`. **Built in #259** (`docs/ops/email.md`).
 - **Addresses.** Sender, reply-to and support default to `admin@shivomsangha.com` through `EMAIL_FROM`,
   `EMAIL_REPLY_TO` and `SUPPORT_EMAIL`. The **address** in `EMAIL_FROM` (which may have a display
   name, as in `"JobFlow <admin@shivomsangha.com>"`) must equal `SMTP_USER` or an alias verified in Zoho, or Zoho

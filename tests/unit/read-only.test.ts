@@ -19,6 +19,7 @@ describe("READ_ONLY_ALLOWED", () => {
     expect(Object.keys(READ_ONLY_ALLOWED).sort()).toEqual([
       "DELETE /api/users/invitations/[id]",
       "PATCH /api/users/[id]",
+      "POST /api/company/trial/extension-requests",
       "POST /api/documents/[id]/link",
       "POST /api/invoices/[id]/pdf",
     ]);

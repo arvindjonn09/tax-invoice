@@ -208,11 +208,13 @@ implementation task.
   and a repeated ABN aren't blocked, and flagging duplicates is listed as Later in the requirements. Turnstile raises
   cost but doesn't stop paid solvers. Turnstile failing closed means a Cloudflare outage stops sign-up. The
   breached-password check fails open.
-- **Enumeration outside sign-up (T15).** On `main`, `POST /api/invitations/accept` with an invitation's token and no
-  session answers 401 "sign in with the invited email" for an existing account and 400 "enter your name and a password"
-  for a new one. That's limited to trusted owners today; with public sign-up, anyone who verifies and creates a company
-  can invite any address and read the answer. Tracked in #263. Small timing differences can also
-  survive the 50 ms test.
+- **Enumeration outside sign-up (T15).** `POST /api/invitations/accept` gives a caller who hasn't proved control of the
+  address the same answer for an existing and a new account, and leaves the same company data behind: the invitation stays
+  pending, with no membership or company audit event, until a signed-in holder of a confirmed mailbox accepts it (#263). The
+  account work runs after the response. A signed-out accept takes no password: a new account gets an unknown one, and only
+  the mailbox holder sets the real one, from an emailed link that also confirms the address. A token holder can use up the
+  address on an account nobody can yet sign in to; the emailed link or `/forgot-password` recovers it.
+- **Operator TOTP limits (T21).** In production an operator's session must itself have passed TOTP (`auth_sessions.mfa_verified_at`), so a password-only session from before enrolment never qualifies. Two library limits remain: Better Auth accepts codes within ±30 seconds and keeps no last-used code, so a relayed code works for about 90 seconds (Cloudflare Access reduces this), and the TOTP secret and backup codes are encrypted with `BETTER_AUTH_SECRET`, not hashed.
 - **Scanners and account pre-registration (T17).** The fragment stops scanners that only fetch a URL. `/verify-email`
   spends the token only when "Confirm my email" is pressed (#249), so only a scanner that also clicks could verify the
   address. If an attacker signed up with that address, they would then hold a verified account for it. This is uncertain: no

@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { getDatabase, isProductionEnvironment } from "../auth";
 import { log, safeError } from "../log";
-import { dispatchOutbox } from "./outbox";
+import { dispatchOutbox, maxPerHourFromEnv } from "./outbox";
 import { type EmailTransport, transportFromEnv } from "./transport";
 
 export { enqueueEmail, cancelPendingEmail, dispatchOutbox } from "./outbox";
@@ -40,9 +40,21 @@ export { supportEmail } from "./addresses";
 export function dispatchSoon(): void {
   after(async () => {
     try {
-      await dispatchOutbox(getDatabase(), getEmailTransport(), emailSecret());
+      await dispatchOutbox(getDatabase(), getEmailTransport(), emailSecret(), {
+        maxPerHour: maxPerHourFromEnv(),
+      });
     } catch (error) {
       log("error", "email.dispatch_failed", { error: safeError(error) });
     }
+  });
+}
+
+/**
+ * One timer-driven pass (#259, server/email/sweep.ts): sends whatever is due,
+ * within the hourly cap and any provider pause.
+ */
+export async function sweepOutbox(): Promise<void> {
+  await dispatchOutbox(getDatabase(), getEmailTransport(), emailSecret(), {
+    maxPerHour: maxPerHourFromEnv(),
   });
 }

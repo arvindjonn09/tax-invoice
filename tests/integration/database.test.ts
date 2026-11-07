@@ -51,6 +51,8 @@ it("connects through Prisma only to this run's migrated database", async () => {
     { migration_name: "20261102110000_bill_evidence", finished: true },
     { migration_name: "20261103100000_signup_accounts", finished: true },
     { migration_name: "20261103110000_trial_profile_guard", finished: true },
+    { migration_name: "20261105120000_email_pacing", finished: true },
+    { migration_name: "20261106100000_platform_operator", finished: true },
   ]);
 });
 
