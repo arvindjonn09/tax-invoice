@@ -97,6 +97,24 @@ describe("seedDemo", () => {
     ).toEqual(before);
   });
 
+  it("fills in an older demo company's missing details and keeps edits (#348)", async () => {
+    await db.company.update({
+      where: { id: DEMO_COMPANY_ID },
+      data: { legalName: "Edited Demo Pty Ltd", abn: null, postcode: null },
+    });
+    await seedDemo(db, { password: "a different password!", env });
+    expect(
+      await db.company.findUniqueOrThrow({
+        where: { id: DEMO_COMPANY_ID },
+        select: { legalName: true, abn: true, postcode: true },
+      }),
+    ).toEqual({
+      legalName: "Edited Demo Pty Ltd",
+      abn: "80000000001",
+      postcode: "2000",
+    });
+  });
+
   it("demo users can sign in locally but are refused when production is on", async () => {
     const signIn = (production: boolean) =>
       createAuth({

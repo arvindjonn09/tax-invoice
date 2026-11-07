@@ -249,9 +249,17 @@ export function createAuth(settings: AuthSettings) {
         // Confirming enrolment replaces the session but returns the old token.
         const token = ctx.context.newSession?.session.token ?? returned;
         await db.$transaction(async (tx) => {
-          const { userId } = await tx.authSession.update({
+          // Signed out meanwhile: fail closed, with a message that says why.
+          const { count } = await tx.authSession.updateMany({
             where: { token },
             data: { mfaVerifiedAt: new Date() },
+          });
+          if (count === 0)
+            throw new APIError("UNAUTHORIZED", {
+              message: "Your session ended. Sign in again to continue.",
+            });
+          const { userId } = await tx.authSession.findUniqueOrThrow({
+            where: { token },
             select: { userId: true },
           });
           await tx.platformAuditEvent.create({

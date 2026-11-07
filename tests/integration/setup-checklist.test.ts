@@ -127,6 +127,9 @@ describe("setup checklist", () => {
     const owner = { userId: userIds.owner, companyId, role: "owner" as const };
     expect(await setupChecklistFor(db, owner, unrestricted)).toEqual([
       expect.objectContaining({ id: "business_details", done: false }),
+      expect.objectContaining({ id: "contact_details", done: false }),
+      expect.objectContaining({ id: "logo", done: false }),
+      expect.objectContaining({ id: "about", done: false }),
     ]);
     expect(
       await setupChecklistFor(db, { ...owner, role: "manager" }, unrestricted),

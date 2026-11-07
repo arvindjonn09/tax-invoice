@@ -8,6 +8,8 @@ const port = Number(process.env.JOBFLOW_E2E_PORT ?? 3100);
 if (!Number.isInteger(port) || port < 1 || port > 65535)
   throw new Error("Invalid JOBFLOW_E2E_PORT");
 const baseURL = `http://127.0.0.1:${port}`;
+/** Must match tests/e2e/operator.spec.ts. */
+const E2E_OPERATOR_ID = "00000000-0000-4000-8000-00000000e2e0";
 const serverEnv: Record<string, string> =
   isolated && process.env.DATABASE_URL
     ? {
@@ -18,6 +20,8 @@ const serverEnv: Record<string, string> =
         SMTP_HOST: "",
         // Origin checks need the exact origin the browser uses.
         BETTER_AUTH_URL: baseURL,
+        // The one operator operator.spec.ts creates (#232), second key of D5.
+        JOBFLOW_OPERATOR_USER_IDS: E2E_OPERATOR_ID,
       }
     : {};
 export default defineConfig({
