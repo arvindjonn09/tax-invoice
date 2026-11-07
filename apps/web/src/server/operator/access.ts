@@ -60,6 +60,25 @@ export const enrolmentCodeDigest = (code: string) =>
   createHash("sha256").update(code).digest("hex");
 
 /** Spends a live code of this user's exactly once. */
+/** Whether a live, unused code matches, without spending it. */
+export async function hasEnrolmentCode(
+  db: Pick<PrismaClient, "operatorEnrolmentCode">,
+  userId: string,
+  code: string,
+  now = new Date(),
+): Promise<boolean> {
+  const found = await db.operatorEnrolmentCode.findFirst({
+    where: {
+      userId,
+      codeHash: enrolmentCodeDigest(code),
+      consumedAt: null,
+      expiresAt: { gt: now },
+    },
+    select: { id: true },
+  });
+  return found !== null;
+}
+
 export async function consumeEnrolmentCode(
   db: Pick<PrismaClient, "operatorEnrolmentCode">,
   userId: string,

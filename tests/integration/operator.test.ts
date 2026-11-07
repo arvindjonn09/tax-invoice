@@ -347,6 +347,24 @@ describe("TOTP enrolment", () => {
     expect((await enable(cookie, code)).status).toBe(200);
   });
 
+  it("without a code, a wrong password still gets the 403, not a password check", async () => {
+    const user = await newOperator();
+    const cookie = cookieFrom(await signIn(user.email));
+    for (const headers of [
+      { cookie },
+      { cookie, [ENROLMENT_CODE_HEADER]: "000000" },
+    ]) {
+      const refused = await auth.handler(
+        authRequest(
+          "/two-factor/enable",
+          { password: "not the right password" },
+          headers,
+        ),
+      );
+      expect(refused.status).toBe(403);
+    }
+  });
+
   it("refuses an expired code and a used code", async () => {
     const user = await newOperator();
     const code = await issueCode(user.id);
