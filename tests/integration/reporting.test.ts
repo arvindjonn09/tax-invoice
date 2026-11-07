@@ -324,6 +324,8 @@ describe("database reports reconcile GST and profit together", () => {
       const dashboardBefore = await readDashboard();
       const before = await reports(f.actor);
       expect(dashboardBefore.totals).toEqual(before.profit.totals);
+      // #305: drives the "incl GST" wording; figures are unchanged.
+      expect(dashboardBefore.gstEverRegistered).toBe(registered);
       expect(dashboardBefore.gst).toMatchObject({
         oneA: before.gst.oneA,
         oneB: before.gst.oneB,
