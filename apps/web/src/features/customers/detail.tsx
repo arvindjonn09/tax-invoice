@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { FormMessage, sendJson } from "@/components/form/field";
 import { Editor } from "./editor";
+import { CustomerHistory } from "./history";
 import {
   useRemote,
   type Customer,
@@ -151,13 +152,7 @@ export function CustomerDetail({
         editable={editable}
         reload={reload}
       />
-      <section className="space-y-2 rounded-lg border bg-card p-6">
-        <h2 className="text-xl font-semibold">Job and invoice history</h2>
-        <p className="text-muted-foreground">
-          History will be available when the jobs and invoicing modules are
-          connected.
-        </p>
-      </section>
+      <CustomerHistory customerId={id} />
       <Link
         href="/customers"
         className="inline-flex min-h-11 items-center underline"
