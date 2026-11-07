@@ -1,4 +1,5 @@
 import type { TrialStatus } from "@jobflow/domain";
+import Link from "next/link";
 import type React from "react";
 import { DismissibleTrialBanner } from "./dismissible-trial-banner";
 
@@ -117,14 +118,12 @@ export function TrialBanner({
   );
   const request =
     viewer === "owner" && phase !== "normal" ? (
-      // Email until the request form at /settings/trial lands (#232), so the
-      // owner's way out never leads to a missing page (Codex review).
-      <a
+      <Link
         className="inline-flex min-h-11 items-center rounded-md border border-current px-3 font-medium underline-offset-2 hover:underline"
-        href={`mailto:${supportEmail}?subject=${encodeURIComponent("Trial extension request")}`}
+        href="/settings/trial"
       >
         Request extension
-      </a>
+      </Link>
     ) : null;
   const ends = shortDate(lastDay);
   const banner =
@@ -167,6 +166,13 @@ export function TrialBanner({
       >
         <span aria-hidden="true">{ICON[phase]}</span>
         <strong>{trialIndicatorText(status, lastDay)}</strong>
+        {/* Owners, managers and accountants can open the trial page (§12). */}
+        <Link
+          href="/settings/trial"
+          className="inline-flex min-h-11 items-center underline"
+        >
+          Trial details
+        </Link>
       </div>
       {banner}
     </>

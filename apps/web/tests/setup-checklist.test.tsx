@@ -9,6 +9,11 @@ const blank = {
   suburb: null,
   state: null,
   postcode: null,
+  phone: null,
+  businessEmail: null,
+  website: null,
+  about: null,
+  logoDocumentId: null,
   setupChecklistDismissedAt: null,
 };
 const address = {
@@ -16,6 +21,9 @@ const address = {
   suburb: "Sampleton",
   state: "NSW",
   postcode: "2000",
+  phone: "02 5550 0100",
+  about: "Synthetic about text",
+  logoDocumentId: "00000000-0000-4000-8000-000000000001",
 };
 const open = { readOnly: false };
 
@@ -25,6 +33,19 @@ describe("visibleSetupChecklist", () => {
       {
         id: "business_details",
         label: "Business address",
+        done: false,
+        href: "/settings",
+      },
+      {
+        id: "contact_details",
+        label: "Contact details",
+        done: false,
+        href: "/settings",
+      },
+      { id: "logo", label: "Logo", done: false, href: "/settings" },
+      {
+        id: "about",
+        label: "About your business",
         done: false,
         href: "/settings",
       },

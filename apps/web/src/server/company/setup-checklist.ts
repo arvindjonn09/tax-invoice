@@ -6,7 +6,7 @@ import { type PolicyHandler, privateJson } from "../authz/policy";
 
 /** One "Finish setting up your company" item (S5 AC8, design §10). */
 export type SetupItem = {
-  id: "business_details";
+  id: "business_details" | "contact_details" | "logo" | "about";
   label: string;
   done: boolean;
   href: string;
@@ -17,13 +17,15 @@ type ChecklistCompany = {
   suburb: string | null;
   state: string | null;
   postcode: string | null;
+  phone: string | null;
+  businessEmail: string | null;
+  website: string | null;
+  about: string | null;
+  logoDocumentId: string | null;
   setupChecklistDismissedAt: Date | null;
 };
 
-/**
- * The checklist items for a company. Only details an owner can already add
- * in Settings are listed; #228 adds contact details, logo and about.
- */
+/** The checklist items for a company (design §10), all edited in Settings. */
 export function setupItems(company: ChecklistCompany): SetupItem[] {
   return [
     {
@@ -35,6 +37,24 @@ export function setupItems(company: ChecklistCompany): SetupItem[] {
         company.state &&
         company.postcode,
       ),
+      href: "/settings",
+    },
+    {
+      id: "contact_details",
+      label: "Contact details",
+      done: Boolean(company.phone || company.businessEmail || company.website),
+      href: "/settings",
+    },
+    {
+      id: "logo",
+      label: "Logo",
+      done: Boolean(company.logoDocumentId),
+      href: "/settings",
+    },
+    {
+      id: "about",
+      label: "About your business",
+      done: Boolean(company.about),
       href: "/settings",
     },
   ];
@@ -69,6 +89,11 @@ export async function setupChecklistFor(
       suburb: true,
       state: true,
       postcode: true,
+      phone: true,
+      businessEmail: true,
+      website: true,
+      about: true,
+      logoDocumentId: true,
       setupChecklistDismissedAt: true,
     },
   });

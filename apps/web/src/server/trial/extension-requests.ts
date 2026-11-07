@@ -26,6 +26,8 @@ export type ExtensionRequestDependencies = {
 };
 
 /** What an owner sees. The approval note stays with the operator (D6). */
+export type OwnerRequestView = ReturnType<typeof ownerView>;
+
 function ownerView(row: {
   id: string;
   status: string;
@@ -35,6 +37,7 @@ function ownerView(row: {
   decidedAt: Date | null;
   newLastDay: Date | null;
   decisionNote: string | null;
+  closedReason: string | null;
 }) {
   const day = (date: Date | null) => date?.toISOString().slice(0, 10) ?? null;
   return {
@@ -46,6 +49,25 @@ function ownerView(row: {
     decidedAt: row.decidedAt?.toISOString() ?? null,
     newLastDay: day(row.newLastDay),
     reason: row.status === "declined" ? row.decisionNote : null,
+    closedReason: row.status === "closed" ? row.closedReason : null,
+  };
+}
+
+/** The pending request and the last 10 decisions (API and /settings/trial). */
+export async function ownerRequests(db: PrismaClient, companyId: string) {
+  const [pending, decisions] = await Promise.all([
+    db.trialExtensionRequest.findFirst({
+      where: { companyId, status: "pending" },
+    }),
+    db.trialExtensionRequest.findMany({
+      where: { companyId, status: { not: "pending" } },
+      orderBy: { decidedAt: "desc" },
+      take: 10,
+    }),
+  ]);
+  return {
+    pending: pending ? ownerView(pending) : null,
+    decisions: decisions.map(ownerView),
   };
 }
 
@@ -74,23 +96,8 @@ const quoted = (message: string) =>
 
 /** Owner side of S14, under `trial.request_extension`. */
 export function extensionRequestHandlers(deps: ExtensionRequestDependencies) {
-  const list: PolicyHandler<unknown> = async ({ actor }) => {
-    const db = deps.db();
-    const [pending, decisions] = await Promise.all([
-      db.trialExtensionRequest.findFirst({
-        where: { companyId: actor.companyId, status: "pending" },
-      }),
-      db.trialExtensionRequest.findMany({
-        where: { companyId: actor.companyId, status: { not: "pending" } },
-        orderBy: { decidedAt: "desc" },
-        take: 10,
-      }),
-    ]);
-    return privateJson({
-      pending: pending ? ownerView(pending) : null,
-      decisions: decisions.map(ownerView),
-    });
-  };
+  const list: PolicyHandler<unknown> = async ({ actor }) =>
+    privateJson(await ownerRequests(deps.db(), actor.companyId));
 
   const create: PolicyHandler<unknown> = async ({ actor, request }) => {
     const db = deps.db();
