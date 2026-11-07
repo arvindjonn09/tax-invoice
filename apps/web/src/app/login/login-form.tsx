@@ -7,7 +7,7 @@ type State =
   { kind: "idle" } | { kind: "pending" } | { kind: "error"; message: string };
 
 // Posts to Better Auth's HTTP endpoint so origin checks and sign-in throttling apply.
-export function LoginForm() {
+export function LoginForm({ next = "/home" }: { next?: string }) {
   const router = useRouter();
   const [state, setState] = useState<State>({ kind: "idle" });
 
@@ -24,7 +24,8 @@ export function LoginForm() {
       }),
     }).catch(() => undefined);
     if (response?.ok) {
-      router.push("/home");
+      // Checked on the server (safeNextPath): a same-origin path.
+      router.push(next);
       router.refresh();
       return;
     }
