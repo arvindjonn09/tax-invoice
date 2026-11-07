@@ -493,11 +493,11 @@ wording wins. #224 resolves the rows marked **to fix**.
 
 | Where (PR, file) | Built there | Change to |
 |---|---|---|
-| Trial banner, normal (#250, `components/shell/banners.tsx`) | "Free trial: N days left · Ends {date}" | "N days remaining" (S8 AC1) |
-| Trial banner, critical (#250) | "Last day of your free trial" | "Last day of your trial · Read-only from 12:00 am tomorrow (Sydney time)" |
-| Trial banner, expired, owner (#250) | "Your free trial has ended." | "Trial ended 1 Dec 2026 · Read-only" plus the banner text above |
-| Trial banner, expired, workers (#250) | "This company's free trial has ended." + "Contact your company owner." | "This company's account is read-only. Contact your owner." (S8 AC2) |
-| Warning phase (#250) | Same bar, warning colours | "N days remaining · Trial expires on 1 Dec 2026", plus the dismissible banner with Request extension (owner) |
+| Trial banner, normal (`components/shell/banners.tsx`) | "N days remaining" | Done in #226 |
+| Trial banner, critical | "Last day of your trial · Read-only from 12:00 am tomorrow (Sydney time)" | Done in #226 |
+| Trial banner, expired, owner | "Trial ended 1 Dec 2026 · Read-only" plus the banner | Done in #226 |
+| Trial banner, expired, workers | "This company's account is read-only. Contact your owner." | Done in #226 |
+| Warning phase | "N days remaining · Trial expires on 1 Dec 2026" + dismissible banner, Request extension for owners | Done in #226 |
 | Sign-up success (main, `signup-form.tsx`) | h2 "Check your email" · "We've sent a link to verify your address. Open it within 24 hours, then sign in…" | Keep the in-place h2. Lead with S2 AC1's "Check your email to verify your address", then the address and expiry (§2) |
 | Sign-up route (architecture lists `/signup/check-email`) | Built in place on `/signup` | **Accepted deviation:** in place, so the email never travels in a URL. The architecture's route list should drop `/signup/check-email` |
 | Verify link (main, `verify-client.tsx`) | "Confirm my email" button; token spent on press; h2 "Email verified"; invalid as an alert plus h2 | Matches §3, whose headings now follow the build. **Deviation from S3 AC2** ("opening the link verifies"): one press, against mail-scanner pre-account hijack |

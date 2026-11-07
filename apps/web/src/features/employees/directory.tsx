@@ -8,6 +8,7 @@ import { TextField, Field } from "@/components/form/field";
 import { useRemote } from "@/components/data/use-remote";
 import { EmployeeEditor } from "./editor";
 import type { Employee } from "./types";
+import { count } from "@/lib/plural";
 
 export function EmployeeDirectory({ editable }: { editable: boolean }) {
   const router = useRouter();
@@ -90,7 +91,7 @@ export function EmployeeDirectory({ editable }: { editable: boolean }) {
       ) : data ? (
         <>
           <p className="text-sm text-muted-foreground">
-            {data.total} employees · Page {page} of{" "}
+            {count(data.total, "employee")} · Page {page} of{" "}
             {Math.max(1, Math.ceil(data.total / data.pageSize))} · Name A–Z
           </p>
           {data.employees.length ? (

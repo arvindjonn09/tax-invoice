@@ -27,6 +27,7 @@ import {
   type Invoice,
   TAX_CODE_OPTIONS,
   type TaxCode,
+  documentName,
   taxLabel,
 } from "./types";
 
@@ -227,7 +228,11 @@ export function InvoiceBuilder({
     setMessage({ kind: "success", text: "Draft saved." });
     // Give the new draft its own URL without remounting this form (a
     // navigation would swap the builder out from under the user).
-    if (!saved) window.history.replaceState(null, "", `/invoices/${next.id}`);
+    if (!saved) {
+      window.history.replaceState(null, "", `/invoices/${next.id}`);
+      // The tab names the saved draft, not "New invoice" (#307).
+      document.title = `Draft ${documentName(next)} · JobFlow`;
+    }
     return next;
   }
 

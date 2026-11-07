@@ -45,7 +45,14 @@ const percent = (bp: string | null) => {
   return `${value < 0n ? "−" : ""}${abs / 100n}.${(abs % 100n).toString().padStart(2, "0")}% margin`;
 };
 
-export function Dashboard({ today }: { today: string }) {
+export function Dashboard({
+  today,
+  notice,
+}: {
+  today: string;
+  /** Shown under the page heading, e.g. the owner's setup checklist (#225). */
+  notice?: ReactNode;
+}) {
   const month = Number(today.slice(5, 7));
   const initial = {
     from: `${today.slice(0, 4)}-${String(Math.floor((month - 1) / 3) * 3 + 1).padStart(2, "0")}-01`,
@@ -82,6 +89,7 @@ export function Dashboard({ today }: { today: string }) {
         title="Dashboard"
         description="Profit, cash and what's owing, from your recorded work."
       />
+      {notice}
       <form
         className={`${CARD} grid items-end gap-4 sm:grid-cols-2 lg:grid-cols-5`}
         aria-label="Dashboard filters"
@@ -217,10 +225,10 @@ export function Dashboard({ today }: { today: string }) {
                 <Figure label="Customer overdue">
                   {amount(data.ledger.receivables.overdue, "incl GST")}
                 </Figure>
-                <Figure label="Supplier bills owing">
+                <Figure label="Supplier money owing">
                   {amount(data.ledger.payables.total, "incl GST")}
                 </Figure>
-                <Figure label="Supplier bills overdue">
+                <Figure label="Supplier money overdue">
                   {amount(data.ledger.payables.overdue, "incl GST")}
                 </Figure>
               </dl>
