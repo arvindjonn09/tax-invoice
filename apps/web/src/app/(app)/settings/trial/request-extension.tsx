@@ -2,6 +2,7 @@
 import { useRouter } from "next/navigation";
 import { type FormEvent, useId, useState } from "react";
 import { StatusPill } from "@/components/status-pill";
+import { useFocusWhen } from "@/lib/focus";
 import { Button } from "@/components/ui/button";
 import { sydneyDateTime, waitText } from "./format";
 
@@ -26,6 +27,11 @@ export function RequestExtension({
   const id = useId();
   const [message, setMessage] = useState("");
   const [state, setState] = useState<State>({ kind: "idle" });
+  // Focus the outcome once per outcome, never on each keystroke.
+  const sentRef = useFocusWhen<HTMLParagraphElement>(state.kind === "sent");
+  const errorRef = useFocusWhen<HTMLParagraphElement>(
+    state.kind === "error" ? state : null,
+  );
   const email = (
     <a
       className="font-semibold underline [overflow-wrap:anywhere]"
@@ -38,7 +44,7 @@ export function RequestExtension({
   if (state.kind === "sent") {
     return (
       <p
-        ref={(node) => node?.focus()}
+        ref={sentRef}
         tabIndex={-1}
         role="status"
         className="rounded-lg bg-success p-4 text-success-foreground"
@@ -103,7 +109,7 @@ export function RequestExtension({
         <p
           // The button is disabled while sending, so focus would fall to
           // the page: move it to the error instead.
-          ref={(node) => node?.focus()}
+          ref={errorRef}
           tabIndex={-1}
           role="alert"
           className="rounded-lg bg-danger p-4 text-danger-foreground"

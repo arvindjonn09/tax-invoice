@@ -118,6 +118,12 @@ test("an owner on a trial requests an extension, with every failure explained", 
       .getByRole("alert")
       .filter({ hasText: "Something went wrong" });
     await expect(failed).toBeFocused();
+    // Typing after an error keeps focus in the field (no refocus per key).
+    const message = page.getByLabel("Message (optional)");
+    await message.click();
+    await message.pressSequentially("abc");
+    await expect(message).toBeFocused();
+    await expect(message).toHaveValue("abc");
     await page.unroute("**/api/company/trial/extension-requests");
     await page.route("**/api/company/trial/extension-requests", (route) =>
       route.request().method() === "POST"
@@ -136,7 +142,6 @@ test("an owner on a trial requests an extension, with every failure explained", 
     await page.unroute("**/api/company/trial/extension-requests");
 
     // The live count, then a request sent from the keyboard.
-    const message = page.getByLabel("Message (optional)");
     await message.fill("Synthetic: a few more weeks, please.");
     await expect(page.getByText("36 of 1000 characters")).toBeVisible();
     await send.focus();
