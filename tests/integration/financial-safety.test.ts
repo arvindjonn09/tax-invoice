@@ -16,7 +16,7 @@ import {
   rateHandlers,
   timesheetHandlers,
 } from "../../apps/web/src/server/timesheets/handlers";
-import { syntheticAbn } from "../helpers/abn";
+import { SYNTHETIC_ADDRESS, syntheticAbn } from "../helpers/abn";
 import {
   type CommittedDatabase,
   withCommittedDatabase,
@@ -93,7 +93,11 @@ beforeAll(async () => {
   companyId = own.id;
   await db.company.update({
     where: { id: companyId },
-    data: { legalName: "Sample Pty Ltd", abn: syntheticAbn("525252525") },
+    data: {
+      legalName: "Sample Pty Ltd",
+      abn: syntheticAbn("525252525"),
+      ...SYNTHETIC_ADDRESS,
+    },
   });
   await db.companyGstRegistration.create({
     data: {
