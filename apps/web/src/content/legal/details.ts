@@ -10,7 +10,7 @@ export function legalDetails(env: Env = process.env) {
     abn: env.LEGAL_ABN?.trim() || "[ABN]",
     state: "New South Wales",
     hostingLocation: "Australia",
-    effectiveDate: "[date these terms take effect]",
+    effectiveDate: "7 November 2026",
   };
 }
 
