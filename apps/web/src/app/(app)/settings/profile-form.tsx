@@ -1,4 +1,5 @@
 "use client";
+import { ReadOnlyNotice, useWritable } from "@/components/shell/company-access";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
 import {
@@ -32,11 +33,12 @@ const formatAbn = (digits: string | null) =>
 /** Company profile and numbering. Owners edit; others see it read-only. */
 export function ProfileForm({
   profile,
-  editable,
+  editable: allowed,
 }: {
   profile: Profile;
   editable: boolean;
 }) {
+  const editable = useWritable(allowed);
   const router = useRouter();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{
@@ -76,6 +78,7 @@ export function ProfileForm({
   return (
     <form onSubmit={onSubmit} noValidate className="space-y-6">
       <FormMessage message={message} />
+      {allowed ? <ReadOnlyNotice /> : null}
       <fieldset disabled={!editable} className="space-y-4">
         <legend className="sr-only">Company profile</legend>
         <div className="grid gap-4 md:grid-cols-2">

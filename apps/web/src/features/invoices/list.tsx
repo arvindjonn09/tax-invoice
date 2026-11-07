@@ -1,4 +1,5 @@
 "use client";
+import { WriteAction } from "@/components/shell/company-access";
 import Link from "next/link";
 import { useState } from "react";
 import { PageHeader } from "@/components/shell/page-header";
@@ -59,11 +60,11 @@ export function InvoiceList({
         title="Invoices"
         description="Tax invoices, invoices and credit notes. Issued documents are read only."
         actions={
-          canWrite ? (
+          <WriteAction allowed={canWrite} label="New invoice">
             <Button asChild>
               <Link href="/invoices/new">New invoice</Link>
             </Button>
-          ) : null
+          </WriteAction>
         }
       />
       <div className="grid items-end gap-4 rounded-lg border bg-card p-4 sm:grid-cols-3">

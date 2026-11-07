@@ -19,6 +19,14 @@ export default async function LoginPage({
       <p>Use the email and password for your JobFlow account.</p>
       <section className="rounded-lg border bg-card p-6 text-card-foreground">
         <LoginForm next={target} />
+        <p>
+          <Link
+            href="/forgot-password"
+            className="inline-flex min-h-11 items-center text-link underline"
+          >
+            Forgot your password?
+          </Link>
+        </p>
       </section>
       <p>
         New to JobFlow?{" "}
