@@ -6,6 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- Issuing an invoice now needs the company's legal name, ABN and full address, whether or not it's registered for GST, and a due date on or after the issue date ([#348](https://github.com/arvindjonn09/tax-invoice/issues/348)).
 - Operator area screens: extension requests (pending and decided), request review with approve or decline, company search with direct extensions and access changes, TOTP enrolment at `/operator/mfa`, and the authentication-code step on `/login`, with an operator runbook ([#232](https://github.com/arvindjonn09/tax-invoice/issues/232)).
 - Settings → Trial: owners, managers and accountants see the trial status; owners can request more time, see whether a request is pending, and see past outcomes. The trial banner's "Request extension" now opens it ([#232](https://github.com/arvindjonn09/tax-invoice/issues/232), part 1).
 - The Terms of Service and Privacy Policy are published, in effect from 7 November 2026, after the owner's approval ([#212](https://github.com/arvindjonn09/tax-invoice/issues/212)).

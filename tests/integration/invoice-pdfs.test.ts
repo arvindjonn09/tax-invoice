@@ -14,7 +14,7 @@ import {
   storePdfAfterResponse,
   invoicePdfHandlers,
 } from "../../apps/web/src/server/invoices/pdf-store";
-import { syntheticAbn } from "../helpers/abn";
+import { SYNTHETIC_ADDRESS, syntheticAbn } from "../helpers/abn";
 import {
   type CommittedDatabase,
   withCommittedDatabase,
@@ -84,6 +84,7 @@ beforeAll(async () => {
     data: {
       legalName: "Sample Contracting Pty Ltd",
       abn: syntheticAbn("484800001"),
+      ...SYNTHETIC_ADDRESS,
     },
   });
   await db.companyGstRegistration.create({

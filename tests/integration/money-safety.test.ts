@@ -12,7 +12,7 @@ import {
 } from "../../apps/web/src/server/bills/handlers";
 import { invoiceHandlers } from "../../apps/web/src/server/invoices/handlers";
 import { receiptHandlers } from "../../apps/web/src/server/receipts/handlers";
-import { syntheticAbn } from "../helpers/abn";
+import { SYNTHETIC_ADDRESS, syntheticAbn } from "../helpers/abn";
 import {
   type CommittedDatabase,
   withCommittedDatabase,
@@ -96,7 +96,11 @@ beforeAll(async () => {
   companyId = company.id;
   await db.company.update({
     where: { id: companyId },
-    data: { legalName: "Sample Pty Ltd", abn: syntheticAbn("525252525") },
+    data: {
+      legalName: "Sample Pty Ltd",
+      abn: syntheticAbn("525252525"),
+      ...SYNTHETIC_ADDRESS,
+    },
   });
   await db.companyGstRegistration.create({
     data: {

@@ -8,6 +8,7 @@ Implement GST calculation and BAS **draft support**, not automated BAS lodgement
 - GST accounting basis: CASH or NON_CASH (accrual); effective-dated and locked after a period is finalised.
 - BAS reporting period configuration and financial period lock/finalisation; GST number format and liability reporting.
 - A company **not registered for GST must not charge GST** and must issue an 'Invoice', not a 'Tax Invoice'. Use GST 0 with distinct out-of-scope/unregistered classification.
+- JobFlow refuses to issue any invoice, registered or not, until the company has a legal name, ABN and full address. Business customers generally have to withhold 47% of a payment when no ABN is quoted.
 
 ## Tax treatment per line
 - TAXABLE_10: ordinarily 10% tax on GST-exclusive amount.

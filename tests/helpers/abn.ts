@@ -11,3 +11,11 @@ export function syntheticAbn(body: string): string {
   }
   throw new Error(`No checksum lead for ${body}`);
 }
+
+/** A made-up address; every company needs one before it can issue an invoice. */
+export const SYNTHETIC_ADDRESS = {
+  addressLine1: "1 Synthetic Road",
+  suburb: "Testville",
+  state: "NSW",
+  postcode: "2000",
+} as const;
