@@ -11,6 +11,9 @@ The public site is checked from outside this host, so a down host or tunnel is s
 
 ## Setup (owner, once)
 
+GitHub emails a scheduled run's failure to the person who **created the workflow or last changed its schedule**, not to every repository owner. In this repository all commits are made through the owner's GitHub account, so that's the owner. If someone else ever edits `uptime.yml`'s `cron`, the emails go to them: re-save the schedule from the owner's account, or add a second alert (for example an UptimeRobot monitor).
+
+
 1. In GitHub, under **Settings → Notifications → System → Actions**, make sure **"Send notifications for failed workflows only"** is on and email is ticked.
 2. Run it once by hand to check: **Actions → Uptime check → Run workflow**.
 
