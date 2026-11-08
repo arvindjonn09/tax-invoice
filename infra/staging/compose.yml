@@ -63,9 +63,12 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      # #136: uploads are refused (fail closed) until clamd answers.
+      clamav:
+        condition: service_healthy
     # No published ports: only nginx reaches the app.
     expose: ["3000"]
-    networks: [data, edge]
+    networks: [data, edge, scan]
     mem_limit: 1g
     pids_limit: 256
     read_only: true
@@ -73,6 +76,83 @@ services:
       - /tmp
       - /app/apps/web/.next/cache
     cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # Malware scanning for uploads (#136). The app streams every upload to
+  # clamd (INSTREAM on 3310) before storing it. clamd is the container's only
+  # process, so if it dies the container exits and `restart` brings it back;
+  # freshclam runs beside it on the shared signature volume, and clamd's
+  # SelfCheck reloads new signatures.
+  clamav:
+    <<: *logging
+    image: clamav/clamav:1.4@sha256:8ad6197396974726c35d017e50aaaaf4b91745726a04faec8480c203edd98052
+    restart: unless-stopped
+    # Hostile files are parsed here: never as root, no capabilities, a
+    # read-only root filesystem, size-capped scratch space, no way out.
+    user: clamav
+    entrypoint: ["clamd"]
+    command: ["--foreground", "--config-file=/etc/clamav/clamd.conf"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      - /var/log/clamav:size=16m,mode=1777
+      - /run/clamav:size=1m,mode=1777
+    volumes:
+      - clamav_db:/var/lib/clamav
+      - ./clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+    # A changed clamd.conf changes this label, so `up` recreates clamd (a
+    # bind-mounted file replaced by git checkout is otherwise never re-read).
+    # deploy.sh sets CLAMD_CONF_SHA; a manual `up` without it uses "manual".
+    labels:
+      jobflow.clamd-conf-sha256: ${CLAMD_CONF_SHA:-manual}
+    depends_on:
+      freshclam:
+        condition: service_healthy
+    # scan: reachable from the web app only, with no route out.
+    networks: [scan]
+    expose: ["3310"]
+    # Signatures take about 1.2-1.5 GB in memory, roughly double while reloading.
+    mem_limit: 3g
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    security_opt: ["no-new-privileges:true"]
+
+  # Signature updates for clamd, on the same volume. Healthy once a database
+  # is present, so clamd never starts empty on a fresh host.
+  freshclam:
+    <<: *logging
+    image: clamav/clamav:1.4@sha256:8ad6197396974726c35d017e50aaaaf4b91745726a04faec8480c203edd98052
+    restart: unless-stopped
+    user: clamav
+    entrypoint: ["freshclam"]
+    command: ["--foreground", "--daemon", "--checks=12"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/log/clamav:size=16m,mode=1777
+      - /run/clamav:size=1m,mode=1777
+    volumes:
+      - clamav_db:/var/lib/clamav
+    networks: [clamav_updates]
+    mem_limit: 1g
+    pids_limit: 64
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "ls /var/lib/clamav/main.cvd /var/lib/clamav/main.cld 2>/dev/null | grep -q main"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # The image bundles main.cvd, so this is normally healthy at once; the
+      # margin covers a host whose volume predates the image.
+      start_period: 600s
     security_opt: ["no-new-privileges:true"]
 
   nginx:
@@ -149,8 +229,14 @@ networks:
   data:
     internal: true
   edge: {}
+  # Web app ↔ clamd only, no route out (#136).
+  scan:
+    internal: true
+  # clamd/freshclam only: outbound for signature updates.
+  clamav_updates: {}
 
 volumes:
+  clamav_db:
   postgres_data:
   letsencrypt:
   acme_webroot:
