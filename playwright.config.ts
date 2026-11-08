@@ -22,8 +22,16 @@ const productionBuild =
  * production site: demo-safe auth, no required scanner or Turnstile (#261,
  * #217), and no email sweep, so tests still read queued email themselves.
  */
+const clamdPort = Number(process.env.JOBFLOW_E2E_CLAMD_PORT ?? 3311);
 const buildSafety: Record<string, string> = productionBuild
-  ? { APP_ENV: "development", EMAIL_SWEEP: "off" }
+  ? {
+      APP_ENV: "development",
+      EMAIL_SWEEP: "off",
+      // Every production build requires the upload scanner (#136): a fake
+      // clamd, started below, stands in for it.
+      CLAMAV_HOST: "127.0.0.1",
+      CLAMAV_PORT: String(clamdPort),
+    }
   : {};
 /** Must match tests/e2e/operator.spec.ts. */
 const E2E_OPERATOR_ID = "00000000-0000-4000-8000-00000000e2e0";
@@ -63,10 +71,22 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: {
-    command: `pnpm --filter @jobflow/web exec next ${productionBuild ? "start" : "dev"} --hostname 127.0.0.1 --port ${port}`,
-    url: baseURL,
-    reuseExistingServer: false,
-    env: serverEnv,
-  },
+  webServer: [
+    ...(productionBuild
+      ? [
+          {
+            command: "pnpm exec tsx tests/e2e/fake-clamd-server.ts",
+            port: clamdPort,
+            reuseExistingServer: false,
+            env: { JOBFLOW_E2E_CLAMD_PORT: String(clamdPort) },
+          },
+        ]
+      : []),
+    {
+      command: `pnpm --filter @jobflow/web exec next ${productionBuild ? "start" : "dev"} --hostname 127.0.0.1 --port ${port}`,
+      url: baseURL,
+      reuseExistingServer: false,
+      env: serverEnv,
+    },
+  ],
 });
