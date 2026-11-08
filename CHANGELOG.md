@@ -6,6 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- Backups to the Windows share now notice when the share is offline, grant read access correctly on PostgreSQL 16, use the app database's own host and port, and keep database passwords off command lines ([#353](https://github.com/arvindjonn09/tax-invoice/issues/353)).
 - Nightly encrypted backups of the database and documents on the self-hosted site, copied to a Windows file share and verified there; backups missed while the Windows computer is off are copied within an hour of it coming back ([#351](https://github.com/arvindjonn09/tax-invoice/issues/351)).
 - Mistyping the password during operator two-factor enrolment no longer uses up the one-time code.
 - In production, a platform operator has to pass TOTP again after 12 hours ([#323](https://github.com/arvindjonn09/tax-invoice/issues/323)).

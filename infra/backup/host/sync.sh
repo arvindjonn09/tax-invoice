@@ -14,14 +14,16 @@ mkdir -p "$BACKUP_ROOT"
 exec 9>"$BACKUP_ROOT/.sync.lock"
 flock -w 1800 9
 
-# Touching the folder mounts the share on demand. Bounded, because a CIFS
-# mount attempt to a sleeping computer can hang.
-timeout 60 ls "$mount" >/dev/null 2>&1 || true
-if ! mountpoint -q "$mount"; then
+. infra/backup/host/share.sh
+if ! share_mounted "$mount"; then
   echo "The share isn't reachable; local backups are kept and will be copied when it's back." >&2
   exit 2
 fi
-mkdir -p "$BACKUP_SHARE_DIR/.incoming"
+# The first write to the share is bounded too: it can still drop away.
+if ! timeout 60 mkdir -p "$BACKUP_SHARE_DIR/.incoming"; then
+  echo "The share stopped answering; local backups are kept and will be copied when it's back." >&2
+  exit 2
+fi
 
 copied=0
 for dir in "$BACKUP_ROOT"/*/; do
