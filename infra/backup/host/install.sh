@@ -141,6 +141,8 @@ umask 077
   # The app's own host and port, not an assumed 127.0.0.1:5432.
   echo "DATABASE_URL=postgresql://jobflow_backup:$role_password@$db_host:$db_port/$db_name"
   grep -E '^(APP_ENV|S3_[A-Z_]*|MINIO_ROOT_USER|MINIO_ROOT_PASSWORD|MINIO_API_PORT)=' "$app/.env" || true
+  # For the daily health check's email alert (#355).
+  grep -E '^(SMTP_[A-Z_]*|EMAIL_FROM|EMAIL_REPLY_TO|OPERATOR_NOTIFY_EMAIL)=' "$app/.env" || true
   echo "BACKUP_ROOT=/home/prod/jobflow-backups"
   echo "BACKUP_SHARE_MOUNT=$mountpoint"
   echo "BACKUP_SHARE_DIR=$share_dir"
@@ -156,12 +158,15 @@ if [ ! -s /etc/jobflow/backup-key.env ]; then
 fi
 chmod 0600 /etc/jobflow/backup-key.env
 
-echo "==> Installing the nightly backup (02:15 Sydney time) and the hourly copy retry"
+echo "==> Installing the nightly backup (02:15 Sydney time), the hourly copy retry"
+echo "    and the daily health check that emails you about problems (09:00)"
 install -o root -g root -m 0644 "$here/jobflow-backup.service" \
   "$here/jobflow-backup.timer" "$here/jobflow-backup-sync.service" \
-  "$here/jobflow-backup-sync.timer" /etc/systemd/system/
+  "$here/jobflow-backup-sync.timer" "$here/jobflow-backup-health.service" \
+  "$here/jobflow-backup-health.timer" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now jobflow-backup.timer jobflow-backup-sync.timer
+systemctl enable --now jobflow-backup.timer jobflow-backup-sync.timer \
+  jobflow-backup-health.timer
 
 echo "==> Making the first backup now"
 if systemctl start jobflow-backup.service; then
@@ -169,6 +174,20 @@ if systemctl start jobflow-backup.service; then
   ls -1 "$share_dir" | grep -v '^\.' | tail -3
 else
   echo "The first backup failed. See: journalctl -u jobflow-backup.service -n 50" >&2
+fi
+
+echo "==> Sending a test alert email to OPERATOR_NOTIFY_EMAIL"
+if (
+  set -a
+  . /etc/jobflow/backup.env
+  set +a
+  cd "$app"
+  runuser -u prod -- env "PATH=$PATH" sh infra/backup/host/health.sh --test
+); then
+  echo "Check that inbox (and its spam folder) for \"JobFlow backup alerts are set up\"."
+else
+  echo "The test email failed. Check SMTP_* and OPERATOR_NOTIFY_EMAIL in $app/.env," >&2
+  echo "then run this script again." >&2
 fi
 
 if [ "$new_key" = yes ]; then

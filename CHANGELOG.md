@@ -6,6 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- A daily backup check on the self-hosted site emails the operator when the nightly backup fails or the Windows file share falls more than 2 days behind ([#355](https://github.com/arvindjonn09/tax-invoice/issues/355)).
 - Backups to the Windows share now notice when the share is offline, grant read access correctly on PostgreSQL 16, use the app database's own host and port, and keep database passwords off command lines ([#353](https://github.com/arvindjonn09/tax-invoice/issues/353)).
 - A timer runs the scheduled jobs every 5 minutes on the self-hosted site, so trial reminders go out, with one install script for it and the maintenance page ([#234](https://github.com/arvindjonn09/tax-invoice/issues/234)).
 - A "We'll be back soon" page during deploys and whenever the app is down, with a deploy script for the self-hosted site that keeps it up until the new build is ready ([#326](https://github.com/arvindjonn09/tax-invoice/issues/326)).
