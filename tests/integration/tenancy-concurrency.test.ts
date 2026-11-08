@@ -20,7 +20,7 @@ await withIsolatedDatabase(async env => {
   try {
     await setup.query('BEGIN');
     await setup.query('INSERT INTO users(id,email) VALUES ($1,$2)', [user, 'synthetic-concurrency@example.test']);
-    await setup.query('INSERT INTO companies(id,name,created_by) VALUES ($1,$2,$3)', [company, 'Synthetic concurrency company', user]);
+    await setup.query("INSERT INTO companies(id,name,created_by,access_mode) VALUES ($1,$2,$3,'unrestricted')", [company, 'Synthetic concurrency company', user]);
     await setup.query("INSERT INTO memberships(company_id,user_id,created_by,role) VALUES ($1,$2,$2,'owner')", [company,user]);
     await setup.query('COMMIT');
   } finally { setup.release(); }

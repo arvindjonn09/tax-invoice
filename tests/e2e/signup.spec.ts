@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 import { createDatabaseClient } from "../../packages/database/src/index";
 import { issueToken } from "../../apps/web/src/server/account/tokens";
 import { isolatedTestConnection } from "../helpers/test-environment";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #217/#218/#220/#224: sign up → verify → onboarding → trial.
 test.skip(
@@ -56,13 +57,18 @@ test("a visitor signs up, sets a password from the email, then signs in", async 
     const token = await db.$transaction((tx) =>
       issueToken(tx, user.id, "password_reset"),
     );
-    await page.goto(`/reset-password#token=${token}`);
+    // The emailed link carries setup=1 (#335): the page offers the name.
+    await page.goto(`/reset-password#token=${token}&setup=1`);
+    await page.getByLabel("Your name").fill("Pat Mailbox");
     await page.getByLabel("New password", { exact: true }).fill(PASSWORD);
     await page.getByLabel("Confirm new password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Change password" }).click();
+    await page.getByRole("button", { name: "Set password" }).click();
     await expect(
-      page.getByRole("heading", { name: "Password changed" }),
+      page.getByRole("heading", { name: "Password set" }),
     ).toBeVisible();
+    expect(
+      (await db.user.findUniqueOrThrow({ where: { id: user.id } })).name,
+    ).toBe("Pat Mailbox");
     // The token is removed from the address bar.
     expect(new URL(page.url()).hash).toBe("");
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
@@ -144,7 +150,7 @@ test("a visitor signs up, sets a password from the email, then signs in", async 
 
     // #233: three days left, so the owner sees a one-time notice.
     const lastDay = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: company.id },
       data: {
         trialLastDay: new Date(lastDay.toISOString().slice(0, 10)),
@@ -258,7 +264,8 @@ test("forgot password, then reset with the emailed link", async ({ page }) => {
     await page.getByLabel("Confirm new password").fill(fresh);
     await page.getByRole("button", { name: "Change password" }).click();
     await expect(
-      page.getByRole("heading", { name: "Password changed" }),
+      // Its first password: the account signed up and never set one (#335).
+      page.getByRole("heading", { name: "Password set" }),
     ).toBeVisible();
 
     // The link works once. (Leave first: a hash-only change isn't a load.)

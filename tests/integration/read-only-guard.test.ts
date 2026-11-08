@@ -23,6 +23,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate, operatorUpdateInTx } from "../helpers/operator-update";
 
 // #222: the route-level read-only guard (ADR 0004 D4), its allowlist and the
 // handlers' exemption keys, over the #211 commit-time database guard.
@@ -80,7 +81,7 @@ async function signIn(email: string) {
 }
 
 function setTrial(lastDay: string | null) {
-  return db.company.update({
+  return operatorUpdate(db, {
     where: { id: companyId },
     data:
       lastDay === null
@@ -223,7 +224,7 @@ describe("every unsafe route through withPolicy", () => {
           target: { type: "customer", id: "synthetic" },
         });
         // Expiry lands before commit.
-        await tx.company.update({
+        await operatorUpdateInTx(tx, {
           where: { id: actor.companyId },
           data: { trialLastDay: new Date("2020-01-01T00:00:00Z") },
         });
@@ -355,7 +356,7 @@ describe("allowlisted user routes while read-only", () => {
     const toRevoke = await issue("ro-revoked@jobflow.invalid");
     // Created after the trial ended (backdate the trial instead of the clock).
     const late = await issue("ro-late@jobflow.invalid");
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: companyId },
       data: {
         accessMode: "trial",
