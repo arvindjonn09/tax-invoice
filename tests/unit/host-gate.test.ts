@@ -64,3 +64,79 @@ describe("deploy script (#326)", () => {
     expect(deploy).toMatch(/\$\(id -u\)" -eq 0/);
   });
 });
+
+describe("scheduled jobs timer (#234)", () => {
+  const service = read("jobflow-jobs.service");
+  const timer = read("jobflow-jobs.timer");
+
+  it("runs every 5 minutes and catches up after downtime", () => {
+    expect(timer).toContain("OnCalendar=*:0/5");
+    expect(timer).toContain("Persistent=true");
+  });
+
+  it("runs as prod, never root, and stands aside during maintenance", () => {
+    expect(service).toContain("User=prod");
+    expect(service).toContain("ExecStart=/home/prod/.local/bin/pnpm jobs:run");
+    expect(service).toContain(
+      "ExecCondition=/usr/bin/test ! -e /var/lib/jobflow-maintenance/on",
+    );
+  });
+
+  it("is installed with the rest of the host setup", () => {
+    const install = read("install.sh");
+    for (const file of [
+      "jobflow-jobs.service",
+      "jobflow-jobs.timer",
+      "nginx-gate.conf",
+      "sudoers-jobflow-deploy",
+    ])
+      expect(install).toContain(file);
+    expect(install).toContain("visudo -cf");
+    expect(install).toContain("systemctl enable --now jobflow-jobs.timer");
+  });
+});
+
+describe("starting at boot (#234)", () => {
+  const services = read("jobflow-services.service");
+  const dropIn = read("jobflow.service.d/services.conf");
+  const install = read("install.sh");
+
+  it("starts the database and file storage as prod, and stops them cleanly", () => {
+    expect(services).toMatch(/^User=prod$/m);
+    expect(services).toMatch(
+      /^ExecStart=\/home\/prod\/\.local\/bin\/jobflow-services start$/m,
+    );
+    expect(services).toMatch(
+      /^ExecStop=\/home\/prod\/\.local\/bin\/jobflow-services stop$/m,
+    );
+    expect(services).toMatch(/^WantedBy=multi-user\.target$/m);
+  });
+
+  it("starts the app and the jobs only after them", () => {
+    for (const unit of [dropIn, read("jobflow-jobs.service")]) {
+      expect(unit).toMatch(/^After=.*jobflow-services\.service/m);
+      expect(unit).toMatch(/^Wants=.*jobflow-services\.service/m);
+    }
+  });
+
+  it("removes nginx's sample site only when it has just installed nginx", () => {
+    const nginx = install.slice(
+      install.indexOf("Installing nginx"),
+      install.indexOf("Installing the maintenance page"),
+    );
+    const [kept, fresh] = nginx.split("else");
+    expect(kept).toContain("ok installed");
+    expect(kept).not.toContain("rm -f");
+    expect(fresh).toContain("apt-get install -y nginx");
+    expect(fresh).toContain("rm -f /etc/nginx/sites-enabled/default");
+  });
+
+  it("is installed and enabled by the install script", () => {
+    expect(install).toContain(
+      "systemctl enable --now jobflow-services.service",
+    );
+    expect(install).toContain(
+      "/etc/systemd/system/jobflow.service.d/services.conf",
+    );
+  });
+});
