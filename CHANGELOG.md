@@ -7,6 +7,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 ### Added
 
 - Password reset emails are limited per IP and per account, so someone who knows an address can't use up its resets ([#318](https://github.com/arvindjonn09/tax-invoice/issues/318)).
+- Uploaded files are scanned for malware with ClamAV before they're stored. Infected and password-protected files are refused, and in every production build uploads stop safely when the scanner is unavailable (#136).
 - Signing up no longer takes a password: you set it from an emailed link, so nobody can choose a password for an address they don't control ([#327](https://github.com/arvindjonn09/tax-invoice/issues/327)).
 - A timer runs the scheduled jobs every 5 minutes on the self-hosted site, so trial reminders go out, with one install script for it and the maintenance page ([#234](https://github.com/arvindjonn09/tax-invoice/issues/234)).
 - A "We'll be back soon" page during deploys and whenever the app is down, with a deploy script for the self-hosted site that keeps it up until the new build is ready ([#326](https://github.com/arvindjonn09/tax-invoice/issues/326)).

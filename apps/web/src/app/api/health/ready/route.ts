@@ -1,12 +1,15 @@
 import { getDatabase, isProductionEnvironment } from "../../../../server/auth";
+import { scannerFromEnvironment } from "../../../../server/documents/scanner";
 import { storeFromEnvironment } from "../../../../server/documents/store";
 import { cachedReadiness } from "../../../../server/health/readiness";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Readiness (#64): the database answers, document storage is configured and,
- * in production, extension requests have somewhere to go (#231).
+ * Readiness (#64): the database answers, document storage is configured,
+ * in production extension requests have somewhere to go (#231), and where
+ * malware scanning is required (#136) clamd answers PING, so a deploy can't
+ * report success while every upload would get a 503.
  * Says only ready / not ready — never which part failed or how it is set up,
  * so the probe can be public behind the proxy.
  */
@@ -33,6 +36,11 @@ const probe = cachedReadiness(async () => {
     } finally {
       clearTimeout(timer);
     }
+  }
+  if (ready) {
+    const scanning = scannerFromEnvironment();
+    if (scanning.required)
+      ready = scanning.scanner !== null && (await scanning.scanner.ping());
   }
   return ready;
 });
