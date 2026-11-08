@@ -211,7 +211,8 @@ operator.
    - a "your password was changed" notice is sent to the address;
    - I'm asked to sign in.
 4. Given an invalid, expired or used link, then the password is unchanged and I can request a new one.
-5. **Throttling:** 3 requests per account per hour and 10 per IP per hour, plus Turnstile. Throttled
+5. **Throttling:** per account and IP, 3 requests an hour and 6 a day; per account, 10 an hour and 24 a day; and 10
+   per IP per hour, plus Turnstile. One IP can't use up the account's limit (#318). Throttled
    requests still return the generic message. They don't send an email and they're counted for monitoring.
 6. A reset never grants company access by itself. Deactivated memberships stay deactivated (#27).
 7. Changing the password while signed in, and changing the email address, are out of scope (Later).
