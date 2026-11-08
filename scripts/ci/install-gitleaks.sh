@@ -10,16 +10,17 @@ sha256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 archive=$(mktemp)
 trap 'rm -f "$archive"' EXIT
 attempt=1
+# Worst case, every attempt stalls: 4 × 40 s + 10 + 20 + 30 s of backoff is
+# under 4 minutes, well inside the 15-minute gate-regressions job.
 until curl --fail --silent --show-error --location --http1.1 \
-  --connect-timeout 20 --max-time 120 \
-  --retry 3 --retry-all-errors --retry-delay 5 \
+  --connect-timeout 15 --max-time 40 \
   "$url" -o "$archive"; do
   if [ "$attempt" -ge 4 ]; then
     echo "gitleaks download failed after $attempt attempts" >&2
     exit 1
   fi
-  echo "gitleaks download failed (attempt $attempt); retrying in $((attempt * 15))s" >&2
-  sleep $((attempt * 15))
+  echo "gitleaks download failed (attempt $attempt); retrying in $((attempt * 10))s" >&2
+  sleep $((attempt * 10))
   attempt=$((attempt + 1))
 done
 printf '%s  %s\n' "$sha256" "$archive" | sha256sum --check
