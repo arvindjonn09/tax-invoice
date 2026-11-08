@@ -57,6 +57,21 @@ describe("deploy script (#326)", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
+  it("takes a verified backup before anything changes (#359)", () => {
+    expect(position('"$target" != "$tip"')).toBeLessThan(
+      position("sudo -n systemctl start jobflow-backup.service"),
+    );
+    expect(
+      position("sudo -n systemctl start jobflow-backup.service"),
+    ).toBeLessThan(position('touch "$flag"'));
+    // Exit 2 (share unreachable) still left a local backup; anything else stops.
+    expect(deploy).toContain("--property=ExecMainStatus");
+    expect(deploy).toContain('JOBFLOW_SKIP_BACKUP:-}" = 1');
+    expect(read("sudoers-jobflow-deploy")).toContain(
+      "/usr/bin/systemctl start jobflow-backup.service",
+    );
+  });
+
   it("deploys only the tip of main, and never as root", () => {
     expect(position('"$target" != "$tip"')).toBeLessThan(
       position('touch "$flag"'),
