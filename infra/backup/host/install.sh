@@ -177,17 +177,16 @@ else
 fi
 
 echo "==> Sending a test alert email to OPERATOR_NOTIFY_EMAIL"
-if (
-  set -a
-  . /etc/jobflow/backup.env
-  set +a
-  cd "$app"
-  runuser -u prod -- env "PATH=$PATH" sh infra/backup/host/health.sh --test
-); then
+# Exactly as the timer runs it: as prod, with the same EnvironmentFile, so
+# the settings are parsed the same way.
+if systemd-run --wait --quiet --collect --uid=prod --gid=prod \
+  --property=EnvironmentFile=/etc/jobflow/backup.env \
+  --property=WorkingDirectory="$app" \
+  /bin/sh "$app/infra/backup/host/health.sh" --test; then
   echo "Check that inbox (and its spam folder) for \"JobFlow backup alerts are set up\"."
 else
   echo "The test email failed. Check SMTP_* and OPERATOR_NOTIFY_EMAIL in $app/.env," >&2
-  echo "then run this script again." >&2
+  echo "then run this script again. Details: journalctl -n 30" >&2
 fi
 
 if [ "$new_key" = yes ]; then

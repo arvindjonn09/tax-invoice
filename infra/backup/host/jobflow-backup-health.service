@@ -14,7 +14,8 @@ WorkingDirectory=/home/prod/tax-invoice-run
 # PATH. Root-owned, 0600. No encryption key: the check never decrypts.
 EnvironmentFile=/etc/jobflow/backup.env
 ExecStart=/bin/sh /home/prod/tax-invoice-run/infra/backup/host/health.sh
-TimeoutStartSec=300
+# Up to 30 min waiting for a running backup, then the check itself.
+TimeoutStartSec=2400
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes

@@ -74,6 +74,20 @@ describe("assessBackups (#355)", () => {
     ).toBe(true);
   });
 
+  it("flags a nightly run that failed to make or verify its backup (review)", () => {
+    // The folder has a manifest, so ages alone look healthy.
+    const health = assessBackups({
+      local: [hoursAgo(9)],
+      share: [hoursAgo(9)],
+      now,
+      nightlyExitStatus: "1",
+    });
+    expect(health.ok).toBe(false);
+    expect(health.problems).toEqual([
+      "The last nightly backup run failed (exit status 1): making or verifying the backup didn't finish.",
+    ]);
+  });
+
   it("reports both problems together", () => {
     const health = assessBackups({ local: [], share: [], now });
     expect(health.problems).toHaveLength(2);
@@ -155,6 +169,16 @@ describe("health check on the host (#355)", () => {
     expect(service).toMatch(/^ExecStart=\/bin\/sh \S+\/health\.sh$/m);
   });
 
+  it("waits for a running backup and passes on a real nightly failure", () => {
+    expect(health).toContain(
+      "systemctl is-active --quiet jobflow-backup.service",
+    );
+    expect(health).toContain("--property=ExecMainStatus");
+    // Exit 2 (share unreachable) isn't a failure of the backup itself.
+    expect(health).toMatch(/0 \| 2\) ;;/);
+    expect(service).toMatch(/^TimeoutStartSec=2400$/m);
+  });
+
   it("decides reachability with share_mounted, never hanging", () => {
     expect(health).toContain(". infra/backup/host/share.sh");
     expect(health).toContain('share_mounted "$mount"');
@@ -167,6 +191,10 @@ describe("health check on the host (#355)", () => {
       "grep -E '^(SMTP_[A-Z_]*|EMAIL_FROM|EMAIL_REPLY_TO|OPERATOR_NOTIFY_EMAIL)='",
     );
     expect(install).toContain("jobflow-backup-health.timer");
-    expect(install).toContain("health.sh --test");
+    expect(install).toContain('health.sh" --test');
+    // The test email runs exactly as the timer does.
+    expect(install).toContain(
+      "--property=EnvironmentFile=/etc/jobflow/backup.env",
+    );
   });
 });

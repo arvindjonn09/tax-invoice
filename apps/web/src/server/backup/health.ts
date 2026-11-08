@@ -14,6 +14,11 @@ export type BackupHealthInput = {
   maxLocalAgeHours?: number;
   /** The owner's computer may sleep overnight; only 2 days behind is news. */
   maxShareAgeHours?: number;
+  /**
+   * The last nightly run's exit status when it failed for a reason other
+   * than an unreachable share (making or verifying the backup), else null.
+   */
+  nightlyExitStatus?: string | null;
 };
 
 export type BackupHealth = {
@@ -52,6 +57,11 @@ export function assessBackups(input: BackupHealthInput): BackupHealth {
   const age = (time: Date) => (input.now.getTime() - time.getTime()) / HOUR;
   const problems: string[] = [];
 
+  if (input.nightlyExitStatus) {
+    problems.push(
+      `The last nightly backup run failed (exit status ${input.nightlyExitStatus}): making or verifying the backup didn't finish.`,
+    );
+  }
   if (!newestLocal) {
     problems.push("There is no complete backup on this server.");
   } else if (age(newestLocal) > maxLocal) {

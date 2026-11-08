@@ -38,12 +38,35 @@ async function completeBackups(root: string): Promise<string[]> {
   return complete;
 }
 
+/**
+ * The share's complete backups, or null (unreachable) if reading it fails or
+ * takes over a minute: the share can drop after health.sh probed it, and a
+ * stale mount shouldn't be reported as "reachable but behind".
+ */
+async function shareBackups(dir: string): Promise<string[] | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await readdir(dir); // a read error means unreachable, not empty
+    return await Promise.race([
+      completeBackups(dir),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 60_000);
+      }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function main() {
   const { values } = parseArgs({
     options: {
       local: { type: "string" },
       share: { type: "string" },
       test: { type: "boolean", default: false },
+      "nightly-failed": { type: "string" },
     },
   });
   if (!values.local || !values.share) throw new Error(USAGE);
@@ -58,10 +81,9 @@ async function main() {
   const health = assessBackups({
     local: await completeBackups(values.local),
     share:
-      values.share === "unreachable"
-        ? null
-        : await completeBackups(values.share),
+      values.share === "unreachable" ? null : await shareBackups(values.share),
     now: new Date(),
+    nightlyExitStatus: values["nightly-failed"] ?? null,
   });
   if (health.ok && !values.test) {
     console.log("Backups are healthy; no email sent.");
