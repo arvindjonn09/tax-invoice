@@ -53,6 +53,7 @@ it("connects through Prisma only to this run's migrated database", async () => {
     { migration_name: "20261103110000_trial_profile_guard", finished: true },
     { migration_name: "20261105120000_email_pacing", finished: true },
     { migration_name: "20261106100000_platform_operator", finished: true },
+    { migration_name: "20261108120000_trial_columns_guard", finished: true },
   ]);
 });
 

@@ -1,0 +1,25 @@
+name: Uptime check
+# #357: checks the public site from outside this host every 15 minutes, so it
+# still works when the host or the tunnel is down. A failed run shows in the
+# Actions tab and GitHub emails the repository owner (the default workflow
+# notification for scheduled runs). A deploy's maintenance page is tolerated
+# for up to 10 minutes. docs/ops/uptime.md has the setup and the limits.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Check the public site
+        run: sh scripts/ops/uptime-check.sh https://jobflow.shivomsangha.com

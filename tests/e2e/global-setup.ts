@@ -45,6 +45,7 @@ export default async function globalSetup() {
         data: {
           id: companyId,
           name: `E2E Sample Company ${run}`,
+          accessMode: "unrestricted",
           createdBy: users.owner,
           isDemo: true,
           // Every company needs these before it can issue an invoice (#348).

@@ -201,6 +201,35 @@ describe("company scope", () => {
     });
   });
 
+  it("ignores trial keys: PATCH /api/company can't change access or trial dates (#260)", async () => {
+    const before = await db.company.findUniqueOrThrow({
+      where: { id: ids.companyA },
+    });
+    const response = await withPolicy("company.update", handlers.update)(
+      request("PATCH", cookies.owner, {
+        name: before.name,
+        accessMode: "trial",
+        trialLastDay: "2099-12-31",
+        trialExtensionCount: 99,
+        access_mode: "trial",
+      }),
+      undefined,
+    );
+    expect(response.status).toBe(200);
+    const after = await db.company.findUniqueOrThrow({
+      where: { id: ids.companyA },
+    });
+    expect({
+      accessMode: after.accessMode,
+      trialLastDay: after.trialLastDay,
+      trialExtensionCount: after.trialExtensionCount,
+    }).toEqual({
+      accessMode: before.accessMode,
+      trialLastDay: before.trialLastDay,
+      trialExtensionCount: before.trialExtensionCount,
+    });
+  });
+
   it("rejects invalid input with 400", async () => {
     for (const body of [
       {},

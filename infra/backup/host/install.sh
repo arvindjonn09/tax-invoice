@@ -16,6 +16,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=share.sh
+. "$here/share.sh"
 app=/home/prod/tax-invoice-run
 [ -f "$app/.env" ] || { echo "$app/.env not found" >&2; exit 1; }
 
@@ -26,9 +28,10 @@ echo "If the share is already mounted on this computer (for example /mnt/jobflow
 read -rp "type that folder. Leave it empty to set the share up now: " existing
 if [ -n "$existing" ]; then
   mountpoint="${existing%/}"
-  timeout 60 ls "$mountpoint" >/dev/null 2>&1 || true
-  if ! mountpoint -q "$mountpoint"; then
-    echo "$mountpoint isn't a mounted share." >&2
+  # A share, not just any mounted folder: a local disk here would keep the
+  # "off-site" copies on this computer.
+  if ! share_mounted "$mountpoint"; then
+    echo "$mountpoint isn't a mounted Windows (SMB) share." >&2
     exit 1
   fi
   if ! runuser -u prod -- test -w "$mountpoint"; then
@@ -64,8 +67,10 @@ else
   mv /etc/fstab.jobflow-new /etc/fstab
   chmod 0644 /etc/fstab
   systemctl daemon-reload
-  systemctl restart remote-fs.target
-  if ! timeout 60 ls "$mountpoint" >/dev/null || ! mountpoint -q "$mountpoint"; then
+  # Only this share's on-demand mount: restarting all remote mounts would
+  # bounce any other network mounts on this computer.
+  systemctl start "$(systemd-escape -p --suffix=automount "$mountpoint")"
+  if ! share_mounted "$mountpoint"; then
     echo "The share didn't mount. Check the address, user name and password, and that" >&2
     echo "the Windows folder is shared with that account. /etc/fstab was saved first" >&2
     echo "as /etc/fstab.before-jobflow-backup." >&2
@@ -76,21 +81,51 @@ share_dir="$mountpoint/backups"
 runuser -u prod -- mkdir -p "$share_dir"
 
 echo "==> A read-only database login for backups"
+# Connection strings are split into libpq's PG* variables, so no password
+# is ever on a command line (other users can read those in /proc). Read on
+# stdin for the same reason. Percent-encoding in the URL is decoded.
+pg_env() {
+  python3 -I -c '
+import shlex, sys, urllib.parse as u
+p = u.urlsplit(sys.stdin.read().strip())
+if p.scheme not in ("postgres", "postgresql") or not p.hostname:
+    sys.exit("not a postgresql:// URL")
+for name, value in (
+    ("PGHOST", p.hostname),
+    ("PGPORT", str(p.port or 5432)),
+    ("PGUSER", u.unquote(p.username or "")),
+    ("PGPASSWORD", u.unquote(p.password or "")),
+    ("PGDATABASE", u.unquote(p.path.lstrip("/"))),
+):
+    print(f"{name}={shlex.quote(value)}")
+'
+}
 db_url="$(grep '^DATABASE_URL=' "$app/.env" | cut -d= -f2- | tr -d '"')"
-db_name="${db_url##*/}"
-db_name="${db_name%%\?*}"
-admin_url="${BACKUP_ADMIN_DATABASE_URL:-$db_url}"
-can_create="$(runuser -u prod -- /usr/bin/psql "$admin_url" -XtAq -c \
-  "SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user")"
-if [ "$can_create" != t ]; then
-  echo "The database login in .env can't create roles. Run again with" >&2
-  echo "BACKUP_ADMIN_DATABASE_URL set to an owner connection (see the top of this script)." >&2
+app_db="$(printf '%s' "$db_url" | pg_env)"
+db_host="$(eval "$app_db"; printf '%s' "$PGHOST")"
+db_port="$(eval "$app_db"; printf '%s' "$PGPORT")"
+db_name="$(eval "$app_db"; printf '%s' "$PGDATABASE")"
+admin_db="$(printf '%s' "${BACKUP_ADMIN_DATABASE_URL:-$db_url}" | pg_env)"
+admin_psql() (
+  eval "$admin_db"
+  export PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE
+  # runuser keeps the environment (no --login), so psql gets the PG* values.
+  runuser -u prod -- /usr/bin/psql -X "$@"
+)
+# PostgreSQL 16: CREATEROLE alone can't grant pg_read_all_data; that needs
+# a superuser or ADMIN OPTION on it.
+can_grant="$(admin_psql -tAq -c "SELECT rolsuper OR (rolcreaterole AND pg_has_role(current_user, 'pg_read_all_data', 'MEMBER WITH ADMIN OPTION')) FROM pg_roles WHERE rolname = current_user")"
+if [ "$can_grant" != t ]; then
+  echo "This database login can't create the backup role and grant it pg_read_all_data." >&2
+  echo "Run again with BACKUP_ADMIN_DATABASE_URL set to a superuser (owner) connection" >&2
+  echo "(see the top of this script)." >&2
   exit 1
 fi
 role_password="$(openssl rand -hex 24)"
-# The password goes in as a psql variable, quoted by psql (:'...').
-runuser -u prod -- /usr/bin/psql "$admin_url" -X -v ON_ERROR_STOP=1 -q \
-  -v role_password="$role_password" <<'SQL'
+# The password reaches psql through the environment (\getenv), not its
+# command line, and goes into SQL quoted by psql (:'...').
+JOBFLOW_BACKUP_ROLE_PASSWORD="$role_password" admin_psql -v ON_ERROR_STOP=1 -q <<'SQL'
+\getenv role_password JOBFLOW_BACKUP_ROLE_PASSWORD
 SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'jobflow_backup') AS create_role \gset
 \if :create_role
   CREATE ROLE jobflow_backup LOGIN;
@@ -103,8 +138,11 @@ echo "==> Backup settings (root only)"
 install -d -o root -g root -m 0700 /etc/jobflow
 umask 077
 {
-  echo "DATABASE_URL=postgresql://jobflow_backup:$role_password@127.0.0.1:5432/$db_name"
+  # The app's own host and port, not an assumed 127.0.0.1:5432.
+  echo "DATABASE_URL=postgresql://jobflow_backup:$role_password@$db_host:$db_port/$db_name"
   grep -E '^(APP_ENV|S3_[A-Z_]*|MINIO_ROOT_USER|MINIO_ROOT_PASSWORD|MINIO_API_PORT)=' "$app/.env" || true
+  # For the daily health check's email alert (#355).
+  grep -E '^(SMTP_[A-Z_]*|EMAIL_FROM|EMAIL_REPLY_TO|OPERATOR_NOTIFY_EMAIL)=' "$app/.env" || true
   echo "BACKUP_ROOT=/home/prod/jobflow-backups"
   echo "BACKUP_SHARE_MOUNT=$mountpoint"
   echo "BACKUP_SHARE_DIR=$share_dir"
@@ -120,12 +158,15 @@ if [ ! -s /etc/jobflow/backup-key.env ]; then
 fi
 chmod 0600 /etc/jobflow/backup-key.env
 
-echo "==> Installing the nightly backup (02:15 Sydney time) and the hourly copy retry"
+echo "==> Installing the nightly backup (02:15 Sydney time), the hourly copy retry"
+echo "    and the daily health check that emails you about problems (09:00)"
 install -o root -g root -m 0644 "$here/jobflow-backup.service" \
   "$here/jobflow-backup.timer" "$here/jobflow-backup-sync.service" \
-  "$here/jobflow-backup-sync.timer" /etc/systemd/system/
+  "$here/jobflow-backup-sync.timer" "$here/jobflow-backup-health.service" \
+  "$here/jobflow-backup-health.timer" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now jobflow-backup.timer jobflow-backup-sync.timer
+systemctl enable --now jobflow-backup.timer jobflow-backup-sync.timer \
+  jobflow-backup-health.timer
 
 echo "==> Making the first backup now"
 if systemctl start jobflow-backup.service; then
@@ -133,6 +174,19 @@ if systemctl start jobflow-backup.service; then
   ls -1 "$share_dir" | grep -v '^\.' | tail -3
 else
   echo "The first backup failed. See: journalctl -u jobflow-backup.service -n 50" >&2
+fi
+
+echo "==> Sending a test alert email to OPERATOR_NOTIFY_EMAIL"
+# Exactly as the timer runs it: as prod, with the same EnvironmentFile, so
+# the settings are parsed the same way.
+if systemd-run --wait --quiet --collect --uid=prod --gid=prod \
+  --property=EnvironmentFile=/etc/jobflow/backup.env \
+  --property=WorkingDirectory="$app" \
+  /bin/sh "$app/infra/backup/host/health.sh" --test; then
+  echo "Check that inbox (and its spam folder) for \"JobFlow backup alerts are set up\"."
+else
+  echo "The test email failed. Check SMTP_* and OPERATOR_NOTIFY_EMAIL in $app/.env," >&2
+  echo "then run this script again. Details: journalctl -n 30" >&2
 fi
 
 if [ "$new_key" = yes ]; then
