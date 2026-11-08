@@ -678,11 +678,12 @@ describe("trial extension requests", () => {
 describe("trial columns change only through the operator (#260)", () => {
   const refused = /jobflow_trial_columns_operator_only/;
 
-  it("refuses access_mode, trial_last_day and trial_extension_count without the operator key", async () => {
+  it("refuses access_mode, trial_started_at, trial_last_day and trial_extension_count without the operator key", async () => {
     for (const data of [
       { accessMode: "trial" as const },
       { trialLastDay: day("2099-12-31") },
       { trialExtensionCount: 5 },
+      { trialStartedAt: new Date("2020-01-01T00:00:00Z") },
     ])
       await expect(
         client.company.update({ where: { id: otherCompanyId }, data }),
