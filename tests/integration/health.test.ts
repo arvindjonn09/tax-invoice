@@ -74,6 +74,11 @@ it("is ready only when the database answers and storage is configured (#64)", as
 });
 
 it("in production, needs someone to receive extension requests (#323)", async () => {
+  // Production also requires malware scanning (#136): give it a clamd that
+  // answers, so only the operator address decides here.
+  const clamd = await startFakeClamd();
+  vi.stubEnv("CLAMAV_HOST", "127.0.0.1");
+  vi.stubEnv("CLAMAV_PORT", String(clamd.port));
   const clock = vi.spyOn(Date, "now");
   clock.mockReturnValue(1_000_000);
   vi.stubEnv("APP_ENV", "production");
@@ -91,4 +96,5 @@ it("in production, needs someone to receive extension requests (#323)", async ()
   clock.mockReturnValue(1_002_001);
   expect((await ready()).status).toBe(200);
   clock.mockRestore();
+  await clamd.close();
 });
