@@ -965,6 +965,33 @@ describe("first password after sign-up (#335)", () => {
     ).toBe(1);
   });
 
+  it("is still a first password after the address was verified another way (review)", async () => {
+    const address = "verified.first@example.com";
+    const token = await signUpAndToken(address);
+    // The address is confirmed through the verification email first.
+    await client.user.update({
+      where: { email: address },
+      data: { emailVerified: true },
+    });
+    const response = await setPassword(token, { name: "Holder Fixed" });
+    expect(await response.json()).toEqual({ status: "set" });
+    const user = await client.user.findUniqueOrThrow({
+      where: { email: address },
+    });
+    expect(user.name).toBe("Holder Fixed");
+    expect(
+      await client.platformAuditEvent.count({
+        where: { userId: user.id, action: "account.terms_confirmed" },
+      }),
+    ).toBe(1);
+  });
+
+  it("refuses control characters in the name with 400, not 500 (review)", async () => {
+    const token = await signUpAndToken("nul.name@example.com");
+    const response = await setPassword(token, { name: "Bad\u0000Name" });
+    expect(response.status).toBe(400);
+  });
+
   it("refuses an over-long name", async () => {
     const token = await signUpAndToken("long.name@example.com");
     expect((await setPassword(token, { name: "x".repeat(201) })).status).toBe(

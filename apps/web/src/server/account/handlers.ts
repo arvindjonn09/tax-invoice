@@ -101,7 +101,7 @@ const Reset = z
     passwordConfirmation: z.string(),
     // #335: the mailbox holder may correct the name chosen at sign-up or
     // invitation. Applied only when the password is set for the first time.
-    name: z.string().trim().min(1).max(200).optional(),
+    name: name.optional(),
   })
   .strict()
   .refine((value) => value.password === value.passwordConfirmation, {
@@ -597,14 +597,24 @@ export function resetPassword(deps: AccountDependencies) {
     const done = await db.$transaction(async (tx) => {
       const userId = await consumeToken(tx, input.token, "password_reset");
       if (!userId) return false;
-      // #335: an unverified address means the mailbox holder is setting a
-      // password for the first time (after sign-up or an invitation).
-      const firstSet = !(
-        await tx.user.findUniqueOrThrow({
-          where: { id: userId },
-          select: { emailVerified: true },
-        })
-      ).emailVerified;
+      // #335: a first password is one set while the address is unverified
+      // (after sign-up or an invitation), or the first one set for a
+      // signed-up account at all: its address may have been confirmed
+      // through the verification email while the generated placeholder
+      // password was still in place.
+      const { emailVerified } = await tx.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: { emailVerified: true },
+      });
+      const [signedUp, earlierSet] = await Promise.all([
+        tx.platformAuditEvent.count({
+          where: { userId, action: "account.signed_up" },
+        }),
+        tx.platformAuditEvent.count({
+          where: { userId, action: "account.password_reset" },
+        }),
+      ]);
+      const firstSet = !emailVerified || (signedUp > 0 && earlierSet === 0);
       const updated = await tx.authAccount.updateMany({
         where: { userId, providerId: "credential" },
         data: { password: hash },
