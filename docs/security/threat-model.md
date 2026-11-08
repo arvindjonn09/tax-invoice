@@ -216,8 +216,9 @@ implementation task.
 - **Operator TOTP limits (T21).** In production an operator's session must itself have passed TOTP (`auth_sessions.mfa_verified_at`), so a password-only session from before enrolment never qualifies. Two library limits remain: Better Auth accepts codes within ±30 seconds and keeps no last-used code, so a relayed code works for about 90 seconds (Cloudflare Access reduces this), and the TOTP secret and backup codes are encrypted with `BETTER_AUTH_SECRET`, not hashed.
 - **Scanners and account pre-registration (T17).** The fragment stops scanners that only fetch a URL. `/verify-email`
   spends the token only when "Confirm my email" is pressed (#249), so only a scanner that also clicks could verify the
-  address. If an attacker signed up with that address, they would then hold a verified account for it. This is uncertain: no
-  specific scanner has been tested. A password reset removes the attacker's access. Whoever holds a live link in a mailbox still holds the token, and Cloudflare (TLS termination) and Zoho can
+  address. Sign-up takes no password (#327), so someone who signs up with another person's address gets no way in: only the
+  mailbox holder can set the password. Accounts created before #327 could still hold a password chosen before the address was
+  proven. A password reset removes that access. Whoever holds a live link in a mailbox still holds the token, and Cloudflare (TLS termination) and Zoho can
   see tokens in transit.
 - **Better Auth surface (T17).** Whether `/update-user`, change-email and delete-user are limited to name and image at
   runtime on the pinned version isn't confirmed (#260).
