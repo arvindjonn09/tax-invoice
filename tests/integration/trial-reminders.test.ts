@@ -13,6 +13,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #233 (S10): reminders go once per threshold and last day, only to active
 // verified owners, and an extension re-arms them.
@@ -201,7 +202,7 @@ describe("trial reminder emails (#233)", () => {
     const { id } = await company(1);
     await run();
     expect(await thresholds(id)).toEqual(["d1"]);
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id },
       data: { trialLastDay: new Date(`${lastDayFor(7)}T00:00:00Z`) },
     });

@@ -31,6 +31,7 @@ import type { PrismaClient } from "../../packages/database/src/generated/prisma/
 import type { Actor, Role } from "../../packages/authz/src/index";
 import { syntheticFactory } from "../helpers/factories";
 import { syntheticAbn } from "../helpers/abn";
+import { operatorUpdate } from "../helpers/operator-update";
 const origin = "http://127.0.0.1:3000",
   password = "Synthetic-Reporting-Tests-2026!";
 let database: CommittedDatabase, db: PrismaClient;
@@ -3460,7 +3461,7 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
           },
         });
       });
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: f.company.id },
       data: {
         isDemo: false,

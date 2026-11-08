@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrismaClient } from "../../packages/database/src/generated/prisma/client";
@@ -15,6 +16,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #62: records are kept for their retention period, and a company can take
 // all of its records out in one lossless file.
@@ -240,7 +242,7 @@ describe("full company export (#62)", () => {
   };
 
   it("still exports, and audits it, while the company is read-only (#222)", async () => {
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: companyId },
       data: {
         isDemo: false,
@@ -262,7 +264,7 @@ describe("full company export (#62)", () => {
         }),
       ).toBe(before + 1);
     } finally {
-      await db.company.update({
+      await operatorUpdate(db, {
         where: { id: companyId },
         data: { accessMode: "unrestricted", isDemo: true },
       });
@@ -274,6 +276,39 @@ describe("full company export (#62)", () => {
     expect((await download("accountant")).status).toBe(403);
     expect((await download("manager")).status).toBe(403);
     expect((await download("employee")).status).toBe(403);
+  });
+
+  it("exports exactly the pinned tables and columns (#260 L5)", async () => {
+    // The export finds tables from the catalog and leaves out a denylist, so a
+    // new table or column would be exported silently. This pin makes each
+    // addition deliberate. After an intended change, regenerate with
+    // UPDATE_EXPORT_PIN=1 (then prettier --write the fixture) and review the
+    // fixture diff in the PR.
+    const exportData = await db.$transaction((tx) =>
+      exportCompany(tx, companyId),
+    );
+    const shape = Object.fromEntries(
+      Object.entries(exportData.tables)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([table, { columns }]) => [
+          table,
+          columns.map((column) => column.name).sort(),
+        ]),
+    );
+    const pin = new URL(
+      "../fixtures/company-export-columns.json",
+      import.meta.url,
+    );
+    if (process.env.UPDATE_EXPORT_PIN === "1")
+      writeFileSync(pin, `${JSON.stringify(shape, null, 2)}\n`);
+    expect(shape).toEqual(JSON.parse(readFileSync(pin, "utf8")));
+    // Secrets and internal keys stay out, whatever the pin says.
+    expect(shape.documents).not.toContain("object_key");
+    expect(shape.user_invitations ?? []).not.toContain("token_hash");
+    expect(shape.companies).not.toContain("self_service_request_key");
+    expect(shape.trial_extension_requests).not.toContain("decision_note");
+    expect(shape).not.toHaveProperty("email_outbox");
+    expect(shape).not.toHaveProperty("idempotency_keys");
   });
 
   it("exports every company record losslessly, without secrets or other tenants", async () => {

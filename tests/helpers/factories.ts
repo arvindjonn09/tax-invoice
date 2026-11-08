@@ -25,6 +25,8 @@ export function syntheticFactory(seed = 1) {
         name: "Synthetic Test Company",
         createdBy,
         isDemo: true,
+        // No column default (#260): every company chooses its mode.
+        accessMode: "unrestricted" as const,
       };
     },
     membership(companyId: string, userId: string) {

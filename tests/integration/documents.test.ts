@@ -20,6 +20,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate } from "../helpers/operator-update";
 import {
   type FakeClamd,
   TEST_MARKER,
@@ -458,7 +459,7 @@ describe("read-only company (#222)", () => {
     const uploaded = await upload(uploadRequest("owner", PDF));
     expect(uploaded.status).toBe(201);
     const { id } = (await uploaded.json()) as { id: string };
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: companyId },
       data: {
         isDemo: false,
@@ -477,7 +478,7 @@ describe("read-only company (#222)", () => {
       expect(refused.status).toBe(403);
       expect(await refused.json()).toMatchObject({ code: "company_read_only" });
     } finally {
-      await db.company.update({
+      await operatorUpdate(db, {
         where: { id: companyId },
         data: { accessMode: "unrestricted", isDemo: true },
       });

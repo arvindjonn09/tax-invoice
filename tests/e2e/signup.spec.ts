@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 import { createDatabaseClient } from "../../packages/database/src/index";
 import { issueToken } from "../../apps/web/src/server/account/tokens";
 import { isolatedTestConnection } from "../helpers/test-environment";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #217/#218/#220/#224: sign up → verify → onboarding → trial.
 test.skip(
@@ -144,7 +145,7 @@ test("a visitor signs up, sets a password from the email, then signs in", async 
 
     // #233: three days left, so the owner sees a one-time notice.
     const lastDay = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: company.id },
       data: {
         trialLastDay: new Date(lastDay.toISOString().slice(0, 10)),
