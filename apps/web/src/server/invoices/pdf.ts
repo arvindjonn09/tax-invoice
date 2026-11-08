@@ -12,9 +12,19 @@ import {
 // HTML, runs scripts, loads fonts or images, or fetches any URL or file, so
 // customer-supplied text can't trigger requests, script or local reads; it is
 // only ever drawn as text. Same snapshot in → same bytes out.
+// #229: the one image is the company's logo, whose bytes the caller reads
+// from private storage and passes in (PNG or JPEG, already cleaned at
+// upload); the renderer never loads anything itself.
 
 /** Bump when the layout changes; stored with each generated PDF. */
-export const PDF_RENDERER_VERSION = "1";
+export const PDF_RENDERER_VERSION = "2";
+
+/** A logo to draw in the header: bytes from private storage, never a URL. */
+export type PdfLogo = { bytes: Uint8Array; type: "image/png" | "image/jpeg" };
+
+/** The logo's largest drawn size, in points. */
+const LOGO_MAX_WIDTH = 140;
+const LOGO_MAX_HEIGHT = 56;
 
 type Party = {
   name?: string | null;
@@ -27,6 +37,10 @@ type Party = {
   suburb?: string | null;
   state?: string | null;
   postcode?: string | null;
+  /** Supplier snapshot version 2 (#229); absent from version 1. */
+  phone?: string | null;
+  businessEmail?: string | null;
+  website?: string | null;
 };
 
 export type InvoicePdfInput = {
@@ -145,6 +159,10 @@ export function invoiceDocument(input: InvoicePdfInput): InvoiceDocumentModel {
       : []),
     ...(supplier.abn ? [`ABN ${formatAbn(supplier.abn)}`] : []),
     ...address(supplier),
+    // #229: contact details, each only when recorded (no empty labels).
+    ...(supplier.phone ? [`Phone ${supplier.phone}`] : []),
+    ...(supplier.businessEmail ? [supplier.businessEmail] : []),
+    ...(supplier.website ? [supplier.website] : []),
   ].filter(Boolean);
   const customer = input.customer;
   const to = [
@@ -338,6 +356,7 @@ export async function renderInvoicePdf(
   model: InvoiceDocumentModel,
   budget: Partial<Omit<typeof PDF_LIMITS, "concurrency">> = {},
   now: () => number = () => performance.now(),
+  logo: PdfLogo | null = null,
 ): Promise<Uint8Array> {
   const limits = { ...PDF_LIMITS };
   for (const key of Object.keys(budget) as (keyof typeof budget)[]) {
@@ -371,7 +390,7 @@ export async function renderInvoicePdf(
   inspect(model);
   activeRenders++;
   try {
-    const bytes = await renderBounded(model, check, limits.pages);
+    const bytes = await renderBounded(model, check, limits.pages, logo);
     check();
     if (bytes.byteLength > limits.bytes) throw new PdfLimitError();
     return bytes;
@@ -384,6 +403,7 @@ async function renderBounded(
   model: InvoiceDocumentModel,
   check: () => void,
   maxPages: number,
+  logo: PdfLogo | null,
 ): Promise<Uint8Array> {
   const wrap = (font: PDFFont, size: number, value: string, width: number) =>
     wrapText(font, size, value, width, check);
@@ -443,6 +463,32 @@ async function renderBounded(
   const ensure = (needed: number) => {
     if (y - needed < MARGIN + 30) newPage();
   };
+
+  // #229: the logo, top left, scaled to fit and never enlarged.
+  // An image pdf-lib can't read is left out rather than blocking the PDF.
+  const image = logo
+    ? await (
+        logo.type === "image/png"
+          ? pdf.embedPng(logo.bytes)
+          : pdf.embedJpg(logo.bytes)
+      ).catch(() => null)
+    : null;
+  if (image) {
+    check();
+    const scale = Math.min(
+      LOGO_MAX_WIDTH / image.width,
+      LOGO_MAX_HEIGHT / image.height,
+      1,
+    );
+    const height = image.height * scale;
+    page.drawImage(image, {
+      x: MARGIN,
+      y: y + 16 - height,
+      width: image.width * scale,
+      height,
+    });
+    y -= height + 8;
+  }
 
   // Title and document details.
   text(model.title, MARGIN, { font: bold, size: 22 });

@@ -14,8 +14,11 @@ import type { ObjectStore } from "../documents/store";
 import { clientIp, throttle } from "../http/throttle";
 import { uuidOrNull } from "../http/fields";
 import { log, safeError } from "../log";
+import { MAX_LOGO_BYTES } from "../company/logo-image";
+import { snapshotLogo } from "../company/supplier-snapshot";
 import {
   PdfLimitError,
+  type PdfLogo,
   PDF_RENDERER_VERSION,
   invoiceDocument,
   pdfInput,
@@ -36,6 +39,42 @@ type Stored = { documentId: string; sha256: string; rendererVersion: string };
 
 class NotIssued extends Error {}
 class StorageUnavailable extends Error {}
+
+/**
+ * #229: the logo frozen in the supplier snapshot, read from private storage
+ * in the same company and checked against the hash taken at issue. Anything
+ * missing, changed or unexpected renders the PDF without a logo (logged),
+ * never a different image.
+ */
+async function snapshotLogoBytes(
+  db: PrismaClient,
+  store: ObjectStore,
+  companyId: string,
+  snapshot: unknown,
+  invoiceId: string,
+): Promise<PdfLogo | null> {
+  const logo = snapshotLogo(snapshot);
+  if (!logo) return null;
+  if (logo.contentType !== "image/png" && logo.contentType !== "image/jpeg")
+    return null;
+  const document = await db.document.findFirst({
+    where: { id: logo.documentId, companyId, kind: "company_logo" },
+    select: { objectKey: true, sha256: true },
+  });
+  const bytes =
+    document && document.sha256 === logo.sha256
+      ? await store.get(document.objectKey)
+      : null;
+  if (
+    !bytes ||
+    bytes.byteLength > MAX_LOGO_BYTES ||
+    sha256Hex(bytes) !== logo.sha256
+  ) {
+    log("warn", "invoice.pdf_logo_unavailable", { invoiceId });
+    return null;
+  }
+  return { bytes, type: logo.contentType };
+}
 
 /** Find or create the stored PDF of an issued (or void) invoice. */
 export async function ensureInvoicePdf(
@@ -59,11 +98,21 @@ export async function ensureInvoicePdf(
         select: { reference: true },
       })
     : null;
-  const bytes = await renderInvoicePdf(
-    invoiceDocument(pdfInput(row, credits?.reference ?? null)),
-  );
   const store = deps.store();
   if (!store) throw new StorageUnavailable();
+  const logo = await snapshotLogoBytes(
+    db,
+    store,
+    actor.companyId,
+    row.supplierSnapshot,
+    invoiceId,
+  );
+  const bytes = await renderInvoicePdf(
+    invoiceDocument(pdfInput(row, credits?.reference ?? null)),
+    {},
+    undefined,
+    logo,
+  );
   const sha256 = sha256Hex(bytes);
   // Random key, never derived from the reference or any user input.
   const objectKey = `documents/${actor.companyId}/${randomBytes(32).toString("hex")}`;
