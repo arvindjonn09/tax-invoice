@@ -360,6 +360,13 @@ export function documentHandlers(deps: DocumentDeps) {
     );
     if (row.createdBy !== actor.userId && !can(actor.role, "document.read_all"))
       requireSameCompany(actor, null);
+    // The creator of an invoice PDF is whoever triggered the render, so someone
+    // since demoted mustn't keep access through it (#260).
+    if (
+      !can(actor.role, "invoice.read") &&
+      (await deps.db().invoicePdf.count({ where: { documentId: row.id } })) > 0
+    )
+      requireSameCompany(actor, null);
     await throttle(deps.db(), "download.sign", {
       userId: actor.userId,
       ip: clientIp(request.headers),

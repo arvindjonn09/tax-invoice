@@ -72,3 +72,23 @@ it("is ready only when the database answers and storage is configured (#64)", as
   }
   clock.mockRestore();
 });
+
+it("in production, needs someone to receive extension requests (#323)", async () => {
+  const clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(1_000_000);
+  vi.stubEnv("APP_ENV", "production");
+  vi.stubEnv("S3_ACCESS_KEY_ID", "synthetic-key-id");
+  vi.stubEnv("S3_SECRET_ACCESS_KEY", "synthetic-secret");
+  vi.stubEnv("S3_BUCKET", "jobflow-ready-test");
+  vi.stubEnv("OPERATOR_NOTIFY_EMAIL", "");
+  const notReady = await ready();
+  expect(notReady.status).toBe(503);
+  expect(await notReady.json()).toEqual({
+    status: "not ready",
+    service: "jobflow-web",
+  });
+  vi.stubEnv("OPERATOR_NOTIFY_EMAIL", "operator@jobflow.invalid");
+  clock.mockReturnValue(1_002_001);
+  expect((await ready()).status).toBe(200);
+  clock.mockRestore();
+});

@@ -29,6 +29,8 @@ const PUBLIC_ROUTES: Record<string, string> = {
     "Single-use 256-bit emailed token (digest stored, 1 h) authorizes replacing that one user's password; IP throttle; grants no company access",
   "api/onboarding/company/route.ts":
     "Requires a verified session; creates only the caller's own first company (one per user, idempotency key) with the caller as Owner; origin/body/throttle guards",
+  "api/notices/dismiss/route.ts":
+    "Requires a verified session; changes only the caller's own notice row and answers 204 either way",
   "api/session/company/route.ts":
     "Requires a verified session; sets the session's company only to one where the caller is an active member, else 404; origin and size guards",
   "api/auth/[...all]/route.ts":
@@ -52,7 +54,9 @@ const all = files(APP).map((path) => ({
 }));
 
 describe("route handlers", () => {
-  const routes = all.filter(({ path }) => /(^|\/)route\.tsx?$/.test(path));
+  const routes = all.filter(({ path }) =>
+    /(^|\/)route\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path),
+  );
 
   it("finds the route files", () => {
     expect(routes.map(({ path }) => path)).toContain("api/company/route.ts");
@@ -64,6 +68,11 @@ describe("route handlers", () => {
       expect(source).not.toMatch(
         new RegExp(`export\\s+(async\\s+)?function\\s+(${METHODS})\\b`),
       );
+      // `export { handler as POST }` and re-exports would skip the guard (#260).
+      expect(source).not.toMatch(
+        new RegExp(`export\\s*\\{[^}]*\\b(${METHODS})\\b[^}]*\\}`),
+      );
+      expect(source).not.toMatch(/export\s*\*/);
       const exported = [
         ...source.matchAll(
           new RegExp(`export\\s+const\\s+(${METHODS})\\s*=\\s*([^\\n]*)`, "g"),
