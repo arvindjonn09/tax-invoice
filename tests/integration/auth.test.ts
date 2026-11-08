@@ -428,8 +428,8 @@ describe("Better Auth account endpoints on the pinned version (#260)", () => {
         })
       ).status,
     ).toBe(400);
-    // Other user columns ride along with a name change and are ignored.
-    await post("/update-user", headers, {
+    // Other user columns are refused outright, with nothing written.
+    const forged = await post("/update-user", headers, {
       name: "Synthetic Renamed",
       emailVerified: !before.emailVerified,
       twoFactorEnabled: !before.twoFactorEnabled,
@@ -437,10 +437,25 @@ describe("Better Auth account endpoints on the pinned version (#260)", () => {
       banned: false,
       id: ids.owner,
     });
+    expect(forged.status).toBe(400);
+    expect(
+      await db.user.findUniqueOrThrow({ where: { id: ids.lonely } }),
+    ).toMatchObject({
+      name: before.name,
+      email: before.email,
+      emailVerified: before.emailVerified,
+      twoFactorEnabled: before.twoFactorEnabled,
+    });
+    // A plain rename works, and changes only the name.
+    const renamed = await post("/update-user", headers, {
+      name: "Synthetic Renamed",
+    });
+    expect(renamed.status).toBe(200);
     const after = await db.user.findUniqueOrThrow({
       where: { id: ids.lonely },
     });
     expect(after).toMatchObject({
+      name: "Synthetic Renamed",
       email: before.email,
       emailVerified: before.emailVerified,
       twoFactorEnabled: before.twoFactorEnabled,
@@ -459,8 +474,9 @@ describe("Better Auth account endpoints on the pinned version (#260)", () => {
     const deleted = await post("/delete-user", headers, {
       password: PASSWORD,
     });
-    expect(changed.status).toBeGreaterThanOrEqual(400);
-    expect(deleted.status).toBeGreaterThanOrEqual(400);
+    // Better Auth 1.7.12: disabled change-email is 400, delete-user 404.
+    expect(changed.status).toBe(400);
+    expect(deleted.status).toBe(404);
     const user = await db.user.findUniqueOrThrow({
       where: { id: ids.lonely },
     });
