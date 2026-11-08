@@ -20,6 +20,15 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import {
+  type FakeClamd,
+  TEST_MARKER,
+  startFakeClamd,
+} from "../helpers/fake-clamd";
+import {
+  type Scanning,
+  clamdScanner,
+} from "../../apps/web/src/server/documents/scanner";
 
 // #34: private storage — type/size allow-list, random keys, links only after
 // authz, expired or forged links fail, other companies never get a URL.
@@ -40,7 +49,17 @@ let database: CommittedDatabase;
 let db: PrismaClient;
 let withPolicy: ReturnType<typeof createWithPolicy>;
 const store = new MemoryStore();
-const deps = { db: () => db, store: () => store, secret: () => SECRET };
+const noScanning = (): Scanning => ({
+  required: false,
+  scanner: null,
+  disabled: false,
+});
+const deps = {
+  db: () => db,
+  store: () => store,
+  secret: () => SECRET,
+  scanner: noScanning,
+};
 const handlers = documentHandlers(deps);
 const download = downloadHandler(deps);
 const userIds = {} as Record<Who, string>;
@@ -282,6 +301,155 @@ describe("uploads", () => {
       maxBodyBytes: UPLOAD_BODY_LIMIT,
     })(uploadRequest("owner", PDF), undefined);
     expect(response.status).toBe(503);
+  });
+});
+
+describe("malware scanning (#136)", () => {
+  let clamd: FakeClamd;
+  beforeAll(async () => {
+    clamd = await startFakeClamd();
+  });
+  afterAll(() => clamd.close());
+
+  function scanned(
+    required: boolean,
+    port = () => clamd.port,
+    own: MemoryStore = new MemoryStore(),
+  ) {
+    // One scanner per handler set, as in production (documents/index.ts).
+    const scanner = clamdScanner({
+      host: "127.0.0.1",
+      port: port(),
+      idleMs: 500,
+      maxConcurrent: 1,
+      slotWaitMs: 200,
+    });
+    const scanning = documentHandlers({
+      ...deps,
+      store: () => own,
+      scanner: () => ({ required, disabled: false, scanner }),
+    });
+    return {
+      store: own,
+      upload: (request: Request) =>
+        withPolicy("document.upload", scanning.upload, {
+          maxBodyBytes: UPLOAD_BODY_LIMIT,
+        })(request, undefined),
+    };
+  }
+  const count = () => db.document.count({ where: { companyId } });
+
+  it("stores a clean file", async () => {
+    clamd.mode = "normal";
+    const { store: own, upload: send } = scanned(true);
+    const response = await send(uploadRequest("owner", PDF));
+    expect(response.status).toBe(201);
+    expect(own.objects.size).toBe(1);
+  });
+
+  it("refuses an infected file with a safe error and stores nothing", async () => {
+    clamd.mode = "normal";
+    const before = await count();
+    const { store: own, upload: send } = scanned(true);
+    const infected = new Uint8Array(
+      Buffer.from(`%PDF-1.7\n${TEST_MARKER}\n%%EOF\n`),
+    );
+    const response = await send(uploadRequest("owner", infected));
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/flagged as unsafe/);
+    expect(JSON.stringify(body)).not.toMatch(/Jobflow\.Test|MARKER/);
+    expect(own.objects.size).toBe(0);
+    expect(await count()).toBe(before);
+  });
+
+  it("fails closed when the scanner can't answer, and when it's required but missing", async () => {
+    const before = await count();
+    clamd.mode = "error";
+    const broken = scanned(true);
+    expect((await broken.upload(uploadRequest("owner", PDF))).status).toBe(503);
+    expect(broken.store.objects.size).toBe(0);
+    const own = new MemoryStore();
+    const missing = documentHandlers({
+      ...deps,
+      store: () => own,
+      scanner: () => ({ required: true, scanner: null, disabled: false }),
+    });
+    const response = await withPolicy("document.upload", missing.upload, {
+      maxBodyBytes: UPLOAD_BODY_LIMIT,
+    })(uploadRequest("owner", PDF), undefined);
+    expect(response.status).toBe(503);
+    expect(own.objects.size).toBe(0);
+    expect(await count()).toBe(before);
+    clamd.mode = "normal";
+  });
+
+  it("refuses a file clamd couldn't fully check, and audits every rejection", async () => {
+    const before = await count();
+    clamd.mode = "limits";
+    const { store: own, upload: send } = scanned(true);
+    const response = await send(uploadRequest("owner", PDF));
+    expect(response.status).toBe(422);
+    expect(((await response.json()) as { error: string }).error).toMatch(
+      /too large or complex to check/,
+    );
+    expect(own.objects.size).toBe(0);
+    expect(await count()).toBe(before);
+    clamd.mode = "normal";
+    const events = await db.auditEvent.findMany({
+      where: { companyId, action: "document.malware_rejected" },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(
+      events.map(
+        (e) =>
+          (e.metadata as { changes: { outcome: { after: string } } }).changes
+            .outcome.after,
+      ),
+    ).toEqual(["infected", "unscannable"]);
+    expect(JSON.stringify(events)).not.toMatch(/synthetic receipt|FAKE-CLAMD/);
+  });
+
+  it("tells a password-protected upload apart from an over-limit one", async () => {
+    clamd.mode = "encrypted";
+    const { store: own, upload: send } = scanned(true);
+    const response = await send(uploadRequest("owner", PDF));
+    clamd.mode = "normal";
+    expect(response.status).toBe(422);
+    const { error } = (await response.json()) as { error: string };
+    expect(error).toMatch(/password-protected/);
+    expect(error).not.toMatch(/too large/);
+    expect(own.objects.size).toBe(0);
+  });
+
+  it("frees the scan slot as soon as the scan ends, before storing", async () => {
+    clamd.mode = "normal";
+    clamd.delayMs = 0;
+    // Storing is slow; the next upload must not wait for it.
+    class SlowStore extends MemoryStore {
+      override async put(key: string, body: Uint8Array) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        await super.put(key, body);
+      }
+    }
+    const { upload: send } = scanned(true, () => clamd.port, new SlowStore());
+    const first = send(uploadRequest("owner", PDF));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const second = await send(uploadRequest("owner", PDF));
+    expect(second.status).toBe(201);
+    expect((await first).status).toBe(201);
+  });
+
+  it("holds a scan slot from before the body is read, and 503s when none frees up", async () => {
+    clamd.mode = "normal";
+    clamd.delayMs = 400;
+    const { upload: send } = scanned(true);
+    const [first, second] = await Promise.all([
+      send(uploadRequest("owner", PDF)),
+      send(uploadRequest("owner", PDF)),
+    ]);
+    clamd.delayMs = 0;
+    expect([first.status, second.status].sort()).toEqual([201, 503]);
   });
 });
 

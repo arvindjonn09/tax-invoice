@@ -8,7 +8,15 @@ import {
   sha256Hex,
   signLink,
 } from "../documents/files";
-import { type DocumentDeps, readMultipart } from "../documents/handlers";
+import {
+  BODY_DEADLINE_MS,
+  type DocumentDeps,
+  readMultipart,
+  reserveScan,
+  scanOrRefuse,
+  withDeadline,
+} from "../documents/handlers";
+import type { Scanning } from "../documents/scanner";
 import type { ObjectStore } from "../documents/store";
 import { clientIp, throttle } from "../http/throttle";
 import { log } from "../log";
@@ -52,20 +60,53 @@ export function logoHandlers(deps: DocumentDeps) {
     }
   }
 
-  const upload: PolicyHandler<unknown> = async ({ actor, request }) => {
+  const upload: PolicyHandler<unknown> = async (context) => {
     const store = deps.store();
     if (!store) return unavailable();
     await throttle(deps.db(), "document.upload", {
-      userId: actor.userId,
-      ip: clientIp(request.headers),
+      userId: context.actor.userId,
+      ip: clientIp(context.request.headers),
     });
-    const form = await readMultipart(request, LOGO_BODY_LIMIT, TOO_LARGE);
+    // #136: a logo is scanned like any other upload, before it's stored.
+    const slot = await reserveScan(deps);
+    if (slot instanceof Response) return slot;
+    try {
+      return await receive(context, store, slot.scanning, () =>
+        slot.release?.(),
+      );
+    } finally {
+      slot.release?.();
+    }
+  };
+
+  const receive = async (
+    { actor, request }: Parameters<PolicyHandler<unknown>>[0],
+    store: ObjectStore,
+    scanning: Scanning,
+    releaseSlot: () => void,
+  ) => {
+    const form = await withDeadline(
+      readMultipart(request, LOGO_BODY_LIMIT, TOO_LARGE),
+      BODY_DEADLINE_MS,
+    );
     const file = form.get("file");
     if (!(file instanceof File) || file.size === 0)
       return privateJson({ error: "Choose a logo to upload" }, { status: 400 });
     if (file.size > MAX_LOGO_BYTES)
       return privateJson({ error: TOO_LARGE }, { status: 413 });
-    const logo = cleanLogo(new Uint8Array(await file.arrayBuffer()));
+    const original = new Uint8Array(await file.arrayBuffer());
+    // The bytes as sent, before any are removed (a refusal names the type
+    // the file claims; nothing else about it is kept).
+    const refused = await scanOrRefuse(
+      deps,
+      actor,
+      scanning,
+      original,
+      file.type || "application/octet-stream",
+      releaseSlot,
+    );
+    if (refused) return refused;
+    const logo = cleanLogo(original);
     if ("refused" in logo)
       return logo.refused === "dimensions"
         ? privateJson(
