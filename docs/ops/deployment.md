@@ -108,6 +108,29 @@ A rollback is always a new commit on `main`, because the deploy gate only accept
 
 If a migration fails part-way, Prisma marks it failed (error P3009). Leave it for the owner and the database engineer to fix: never edit `_prisma_migrations`.
 
+## Roll back the self-hosted site (#359)
+
+The steps above are for the staging Compose stack. On the self-hosted site (`jobflow.service`, the Postgres and MinIO run by `jobflow-services`, and the nginx maintenance gate), use these. `deploy.sh` takes a verified backup before it changes anything, so there is always one from just before the release. It refuses to deploy if that backup fails; `JOBFLOW_SKIP_BACKUP=1` overrides this only on a host without backups.
+
+**Who decides:** the owner. Claude or anyone else proposes the rollback and does the steps once the owner agrees. Visitors see the maintenance page ("We'll be back soon") throughout, so no other notice is needed for a short rollback.
+
+**Code only (the release had no migration, or it was backward-compatible):**
+1. On a branch, revert the merge: `git revert -m 1 <merge>`. Keep any migration, as in step 1 of the Compose rollback above. Open a PR, get CI green and merge it.
+2. Deploy the new tip of `main` as usual (`maintenance.md` § Deploy). `deploy.sh` only deploys the tip, so the revert has to be merged first.
+
+**If the site is broken and can't wait for CI:** turn maintenance on by hand (`touch /var/lib/jobflow-maintenance/on`), so visitors see the maintenance page instead of errors. Then do the code-only rollback. Backups skip themselves while maintenance is on, so `deploy.sh` will stop for lack of a fresh backup: take one first (`rm` the flag, `sudo systemctl start jobflow-backup.service`, put the flag back), or deploy with `JOBFLOW_SKIP_BACKUP=1` if the newest backup is recent enough. Maintenance stays on until the fixed deploy turns it off.
+
+**A migration damaged data, or isn't backward-compatible:**
+1. Turn maintenance on and stop the app: `touch /var/lib/jobflow-maintenance/on`, then `sudo systemctl stop jobflow.service`.
+2. Find the pre-deploy backup: the deploy log prints its folder ("Pre-deploy backup: /home/prod/jobflow-backups/…"). Use that local copy while the host is available. The share (`/mnt/jobflow/backups`) has it too only if the share was reachable; if the deploy said the share was unreachable, the hourly retry copies it later, so the share copy may lag.
+3. Restore it into a **new, empty** database and bucket, as in the drill below (backups.md § Restore). Never restore over the live database.
+4. Point the app at the restored copy: change `DATABASE_URL` and `S3_BUCKET` in `/home/prod/tax-invoice-run/.env`. Then re-run `sudo bash infra/backup/host/install.sh` (type `/mnt/jobflow`; it keeps the key), so backups and alerts protect the restored copy.
+5. Merge a revert that also removes the bad migration (the Compose steps above explain why), and deploy it.
+6. Check `/api/health/ready` and a real page. Then take a backup: `sudo systemctl start jobflow-backup.service`.
+7. Anything recorded between the backup and the rollback is only in the old database. Export it rather than re-entering it (re-entered invoices would get new numbers). Write an incident note.
+
+**Rehearse it:** restore the newest backup into a scratch database and bucket and compare table counts, as #358 does monthly. Restore drills are recorded in `docs/ops/restore-drills/`. A full rollback rehearsal is also recorded there (step 3 onwards, against a scratch copy, never the live database).
+
 ## Record each deploy
 
 Add a line to the release log in [CHANGELOG.md](../../CHANGELOG.md) under the version you deployed, with:
