@@ -16,6 +16,7 @@ import {
 import { type Auth, createAuth } from "../../apps/web/src/server/auth/config";
 import { isVerified, resolveActor } from "../../apps/web/src/server/auth/actor";
 import { createWithPolicy } from "../../apps/web/src/server/authz/policy";
+import { issueToken } from "../../apps/web/src/server/account/tokens";
 import { decryptPayload } from "../../apps/web/src/server/email/crypto";
 import {
   type CommittedDatabase,
@@ -80,8 +81,6 @@ function post(path: string, body: unknown, ip = `198.51.100.${++ipCounter}`) {
 const form = (email: string, extra: Record<string, unknown> = {}) => ({
   name: "Sam Sample",
   email,
-  password: "correct horse battery",
-  passwordConfirmation: "correct horse battery",
   acceptTerms: true,
   termsVersion: TERMS_VERSION,
   privacyVersion: PRIVACY_VERSION,
@@ -124,10 +123,57 @@ describe("sign-up", () => {
     // Sign-up creates no company, membership or trial (S2 AC10).
     expect(user.memberships).toEqual([]);
     const [email] = await emailsFor("new.owner@example.com");
-    expect(email?.kind).toBe("verify_email");
-    expect(email?.message?.text).toContain(`${ORIGIN}/verify-email#token=`);
+    expect(email?.kind).toBe("password_reset");
+    expect(email?.message?.text).toContain(`${ORIGIN}/reset-password#token=`);
     // No user-entered text in mail to an unverified address (S2 AC9).
     expect(email?.message?.text).not.toContain("Sam");
+  });
+
+  it("ignores a submitted password, so only the mailbox holder can set one", async () => {
+    const address = "chosen@example.com";
+    const chosen = "a password chosen by whoever submitted";
+    const response = await signUp(deps)(
+      post(
+        "/api/account/sign-up",
+        form(address, { password: chosen, passwordConfirmation: chosen }),
+      ),
+    );
+    expect(response.status).toBe(202);
+    const signIn = await deps.auth().handler(
+      new Request(`${ORIGIN}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: {
+          origin: ORIGIN,
+          "content-type": "application/json",
+          "x-forwarded-for": "198.51.100.200",
+        },
+        body: JSON.stringify({ email: address, password: chosen }),
+      }),
+    );
+    expect(signIn.status).toBe(401);
+    const user = await client.user.findUniqueOrThrow({
+      where: { email: address },
+    });
+    expect(user.emailVerified).toBe(false);
+
+    const [email] = await emailsFor(address);
+    const token = tokenFrom(email?.message?.text ?? "");
+    const newPassword = "a password from the mailbox holder";
+    const reset = await resetPassword(deps)(
+      post("/api/account/password/reset", {
+        token,
+        password: newPassword,
+        passwordConfirmation: newPassword,
+      }),
+    );
+    expect(reset.status).toBe(200);
+    expect(
+      (await client.user.findUniqueOrThrow({ where: { id: user.id } }))
+        .emailVerified,
+    ).toBe(true);
+    expect(
+      await client.termsAcceptance.count({ where: { userId: user.id } }),
+    ).toBe(1);
   });
 
   it("answers an existing email identically and leaves that account unchanged", async () => {
@@ -150,7 +196,7 @@ describe("sign-up", () => {
     expect(after.name).toBe(before.name);
     expect(after.accounts[0]?.password).toBe(before.accounts[0]?.password);
     const kinds = (await emailsFor("new.owner@example.com")).map((e) => e.kind);
-    expect(kinds).toEqual(["verify_email", "account_exists"]);
+    expect(kinds).toEqual(["password_reset", "account_exists"]);
   });
 
   it("caps 'account exists' email to one recipient without changing the response", async () => {
@@ -192,14 +238,12 @@ describe("sign-up", () => {
     ).toBe(1);
   });
 
-  it("validates fields, terms, breached passwords and Turnstile", async () => {
+  it("validates fields, terms and Turnstile", async () => {
     const bad = await signUp(deps)(
       post(
         "/api/account/sign-up",
         form("bad@example.com", {
           name: " ",
-          password: "short",
-          passwordConfirmation: "different",
           acceptTerms: false,
         }),
       ),
@@ -208,18 +252,6 @@ describe("sign-up", () => {
     expect(Object.keys((await bad.json()).fields).sort()).toEqual([
       "acceptTerms",
       "name",
-      "password",
-    ]);
-    const mismatch = await signUp(deps)(
-      post(
-        "/api/account/sign-up",
-        form("mismatch@example.com", {
-          passwordConfirmation: "something else!",
-        }),
-      ),
-    );
-    expect(Object.keys((await mismatch.json()).fields)).toEqual([
-      "passwordConfirmation",
     ]);
     const stale = await signUp(deps)(
       post(
@@ -235,12 +267,6 @@ describe("sign-up", () => {
       ),
     );
     expect(extra.status).toBe(400);
-    breached = true;
-    const leaked = await signUp(deps)(
-      post("/api/account/sign-up", form("leaked@example.com")),
-    );
-    breached = false;
-    expect((await leaked.json()).fields.password).toMatch(/data breach/);
     turnstileOk = false;
     const robot = await signUp(deps)(
       post("/api/account/sign-up", form("robot@example.com")),
@@ -311,7 +337,14 @@ describe("sign-up", () => {
 
 describe("verification", () => {
   it("verifies once with the emailed token and rejects reuse or tampering", async () => {
-    const [email] = await emailsFor("new.owner@example.com");
+    await resendVerification(deps)(
+      post("/api/account/verification/resend", {
+        email: "new.owner@example.com",
+      }),
+    );
+    const email = (await emailsFor("new.owner@example.com"))
+      .filter((row) => row.kind === "verify_email")
+      .at(-1);
     const token = tokenFrom(email?.message?.text ?? "");
     expect(token).toBeDefined();
     const tampered = await verifyEmail(deps)(
@@ -344,8 +377,12 @@ describe("verification", () => {
     await signUp(deps)(
       post("/api/account/sign-up", form("resend@example.com")),
     );
-    const [first] = await emailsFor("resend@example.com");
-    const oldToken = tokenFrom(first?.message?.text ?? "");
+    const user = await client.user.findUniqueOrThrow({
+      where: { email: "resend@example.com" },
+    });
+    const oldToken = await client.$transaction((tx) =>
+      issueToken(tx, user.id, "email_verification"),
+    );
     for (const email of [
       "resend@example.com",
       "nobody@example.com",
@@ -358,7 +395,10 @@ describe("verification", () => {
       expect(await response.json()).toEqual({ status: "check-email" });
     }
     const emails = await emailsFor("resend@example.com");
-    expect(emails.map((e) => e.kind)).toEqual(["verify_email", "verify_email"]);
+    expect(emails.map((e) => e.kind)).toEqual([
+      "password_reset",
+      "verify_email",
+    ]);
     const old = await verifyEmail(deps)(
       post("/api/account/verify-email", { token: oldToken }),
     );
