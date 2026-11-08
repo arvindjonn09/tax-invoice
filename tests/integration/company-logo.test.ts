@@ -20,7 +20,13 @@ import {
   type CommittedDatabase,
   withCommittedDatabase,
 } from "../helpers/committed-database";
+import { clamdScanner } from "../../apps/web/src/server/documents/scanner";
 import { syntheticFactory } from "../helpers/factories";
+import {
+  type FakeClamd,
+  TEST_MARKER,
+  startFakeClamd,
+} from "../helpers/fake-clamd";
 import { jpeg, jpegSegment, png, pngChunk } from "../helpers/logo-fixtures";
 import { operatorUpdate } from "../helpers/operator-update";
 
@@ -40,6 +46,8 @@ const deps = {
   db: () => db,
   store: () => store,
   secret: () => SECRET,
+  // Scanning has its own tests below (#136).
+  scanner: () => ({ required: false, scanner: null, disabled: false }),
 };
 const logos = logoHandlers(deps);
 const documents = documentHandlers(deps);
@@ -595,5 +603,84 @@ describe("logo link (#227)", () => {
         data: { accessMode: "unrestricted", trialLastDay: null },
       });
     }
+  });
+});
+
+describe("logo malware scanning (#136)", () => {
+  let clamd: FakeClamd;
+  beforeAll(async () => {
+    clamd = await startFakeClamd();
+  });
+  afterAll(() => clamd.close());
+
+  const scanned = (required: boolean, own = new MemoryStore()) => ({
+    own,
+    handlers: logoHandlers({
+      ...deps,
+      store: () => own,
+      scanner: () => ({
+        required,
+        disabled: false,
+        scanner: clamdScanner({
+          host: "127.0.0.1",
+          port: clamd.port,
+          idleMs: 500,
+          maxConcurrent: 1,
+          slotWaitMs: 200,
+        }),
+      }),
+    }),
+  });
+
+  it("stores a clean logo", async () => {
+    clamd.mode = "normal";
+    const { own, handlers } = scanned(true);
+    const response = await uploadLogo(logoRequest("owner", png()), handlers);
+    expect(response.status).toBe(201);
+    expect(own.objects.size).toBe(1);
+  });
+
+  it("refuses a flagged logo before it's cleaned or stored, and audits it", async () => {
+    clamd.mode = "normal";
+    const before = await counts();
+    const { own, handlers } = scanned(true);
+    // The marker sits in a text chunk that cleaning would have removed:
+    // the scan sees the bytes as sent.
+    const flagged = png(
+      {},
+      pngChunk("tEXt", Buffer.from(`Comment\0${TEST_MARKER}`)),
+    );
+    const response = await uploadLogo(logoRequest("owner", flagged), handlers);
+    expect(response.status).toBe(422);
+    expect(((await response.json()) as { error: string }).error).toMatch(
+      /flagged as unsafe/,
+    );
+    expect(own.objects.size).toBe(0);
+    expect(await counts()).toEqual(before);
+    expect(
+      await db.auditEvent.count({
+        where: { companyId, action: "document.malware_rejected" },
+      }),
+    ).toBeGreaterThan(0);
+  });
+
+  it("fails closed when the scanner can't answer, or is required but missing", async () => {
+    const before = await counts();
+    clamd.mode = "error";
+    const broken = scanned(true);
+    expect(
+      (await uploadLogo(logoRequest("owner", png()), broken.handlers)).status,
+    ).toBe(503);
+    expect(broken.own.objects.size).toBe(0);
+    const missing = logoHandlers({
+      ...deps,
+      store: () => new MemoryStore(),
+      scanner: () => ({ required: true, scanner: null, disabled: false }),
+    });
+    expect(
+      (await uploadLogo(logoRequest("owner", png()), missing)).status,
+    ).toBe(503);
+    expect(await counts()).toEqual(before);
+    clamd.mode = "normal";
   });
 });
