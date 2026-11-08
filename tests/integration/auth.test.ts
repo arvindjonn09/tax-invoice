@@ -399,3 +399,71 @@ describe("sign-in throttle behind Cloudflare (#217)", () => {
     expect(statuses.slice(SIGN_IN_MAX_ATTEMPTS)).toEqual([429, 429]);
   });
 });
+
+describe("Better Auth account endpoints on the pinned version (#260)", () => {
+  const post = (path: string, headers: Headers, body: unknown) => {
+    const h = new Headers(headers);
+    h.set("content-type", "application/json");
+    h.set("origin", ORIGIN);
+    h.set("x-forwarded-for", nextIp());
+    return auth.handler(
+      new Request(`${ORIGIN}/api/auth${path}`, {
+        method: "POST",
+        headers: h,
+        body: JSON.stringify(body),
+      }),
+    );
+  };
+
+  it("update-user writes only name and image: no email, verification, 2FA or role", async () => {
+    const headers = cookieHeaders(await signIn(auth, emails.lonely, PASSWORD));
+    const before = await db.user.findUniqueOrThrow({
+      where: { id: ids.lonely },
+    });
+    // Email is refused outright.
+    expect(
+      (
+        await post("/update-user", headers, {
+          email: "taken-over@jobflow.invalid",
+        })
+      ).status,
+    ).toBe(400);
+    // Other user columns ride along with a name change and are ignored.
+    await post("/update-user", headers, {
+      name: "Synthetic Renamed",
+      emailVerified: !before.emailVerified,
+      twoFactorEnabled: !before.twoFactorEnabled,
+      role: "admin",
+      banned: false,
+      id: ids.owner,
+    });
+    const after = await db.user.findUniqueOrThrow({
+      where: { id: ids.lonely },
+    });
+    expect(after).toMatchObject({
+      email: before.email,
+      emailVerified: before.emailVerified,
+      twoFactorEnabled: before.twoFactorEnabled,
+    });
+    // The owner's row is untouched by a forged id.
+    expect(
+      (await db.user.findUniqueOrThrow({ where: { id: ids.owner } })).name,
+    ).not.toBe("Synthetic Renamed");
+  });
+
+  it("change-email and delete-user are off", async () => {
+    const headers = cookieHeaders(await signIn(auth, emails.lonely, PASSWORD));
+    const changed = await post("/change-email", headers, {
+      newEmail: "elsewhere@jobflow.invalid",
+    });
+    const deleted = await post("/delete-user", headers, {
+      password: PASSWORD,
+    });
+    expect(changed.status).toBeGreaterThanOrEqual(400);
+    expect(deleted.status).toBeGreaterThanOrEqual(400);
+    const user = await db.user.findUniqueOrThrow({
+      where: { id: ids.lonely },
+    });
+    expect(user.email).toBe(emails.lonely);
+  });
+});

@@ -21,6 +21,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #48: PDFs of issued invoices and credit notes, stored privately once at
 // issue; regeneration never changes an issued document.
@@ -418,7 +419,7 @@ describe("read-only company (#222)", () => {
     expect(await db.invoicePdf.count({ where: { invoiceId: draft.id } })).toBe(
       0,
     );
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: companyId },
       data: {
         isDemo: false,
@@ -448,7 +449,7 @@ describe("read-only company (#222)", () => {
         }),
       ).toBe(1);
     } finally {
-      await db.company.update({
+      await operatorUpdate(db, {
         where: { id: companyId },
         data: { accessMode: "unrestricted", isDemo: true },
       });

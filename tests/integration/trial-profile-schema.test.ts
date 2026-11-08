@@ -9,6 +9,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate, operatorUpdateInTx } from "../helpers/operator-update";
 
 // #211: profile extras and logo, quote snapshot, trial notifications, user
 // notices, extension requests and the commit-time read-only guard (ADR 0004
@@ -58,7 +59,7 @@ const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
 
 /** Put the company on a trial whose last day is `lastDay` (Sydney). */
 function setTrial(lastDay: string) {
-  return client.company.update({
+  return operatorUpdate(client, {
     where: { id: companyId },
     data: {
       accessMode: "trial",
@@ -70,7 +71,7 @@ function setTrial(lastDay: string) {
 }
 const expire = () => setTrial("2020-01-01");
 const reopen = () =>
-  client.company.update({
+  operatorUpdate(client, {
     where: { id: companyId },
     data: { accessMode: "unrestricted" },
   });
@@ -161,7 +162,7 @@ describe("commit-time read-only guard", () => {
     await expect(
       audited([{ action: "customer.created" }], (tx) =>
         // Expiry lands inside the same transaction, after the audit row.
-        tx.company.update({
+        operatorUpdateInTx(tx, {
           where: { id: companyId },
           data: { trialLastDay: day("2020-01-01") },
         }),
@@ -671,5 +672,60 @@ describe("trial extension requests", () => {
         data: { message: "Rewritten" },
       }),
     ).rejects.toThrow(/details can't change/);
+  });
+});
+
+describe("trial columns change only through the operator (#260)", () => {
+  const refused = /jobflow_trial_columns_operator_only/;
+
+  it("refuses access_mode, trial_last_day and trial_extension_count without the operator key", async () => {
+    for (const data of [
+      { accessMode: "trial" as const },
+      { trialLastDay: day("2099-12-31") },
+      { trialExtensionCount: 5 },
+    ])
+      await expect(
+        client.company.update({ where: { id: otherCompanyId }, data }),
+      ).rejects.toThrow(refused);
+    // Another exemption key isn't enough either.
+    await expect(
+      client.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('jobflow.read_only_exemption', 'export', true)`;
+        await tx.company.update({
+          where: { id: otherCompanyId },
+          data: { trialExtensionCount: 5 },
+        });
+      }),
+    ).rejects.toThrow(refused);
+  });
+
+  it("allows other company columns, and the trial columns with the operator key", async () => {
+    await client.company.update({
+      where: { id: otherCompanyId },
+      data: { name: "Synthetic Renamed" },
+    });
+    const updated = await operatorUpdate(client, {
+      where: { id: otherCompanyId },
+      data: { trialExtensionCount: { increment: 1 } },
+    });
+    expect(updated.trialExtensionCount).toBeGreaterThan(0);
+  });
+
+  it("the key is transaction-local: it doesn't carry into the next statement", async () => {
+    await client.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('jobflow.read_only_exemption', 'operator', true)`;
+    });
+    await expect(
+      client.company.update({
+        where: { id: otherCompanyId },
+        data: { trialExtensionCount: 0 },
+      }),
+    ).rejects.toThrow(refused);
+  });
+
+  it("has no column default: an insert must choose an access mode", async () => {
+    await expect(
+      client.$executeRaw`INSERT INTO companies (name, created_by) VALUES ('No mode', ${owner.id}::uuid)`,
+    ).rejects.toThrow(/access_mode/);
   });
 });

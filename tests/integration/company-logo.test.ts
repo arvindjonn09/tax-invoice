@@ -22,6 +22,7 @@ import {
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
 import { jpeg, jpegSegment, png, pngChunk } from "../helpers/logo-fixtures";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #227 (S6): profile extras and the logo. Refused files leave nothing behind,
 // replaced logos stay, and access stays inside the company.
@@ -577,7 +578,7 @@ describe("logo link (#227)", () => {
   });
 
   it("still works while read-only", async () => {
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: companyId },
       data: {
         isDemo: false,
@@ -589,7 +590,7 @@ describe("logo link (#227)", () => {
     try {
       expect((await logoLink("owner")).status).toBe(200);
     } finally {
-      await db.company.update({
+      await operatorUpdate(db, {
         where: { id: companyId },
         data: { accessMode: "unrestricted", trialLastDay: null },
       });

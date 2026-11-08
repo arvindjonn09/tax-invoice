@@ -4,6 +4,7 @@ import { type Browser, type Page, expect, test } from "@playwright/test";
 import { createDatabaseClient } from "../../packages/database/src/index";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
 import { isolatedTestConnection } from "../helpers/test-environment";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #232 (S14, design §12): the trial page for each role and state.
 test.skip(
@@ -288,7 +289,7 @@ test("past outcomes, other roles, read-only and unrestricted", async ({
     await employee.context.close();
 
     // Read-only: the owner can still ask for more time.
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: companyId },
       data: {
         trialStartedAt: new Date("2019-12-01T00:00:00Z"),
@@ -305,7 +306,7 @@ test("past outcomes, other roles, read-only and unrestricted", async ({
     await noViolations(page);
 
     // Unrestricted: nothing to request.
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: companyId },
       data: { accessMode: "unrestricted" },
     });

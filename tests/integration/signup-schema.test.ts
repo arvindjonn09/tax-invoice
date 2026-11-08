@@ -6,6 +6,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #210: sign-up accounts, outbox, platform audit and trial access state.
 let database: CommittedDatabase;
@@ -32,7 +33,7 @@ afterAll(() => database?.release());
 const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
 
 async function startTrial(lastDay: string) {
-  return client.company.update({
+  return operatorUpdate(client, {
     where: { id: companyId },
     data: {
       accessMode: "trial",
@@ -118,7 +119,7 @@ describe("actor-aware company audit", () => {
   // The trial tests above leave this company expired; since #211 an expired
   // trial company refuses audited writes at commit, so restore full access.
   beforeAll(async () => {
-    await client.company.update({
+    await operatorUpdate(client, {
       where: { id: companyId },
       data: { accessMode: "unrestricted" },
     });
@@ -249,14 +250,27 @@ describe("S13 backfill", () => {
     await client.$executeRawUnsafe(
       "ALTER TABLE audit_events ENABLE TRIGGER USER",
     );
+    // As the operator would (#260 guard on the trial columns).
+    await client.$transaction([
+      client.$executeRawUnsafe(
+        "SELECT set_config('jobflow.read_only_exemption', 'operator', true)",
+      ),
+      client.$executeRawUnsafe(
+        "UPDATE companies SET self_service_owner_id = NULL, self_service_request_key = NULL, access_mode = 'unrestricted', trial_started_at = NULL, trial_last_day = NULL",
+      ),
+    ]);
+    // The #260 guard depends on access_mode: take it off first, put it back after.
     await client.$executeRawUnsafe(
-      "UPDATE companies SET self_service_owner_id = NULL, self_service_request_key = NULL, access_mode = 'unrestricted', trial_started_at = NULL, trial_last_day = NULL",
+      await sql("rollbacks/20261108120000_trial_columns_guard.sql"),
     );
     await client.$executeRawUnsafe(
       await sql("rollbacks/20261103100000_signup_accounts.sql"),
     );
     await client.$executeRawUnsafe(
       await sql("migrations/20261103100000_signup_accounts/migration.sql"),
+    );
+    await client.$executeRawUnsafe(
+      await sql("migrations/20261108120000_trial_columns_guard/migration.sql"),
     );
     const companies = await client.company.findMany({
       select: { id: true, accessMode: true, readOnlyFrom: true },

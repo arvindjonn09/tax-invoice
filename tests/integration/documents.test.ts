@@ -20,6 +20,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #34: private storage — type/size allow-list, random keys, links only after
 // authz, expired or forged links fail, other companies never get a URL.
@@ -290,7 +291,7 @@ describe("read-only company (#222)", () => {
     const uploaded = await upload(uploadRequest("owner", PDF));
     expect(uploaded.status).toBe(201);
     const { id } = (await uploaded.json()) as { id: string };
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: companyId },
       data: {
         isDemo: false,
@@ -309,7 +310,7 @@ describe("read-only company (#222)", () => {
       expect(refused.status).toBe(403);
       expect(await refused.json()).toMatchObject({ code: "company_read_only" });
     } finally {
-      await db.company.update({
+      await operatorUpdate(db, {
         where: { id: companyId },
         data: { accessMode: "unrestricted", isDemo: true },
       });
