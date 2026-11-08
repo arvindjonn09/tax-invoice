@@ -1,3 +1,4 @@
+import { supplierSnapshot } from "../company/supplier-snapshot";
 import {
   type Actor,
   companyScope,
@@ -157,6 +158,13 @@ function view(row: Row) {
     },
     sentOn: asDay(row.sentOn),
     sentAt: row.sentAt,
+    // #229: what the customer was sent. Drafts follow the live company
+    // profile; a quote sent before snapshots existed has none recorded.
+    supplier: row.status === "draft" ? null : (row.supplierSnapshot ?? null),
+    supplierNote:
+      row.status !== "draft" && !row.supplierSnapshot
+        ? "Supplier details not recorded at send"
+        : null,
     decidedAt: row.decidedAt,
     decisionNote: row.decisionNote,
     createdAt: row.createdAt,
@@ -581,10 +589,18 @@ export function quoteHandlers(db: () => PrismaClient) {
             data: { status: "superseded" },
           });
         }
+        // #229 (S7): the supplier details and "about" as sent, frozen by
+        // jobflow_guard_quote with the rest of the quote.
+        const company = await tx.company.findUniqueOrThrow({
+          where: { id: actor.companyId },
+        });
         await tx.quote.update({
           where: { id: before.id },
           data: {
             status: "sent",
+            supplierSnapshot: await supplierSnapshot(tx, company, {
+              about: true,
+            }),
             gstRegistered: registered,
             exclusiveCents: totals.exclusive,
             gstCents: totals.gst,
