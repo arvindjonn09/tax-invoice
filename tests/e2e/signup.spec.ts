@@ -13,7 +13,7 @@ test.skip(
 
 const PASSWORD = "a long synthetic sign-up phrase";
 
-test("a visitor signs up, is held at verification, then verifies", async ({
+test("a visitor signs up, sets a password from the email, then signs in", async ({
   page,
 }) => {
   // Five pages compile on first visit in `next dev`; the flow is long.
@@ -25,8 +25,6 @@ test("a visitor signs up, is held at verification, then verifies", async ({
     await page.goto("/signup");
     await page.getByLabel("Your name").fill("Sam Sample");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
-    await page.getByLabel("Confirm password").fill(PASSWORD);
     await page.getByLabel(/I agree to the/).check();
     await page.getByRole("button", { name: "Create account" }).click();
     await expect(
@@ -34,42 +32,44 @@ test("a visitor signs up, is held at verification, then verifies", async ({
     ).toBeVisible();
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 
-    // Signing in before verifying only reaches the verify page.
+    // Nobody has a password yet, so signing in can't work.
     await page.goto("/login");
     await page.getByLabel("Email").fill(email);
     await page.getByLabel("Password").fill(PASSWORD);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/verify-email\/pending$/);
-    await expect(page.getByText(email)).toBeVisible();
-    await page.goto("/customers");
-    await expect(page).toHaveURL(/\/verify-email\/pending$/);
+    await expect(page.getByRole("alert").first()).toBeVisible();
+    await expect(page).toHaveURL(/\/login/);
 
-    // The verification email was queued and sent (its payload is then
-    // erased), so open a link from a fresh token the same way the email does.
+    // The email was queued and sent (its payload is then erased), so open a
+    // link from a fresh token the same way the email does.
     const user = await db.user.findUniqueOrThrow({ where: { email } });
     await expect
       .poll(
         async () =>
           (
             await db.emailOutbox.findFirst({
-              where: { userId: user.id, kind: "verify_email" },
+              where: { userId: user.id, kind: "password_reset" },
             })
           )?.status,
       )
       .toBe("sent");
     const token = await db.$transaction((tx) =>
-      issueToken(tx, user.id, "email_verification"),
+      issueToken(tx, user.id, "password_reset"),
     );
-    await page.goto(`/verify-email#token=${token}`);
-    // Loading the link spends nothing; only the button does.
-    await page.getByRole("button", { name: "Confirm my email" }).click();
+    await page.goto(`/reset-password#token=${token}`);
+    await page.getByLabel("New password", { exact: true }).fill(PASSWORD);
+    await page.getByLabel("Confirm new password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Change password" }).click();
     await expect(
-      page.getByRole("heading", { name: "Email verified" }),
+      page.getByRole("heading", { name: "Password changed" }),
     ).toBeVisible();
     // The token is removed from the address bar.
     expect(new URL(page.url()).hash).toBe("");
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
-    await page.getByRole("link", { name: "Continue" }).click();
+    await page.getByRole("link", { name: "Sign in" }).first().click();
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Sign in" }).click();
 
     // A verified user without a company sets up their business (S5).
     await expect(page).toHaveURL(/\/onboarding$/);
@@ -199,8 +199,6 @@ test("forgot password, then reset with the emailed link", async ({ page }) => {
     await page.goto("/signup");
     await page.getByLabel("Your name").fill("Riley Reset");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
-    await page.getByLabel("Confirm password").fill(PASSWORD);
     await page.getByLabel(/I agree to the/).check();
     await page.getByRole("button", { name: "Create account" }).click();
     await expect(
