@@ -14,6 +14,7 @@ const sync = read("sync.sh");
 const syncService = read("jobflow-backup-sync.service");
 const syncTimer = read("jobflow-backup-sync.timer");
 const install = read("install.sh");
+const share = read("share.sh");
 
 describe("self-hosted backups (#351)", () => {
   it("runs nightly as prod, with the key in its own file", () => {
@@ -39,8 +40,8 @@ describe("self-hosted backups (#351)", () => {
   it("copies every backup the share is missing, verifying before it lands", () => {
     const order = [
       "flock -w",
-      "timeout 60 ls",
-      "mountpoint -q",
+      'share_mounted "$mount"',
+      'timeout 60 mkdir -p "$BACKUP_SHARE_DIR/.incoming"',
       'for dir in "$BACKUP_ROOT"/*/',
       "manifest.json",
       'cp -R "${dir%/}" "$BACKUP_SHARE_DIR/.incoming/$name"',
@@ -55,6 +56,18 @@ describe("self-hosted backups (#351)", () => {
       '[ -f "$BACKUP_SHARE_DIR/$name/manifest.json" ] && continue',
     );
     expect(sync).toContain("exit 2");
+  });
+
+  it("tells an offline share from the automount placeholder (#353)", () => {
+    // systemd's autofs mount is always there, so a mountpoint test always
+    // passes; only a mounted SMB/CIFS filesystem counts.
+    // A timed-out probe is unreachable, even with a stale mount-table entry.
+    expect(share).toContain('timeout 60 ls "$1" >/dev/null 2>&1 || return 1');
+    expect(share).toContain('findmnt -rn -t cifs,smb3 -M "$1"');
+    for (const file of [sync, install, share])
+      expect(file).not.toMatch(/mountpoint -q/);
+    expect(sync).toContain(". infra/backup/host/share.sh");
+    expect(install).toContain('. "$here/share.sh"');
   });
 
   it("retries the copy hourly, as prod, with the key in its own file", () => {
@@ -72,8 +85,11 @@ describe("self-hosted backups (#351)", () => {
   });
 
   it("reuses a mounted share, or mounts one encrypted", () => {
-    expect(install).toContain('mountpoint -q "$mountpoint"');
+    expect(install).toContain('share_mounted "$mountpoint"');
     expect(install).toContain("runuser -u prod -- test -w");
+    // Only this share's automount, not every network mount (#353).
+    expect(install).not.toContain("remote-fs.target");
+    expect(install).toContain("systemd-escape -p --suffix=automount");
     expect(install).toMatch(/vers=3\.1\.1,seal,/);
     expect(install).toContain("domain=%s");
   });
@@ -85,10 +101,25 @@ describe("self-hosted backups (#351)", () => {
     );
     // Provisioned through an owner connection when the app login can't (#352 review).
     expect(install).toContain("BACKUP_ADMIN_DATABASE_URL");
-    expect(install).toContain("rolsuper OR rolcreaterole");
+    // PostgreSQL 16: CREATEROLE alone can't grant pg_read_all_data (#353).
+    expect(install).toContain(
+      "rolsuper OR (rolcreaterole AND pg_has_role(current_user, 'pg_read_all_data', 'MEMBER WITH ADMIN OPTION'))",
+    );
     // The password is quoted by psql, never spliced into SQL by the shell.
     expect(install).toContain("PASSWORD :'role_password'");
     expect(install).toMatch(/DATABASE_URL=postgresql:\/\/jobflow_backup:/);
+    // The app's host and port, not an assumed one (#353).
+    expect(install).toContain("@$db_host:$db_port/$db_name");
+  });
+
+  it("never puts a database password on a command line (#353)", () => {
+    // Connection strings become PG* variables, read on stdin.
+    expect(install).toContain("python3 -I -c");
+    expect(install).not.toMatch(/psql "\$(admin_url|db_url)"/);
+    expect(install).not.toMatch(/-v role_password=/);
+    expect(install).toContain(
+      "\\getenv role_password JOBFLOW_BACKUP_ROLE_PASSWORD",
+    );
   });
 
   it("keeps secrets out of the repository and an existing key in place", () => {
@@ -105,6 +136,7 @@ describe("self-hosted backups (#351)", () => {
       syncService,
       syncTimer,
       install,
+      share,
     ])
       expect(file).not.toMatch(
         /\b(?!127\.0\.0\.1\b)\d{1,3}(\.\d{1,3}){3}\b|\.ts\.net/,

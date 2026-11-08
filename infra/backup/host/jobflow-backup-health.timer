@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily JobFlow backup health check
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 Australia/Sydney
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

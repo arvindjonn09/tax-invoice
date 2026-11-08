@@ -6,6 +6,8 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- A daily backup check on the self-hosted site emails the operator when the nightly backup fails or the Windows file share falls more than 2 days behind ([#355](https://github.com/arvindjonn09/tax-invoice/issues/355)).
+- Backups to the Windows share now notice when the share is offline, grant read access correctly on PostgreSQL 16, use the app database's own host and port, and keep database passwords off command lines ([#353](https://github.com/arvindjonn09/tax-invoice/issues/353)).
 - Issued invoices and credit notes now freeze the organisation's phone, business email, website and logo, and their PDFs show them with the logo embedded from private storage. Sent quotes freeze the same details plus "about" ([#229](https://github.com/arvindjonn09/tax-invoice/issues/229)).
 - Password reset emails are limited per IP and per account, so someone who knows an address can't use up its resets ([#318](https://github.com/arvindjonn09/tax-invoice/issues/318)).
 - Uploaded files are scanned for malware with ClamAV before they're stored. Infected and password-protected files are refused, and in every production build uploads stop safely when the scanner is unavailable (#136).
