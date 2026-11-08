@@ -16,7 +16,7 @@ EnvironmentFile=/etc/jobflow/backup.env
 EnvironmentFile=/etc/jobflow/backup-key.env
 # Skipped while a deploy is migrating the database.
 ExecCondition=/usr/bin/test ! -e /var/lib/jobflow-maintenance/on
-ExecStart=/home/prod/tax-invoice-run/infra/backup/host/run.sh
+ExecStart=/bin/sh /home/prod/tax-invoice-run/infra/backup/host/run.sh
 TimeoutStartSec=1800
 UMask=0077
 NoNewPrivileges=yes

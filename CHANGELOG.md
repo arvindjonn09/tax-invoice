@@ -6,7 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
-- Nightly encrypted backups of the database and documents on the self-hosted site, copied to a Windows file share and verified there ([#351](https://github.com/arvindjonn09/tax-invoice/issues/351)).
+- Nightly encrypted backups of the database and documents on the self-hosted site, copied to a Windows file share and verified there; backups missed while the Windows computer is off are copied within an hour of it coming back ([#351](https://github.com/arvindjonn09/tax-invoice/issues/351)).
 - Mistyping the password during operator two-factor enrolment no longer uses up the one-time code.
 - In production, a platform operator has to pass TOTP again after 12 hours ([#323](https://github.com/arvindjonn09/tax-invoice/issues/323)).
 - Hardening: exports audit only validated values, someone demoted can no longer reach an invoice PDF they once generated, and the route policy tests close three gaps (part of [#260](https://github.com/arvindjonn09/tax-invoice/issues/260)).
