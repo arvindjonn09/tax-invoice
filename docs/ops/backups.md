@@ -145,3 +145,46 @@ If a restore fails part-way, the target may be partly restored. This can happen 
   - retention pruning
 
 Drills so far: [restore-drills/](restore-drills/).
+
+## Self-hosted site: a Windows file share (#351)
+
+The self-hosted site backs up to a Windows file share, which the owner's Windows computer syncs to cloud storage. Backups are encrypted before they leave this server, so the share and the cloud copy only ever hold ciphertext.
+
+**Each night at 02:15 Sydney time**, `jobflow-backup.timer` runs `infra/backup/host/run.sh` as `prod`. It:
+1. Makes and verifies an encrypted backup in `/home/prod/jobflow-backups`, and prunes that folder.
+2. Runs `infra/backup/host/sync.sh`. That copies **every** local backup the share doesn't have yet (under `.incoming`, then moved into place), verifies each copy there, and prunes the share to 30 daily and 12 monthly backups.
+
+**When the Windows computer is off or asleep:**
+- The local backup is still made and kept, and the nightly run fails, so `systemctl status jobflow-backup.service` shows it.
+- **Every hour**, `jobflow-backup-sync.timer` runs `sync.sh` on its own. The first run after the computer is back copies everything that was missed. That unit shows "failed" until the copy succeeds.
+- Touching the folder mounts the share on demand. The attempt is capped at 60 seconds, so a sleeping computer can't hang the job.
+- Local backups are kept for 30 days, so the share can be away for up to 30 days without losing a copy.
+
+The nightly run is skipped while maintenance is on during a deploy. A lock stops the nightly copy and the hourly retry from running at the same time.
+
+**Install** (once, after a deploy that includes it):
+
+```sh
+sudo bash /home/prod/tax-invoice-run/infra/backup/host/install.sh
+```
+
+It installs `cifs-utils` and `postgresql-client-16`. Then:
+- **Share already mounted** (for example `/mnt/jobflow`, with `uid=prod,gid=prod`): type its folder when asked. Nothing changes in `/etc/fstab`.
+- **Otherwise:** leave that empty, then give the share (`//computer/folder`) and the Windows account (`COMPUTER\user` for a local account). It saves the account in a root-only file under `/etc/jobflow`, and mounts the share on demand at `/mnt/jobflow-backup` (SMB 3.1.1, encrypted). `/etc/fstab` is saved first as `/etc/fstab.before-jobflow-backup`.
+
+Backups go in a `backups` folder on the share. The script then:
+- Creates the read-only `jobflow_backup` database role (`pg_read_all_data`). It does this through the app's `DATABASE_URL`. If that login can't create roles, it stops and asks for `BACKUP_ADMIN_DATABASE_URL`, an owner connection used only for this step.
+- Creates the encryption key if there isn't one yet, installs both timers, and makes the first backup.
+
+**Save the key it prints** somewhere other than this server and the share, such as a password manager. Without it, no backup can be restored. Running the script again keeps the existing key.
+
+**Check it:**
+
+```sh
+systemctl list-timers 'jobflow-backup*'                       # last and next runs
+journalctl -u jobflow-backup.service -u jobflow-backup-sync.service -n 50
+ls <share folder>/backups                                     # the copies on the share
+```
+
+**Restore:** see [Commands](#commands): `pnpm backup:restore <dir>` into an empty database and bucket, with the key from your password manager.
+

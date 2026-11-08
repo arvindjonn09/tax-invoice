@@ -1,0 +1,23 @@
+# Copies local backups the file share is missing (#351). Started hourly by
+# jobflow-backup-sync.timer; installed by infra/backup/host/install.sh.
+# It stays "failed" while the share is unreachable, and goes back to
+# succeeded on the first run after the Windows computer is back.
+[Unit]
+Description=JobFlow copy of pending backups to the file share
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=prod
+WorkingDirectory=/home/prod/tax-invoice-run
+# Storage and share settings, BACKUP_ROOT, BACKUP_SHARE_DIR and PATH.
+# Root-owned, 0600.
+EnvironmentFile=/etc/jobflow/backup.env
+# BACKUP_ENCRYPTION_KEY, needed to verify each copy. Root-owned, 0600.
+EnvironmentFile=/etc/jobflow/backup-key.env
+ExecStart=/bin/sh /home/prod/tax-invoice-run/infra/backup/host/sync.sh
+TimeoutStartSec=1800
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
