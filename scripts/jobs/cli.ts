@@ -27,7 +27,19 @@ try {
     appUrl: new URL(appUrl).origin,
     supportEmail: supportEmail(),
   });
-  console.log(`Trial reminders: ${result.sent} sent, ${result.failed} failed.`);
+  console.log(
+    `Trial reminders: ${result.sent} queued, ${result.failed} failed.`,
+  );
+  const outbox = await db.emailOutbox.groupBy({
+    by: ["status"],
+    where: { status: { in: ["pending", "failed"] } },
+    _count: { _all: true },
+  });
+  const count = (status: string) =>
+    outbox.find((row) => row.status === status)?._count._all ?? 0;
+  console.log(
+    `Email outbox: ${count("pending")} pending, ${count("failed")} failed.`,
+  );
   if (result.failed > 0) process.exitCode = 1;
 } finally {
   await db.$disconnect();

@@ -1,0 +1,23 @@
+# Nightly encrypted backup on the self-hosted site (#351). Started by
+# jobflow-backup.timer; installed by infra/backup/host/install.sh.
+[Unit]
+Description=JobFlow encrypted backup to the file share
+After=network-online.target jobflow-services.service remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=prod
+WorkingDirectory=/home/prod/tax-invoice-run
+# Read-only DATABASE_URL, storage settings, BACKUP_ROOT, BACKUP_SHARE_DIR and
+# PATH. Root-owned, 0600.
+EnvironmentFile=/etc/jobflow/backup.env
+# BACKUP_ENCRYPTION_KEY only, kept apart from the backups. Root-owned, 0600.
+EnvironmentFile=/etc/jobflow/backup-key.env
+# Skipped while a deploy is migrating the database.
+ExecCondition=/usr/bin/test ! -e /var/lib/jobflow-maintenance/on
+ExecStart=/bin/sh /home/prod/tax-invoice-run/infra/backup/host/run.sh
+TimeoutStartSec=1800
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
