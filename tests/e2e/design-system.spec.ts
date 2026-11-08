@@ -141,8 +141,12 @@ test("forced colours, reduced motion and 200% text reflow", async ({
   await page.setViewportSize({ width: 360, height: 900 });
   await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
   await page.goto("/design-system");
-  await page.addStyleTag({
-    content: "html {font-size:200%} body {font-size:1rem;line-height:1.5} ",
+  // Through the CSSOM: the production CSP (#330) blocks an injected <style>
+  // tag, and should, so the test runs under the real policy.
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "200%";
+    document.body.style.fontSize = "1rem";
+    document.body.style.lineHeight = "1.5";
   });
   await expect(
     page.getByRole("heading", { name: "Design system foundations" }),
