@@ -61,7 +61,8 @@ describe("self-hosted backups (#351)", () => {
   it("tells an offline share from the automount placeholder (#353)", () => {
     // systemd's autofs mount is always there, so a mountpoint test always
     // passes; only a mounted SMB/CIFS filesystem counts.
-    expect(share).toContain("timeout 60 ls");
+    // A timed-out probe is unreachable, even with a stale mount-table entry.
+    expect(share).toContain('timeout 60 ls "$1" >/dev/null 2>&1 || return 1');
     expect(share).toContain('findmnt -rn -t cifs,smb3 -M "$1"');
     for (const file of [sync, install, share])
       expect(file).not.toMatch(/mountpoint -q/);
