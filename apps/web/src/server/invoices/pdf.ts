@@ -466,6 +466,7 @@ async function renderBounded(
 
   // #229: the logo, top left, scaled to fit and never enlarged.
   // An image pdf-lib can't read is left out rather than blocking the PDF.
+  if (logo) check();
   const image = logo
     ? await (
         logo.type === "image/png"

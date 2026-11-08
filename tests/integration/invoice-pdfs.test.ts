@@ -554,19 +554,23 @@ describe("supplier snapshot v2 and logo (#229)", () => {
       chunk("IEND", Buffer.alloc(0)),
     ]);
   }
-  async function storeLogo(bytes: Uint8Array): Promise<string> {
-    const objectKey = `documents/${companyId}/${randomBytes(32).toString("hex")}`;
+  async function storeLogo(
+    bytes: Uint8Array,
+    owner = companyId,
+    createdBy = userIds.owner,
+  ): Promise<string> {
+    const objectKey = `documents/${owner}/${randomBytes(32).toString("hex")}`;
     await store!.put(objectKey, bytes);
     const document = await db.document.create({
       data: {
-        companyId,
+        companyId: owner,
         kind: "company_logo",
         objectKey,
         fileName: "logo.png",
         contentType: "image/png",
         sizeBytes: bytes.byteLength,
         sha256: sha256Hex(bytes),
-        createdBy: userIds.owner,
+        createdBy,
       },
     });
     return document.id;
@@ -631,69 +635,9 @@ describe("supplier snapshot v2 and logo (#229)", () => {
     };
   }
 
-  it("freezes contact details and the logo at issue; later edits change nothing", async () => {
-    const firstLogo = png(3, 2);
-    await db.company.update({
-      where: { id: companyId },
-      data: {
-        phone: "02 5550 0101",
-        businessEmail: "accounts@sample.invalid",
-        website: "https://sample.invalid",
-        logoDocumentId: await storeLogo(firstLogo),
-      },
-    });
-    const invoiceId = await issueLater();
-    const row = await db.invoice.findUniqueOrThrow({
-      where: { id: invoiceId },
-    });
-    expect(row.supplierSnapshot).toMatchObject({
-      v: 2,
-      legalName: "Sample Contracting Pty Ltd",
-      phone: "02 5550 0101",
-      businessEmail: "accounts@sample.invalid",
-      website: "https://sample.invalid",
-      logo: { sha256: sha256Hex(firstLogo), contentType: "image/png" },
-    });
-
-    // Every snapshot field changes after issue, including the logo.
-    await db.company.update({
-      where: { id: companyId },
-      data: {
-        legalName: "Renamed Pty Ltd",
-        phone: "02 5550 0202",
-        businessEmail: "changed@sample.invalid",
-        website: "https://changed.sample.invalid",
-        addressLine1: "99 Changed Street",
-        logoDocumentId: await storeLogo(png(5, 4)),
-      },
-    });
-    const pdf = await pdfOf(invoiceId);
-    expect(pdf.stored.rendererVersion).toBe("2");
-    for (const text of [
-      "Sample Contracting Pty Ltd",
-      "Phone 02 5550 0101",
-      "accounts@sample.invalid",
-      "https://sample.invalid",
-    ])
-      expect(pdf.shows(text), text).toBe(true);
-    for (const text of [
-      "Renamed Pty Ltd",
-      "Phone 02 5550 0202",
-      "changed@sample.invalid",
-      "99 Changed Street",
-    ])
-      expect(pdf.shows(text), text).toBe(false);
-    // The issue-time logo (3×2) is embedded; the replacement (5×4) isn't.
-    expect(pdf.raw).toMatch(/\/Subtype \/Image[\s\S]*?\/Width 3/);
-    expect(pdf.raw).not.toMatch(/\/Width 5/);
-    // The view keeps the snapshot too.
-    const after = await db.invoice.findUniqueOrThrow({
-      where: { id: invoiceId },
-    });
-    expect(after.supplierSnapshot).toEqual(row.supplierSnapshot);
-
-    // Restore the shared company for the other tests.
-    await db.company.update({
+  /** Put the shared company back, whatever a test did to it. */
+  const restoreCompany = () =>
+    db.company.update({
       where: { id: companyId },
       data: {
         legalName: "Sample Contracting Pty Ltd",
@@ -704,6 +648,111 @@ describe("supplier snapshot v2 and logo (#229)", () => {
         logoDocumentId: null,
       },
     });
+
+  it("freezes contact details and the logo at issue; later edits change nothing", async () => {
+    try {
+      const firstLogo = png(3, 2);
+      await db.company.update({
+        where: { id: companyId },
+        data: {
+          phone: "02 5550 0101",
+          businessEmail: "accounts@sample.invalid",
+          website: "https://sample.invalid",
+          logoDocumentId: await storeLogo(firstLogo),
+        },
+      });
+      const invoiceId = await issueLater();
+      const row = await db.invoice.findUniqueOrThrow({
+        where: { id: invoiceId },
+      });
+      expect(row.supplierSnapshot).toMatchObject({
+        v: 2,
+        legalName: "Sample Contracting Pty Ltd",
+        phone: "02 5550 0101",
+        businessEmail: "accounts@sample.invalid",
+        website: "https://sample.invalid",
+        logo: { sha256: sha256Hex(firstLogo), contentType: "image/png" },
+      });
+
+      // Every snapshot field changes after issue, including the logo.
+      await db.company.update({
+        where: { id: companyId },
+        data: {
+          legalName: "Renamed Pty Ltd",
+          phone: "02 5550 0202",
+          businessEmail: "changed@sample.invalid",
+          website: "https://changed.sample.invalid",
+          addressLine1: "99 Changed Street",
+          logoDocumentId: await storeLogo(png(5, 4)),
+        },
+      });
+      const pdf = await pdfOf(invoiceId);
+      expect(pdf.stored.rendererVersion).toBe("2");
+      for (const text of [
+        "Sample Contracting Pty Ltd",
+        "Phone 02 5550 0101",
+        "accounts@sample.invalid",
+        "https://sample.invalid",
+      ])
+        expect(pdf.shows(text), text).toBe(true);
+      for (const text of [
+        "Renamed Pty Ltd",
+        "Phone 02 5550 0202",
+        "changed@sample.invalid",
+        "99 Changed Street",
+      ])
+        expect(pdf.shows(text), text).toBe(false);
+      // The issue-time logo (3×2) is embedded; the replacement (5×4) isn't.
+      expect(pdf.raw).toMatch(/\/Subtype \/Image[\s\S]*?\/Width 3/);
+      expect(pdf.raw).not.toMatch(/\/Width 5/);
+      // The view keeps the snapshot too.
+      const after = await db.invoice.findUniqueOrThrow({
+        where: { id: invoiceId },
+      });
+      expect(after.supplierSnapshot).toEqual(row.supplierSnapshot);
+    } finally {
+      await restoreCompany();
+    }
+  });
+
+  it("leaves out a logo larger than the PDF limit, before decoding it", async () => {
+    try {
+      await db.company.update({
+        where: { id: companyId },
+        data: { logoDocumentId: await storeLogo(png(2001, 1)) },
+      });
+      const invoiceId = await issueLater();
+      const pdf = await pdfOf(invoiceId);
+      expect(pdf.raw).not.toContain("/Subtype /Image");
+      expect(pdf.shows("Sample Contracting Pty Ltd")).toBe(true);
+    } finally {
+      await restoreCompany();
+    }
+  });
+
+  it("never embeds another company's logo, even if a snapshot points at it", async () => {
+    const other = await db.company.findFirstOrThrow({
+      where: { id: { not: companyId } },
+      select: { id: true },
+    });
+    const theirs = png(3, 2);
+    const theirLogo = await storeLogo(theirs, other.id, userIds.outsider);
+    const invoiceId = await issueLater();
+    // A snapshot can't name another company's logo through the app; force
+    // one in, past the issued-invoice guard, to pin the read-side check.
+    await db.$transaction([
+      db.$executeRawUnsafe("ALTER TABLE invoices DISABLE TRIGGER USER"),
+      db.$executeRaw`UPDATE invoices SET supplier_snapshot = jsonb_set(supplier_snapshot, '{logo}', ${JSON.stringify(
+        {
+          documentId: theirLogo,
+          sha256: sha256Hex(theirs),
+          contentType: "image/png",
+        },
+      )}::jsonb) WHERE id = ${invoiceId}::uuid`,
+      db.$executeRawUnsafe("ALTER TABLE invoices ENABLE TRIGGER USER"),
+    ]);
+    const pdf = await pdfOf(invoiceId);
+    expect(pdf.raw).not.toContain("/Subtype /Image");
   });
 
   it("leaves out a logo whose stored bytes no longer match the snapshot", async () => {

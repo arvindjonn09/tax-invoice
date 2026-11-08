@@ -14,7 +14,7 @@ import type { ObjectStore } from "../documents/store";
 import { clientIp, throttle } from "../http/throttle";
 import { uuidOrNull } from "../http/fields";
 import { log, safeError } from "../log";
-import { MAX_LOGO_BYTES } from "../company/logo-image";
+import { MAX_LOGO_BYTES, cleanLogo } from "../company/logo-image";
 import { snapshotLogo } from "../company/supplier-snapshot";
 import {
   PdfLimitError,
@@ -39,6 +39,14 @@ type Stored = { documentId: string; sha256: string; rendererVersion: string };
 
 class NotIssued extends Error {}
 class StorageUnavailable extends Error {}
+
+/**
+ * The largest logo side drawn in a PDF. Logos are drawn at most 140 × 56 pt,
+ * and decoding a 4000 × 4000 16-bit PNG took about a second outside the
+ * render budget, so a larger logo is left out rather than risking a PDF that
+ * can never be generated (its snapshot is frozen).
+ */
+export const MAX_PDF_LOGO_SIDE = 2000;
 
 /**
  * #229: the logo frozen in the supplier snapshot, read from private storage
@@ -71,6 +79,18 @@ async function snapshotLogoBytes(
     sha256Hex(bytes) !== logo.sha256
   ) {
     log("warn", "invoice.pdf_logo_unavailable", { invoiceId });
+    return null;
+  }
+  // Checked again as an image (it was cleaned at upload), and its size read
+  // from the header before anything decodes the pixels.
+  const checked = cleanLogo(bytes);
+  if (
+    "refused" in checked ||
+    checked.type !== logo.contentType ||
+    checked.width > MAX_PDF_LOGO_SIDE ||
+    checked.height > MAX_PDF_LOGO_SIDE
+  ) {
+    log("warn", "invoice.pdf_logo_skipped", { invoiceId });
     return null;
   }
   return { bytes, type: logo.contentType };
