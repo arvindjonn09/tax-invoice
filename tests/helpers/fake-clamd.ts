@@ -43,7 +43,8 @@ export type FakeClamd = {
   close: () => Promise<void>;
 };
 
-export async function startFakeClamd(): Promise<FakeClamd> {
+/** `port` 0 picks a free port (tests); E2E passes a fixed one (#330). */
+export async function startFakeClamd(port = 0): Promise<FakeClamd> {
   const state: FakeClamd = {
     port: 0,
     received: [],
@@ -143,7 +144,9 @@ export async function startFakeClamd(): Promise<FakeClamd> {
     });
     socket.on("error", () => undefined);
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) =>
+    server.listen(port, "127.0.0.1", resolve),
+  );
   state.port = (server.address() as AddressInfo).port;
   state.close = () =>
     new Promise<void>((resolve) => {
