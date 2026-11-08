@@ -1,0 +1,20 @@
+# PostgreSQL and MinIO for the self-hosted site, started at boot. They're
+# user-owned installs run by ~/.local/bin/jobflow-services, which used to need a
+# manual start after every restart.
+[Unit]
+Description=JobFlow database and file storage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=prod
+ExecStart=/home/prod/.local/bin/jobflow-services start
+# A clean shutdown, so PostgreSQL needn't recover at the next start.
+ExecStop=/home/prod/.local/bin/jobflow-services stop
+TimeoutStartSec=120
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

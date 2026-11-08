@@ -13,29 +13,13 @@ The staging Compose stack has its own steps in [deployment.md](deployment.md) an
 
 ## Install once
 
-The owner runs these, because they need `sudo`. The first deploy afterwards uses the script from `main`.
+The owner runs this, because it needs `sudo`. It's safe to run again. First deploy a build that includes it, then:
 
 ```sh
-cd /home/prod/tax-invoice-run && git fetch origin main
-sudo apt-get install -y nginx
-# Ubuntu's sample site listens on every network address; JobFlow doesn't need it.
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo install -d -o root -g root -m 0755 /usr/share/jobflow-maintenance
-sudo install -d -o prod -g prod -m 0755 /var/lib/jobflow-maintenance
-for f in index.html index.json nginx-gate.conf sudoers-jobflow-deploy; do
-  case "$f" in
-    index.*) dir=infra/host/maintenance ;;
-    *) dir=infra/host ;;
-  esac
-  git show "origin/main:$dir/$f" > "/tmp/$f"
-done
-sudo install -o root -g root -m 0644 /tmp/index.html /tmp/index.json /usr/share/jobflow-maintenance/
-sudo install -o root -g root -m 0644 /tmp/nginx-gate.conf /etc/nginx/conf.d/jobflow-gate.conf
-sudo visudo -cf /tmp/sudoers-jobflow-deploy
-sudo install -o root -g root -m 0440 /tmp/sudoers-jobflow-deploy /etc/sudoers.d/jobflow-deploy
-sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload nginx
-curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3299/api/health   # expect 200
+sudo bash /home/prod/tax-invoice-run/infra/host/install.sh
 ```
+
+It installs nginx and the maintenance page, a limited permission for the deploy script, and the [scheduled jobs timer](#scheduled-jobs). It also starts the database and file storage at boot (`jobflow-services.service`); the app and the timer start after them.
 
 Then switch the tunnel: in the Cloudflare dashboard, under **Zero Trust → Networks → Tunnels**, change the public hostname's service from `http://localhost:3300` to `http://localhost:3299`. To undo this, change it back. The app itself isn't affected.
 
@@ -85,6 +69,18 @@ Check what visitors see, and whether the app itself is ready:
 curl -sI http://127.0.0.1:3299/ | head -1           # 503 means the page is showing
 curl -sS http://127.0.0.1:3300/api/health/ready     # the app, bypassing the page
 ```
+
+## Scheduled jobs
+
+`jobflow-jobs.timer` runs `pnpm jobs:run` every 5 minutes, and catches up after downtime. Today it queues the trial reminder emails, and the app's outbox sweep sends them. It's skipped while maintenance is on, and running it twice sends nothing twice.
+
+```sh
+systemctl list-timers jobflow-jobs.timer                 # when it last ran and runs next
+journalctl -u jobflow-jobs.service -n 50 --no-pager      # results and failures
+sudo systemctl disable --now jobflow-jobs.timer          # stop it
+```
+
+Each run logs how many reminders it queued and how many emails are pending or failed. A growing `failed` count means email isn't going out, so check the `email.send_failed` lines in `journalctl -u jobflow.service`.
 
 ## Test it
 
