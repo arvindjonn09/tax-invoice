@@ -6,6 +6,7 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 
 ### Added
 
+- Setting a password for the first time after sign-up or an invitation now offers the name to correct, says "Password set" instead of "Password changed", and records that the mailbox holder confirmed the terms the requester accepted ([#335](https://github.com/arvindjonn09/tax-invoice/issues/335)).
 - A company's access mode and trial dates can now only be changed through the platform operator, enforced in the database, and a new company must choose its access mode. The data export's tables and columns are pinned by a test, and the Better Auth account endpoints are checked at runtime ([#260](https://github.com/arvindjonn09/tax-invoice/issues/260)).
 - A daily backup check on the self-hosted site emails the operator when the nightly backup fails or the Windows file share falls more than 2 days behind ([#355](https://github.com/arvindjonn09/tax-invoice/issues/355)).
 - Backups to the Windows share now notice when the share is offline, grant read access correctly on PostgreSQL 16, use the app database's own host and port, and keep database passwords off command lines ([#353](https://github.com/arvindjonn09/tax-invoice/issues/353)).

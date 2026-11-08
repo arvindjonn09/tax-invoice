@@ -19,10 +19,11 @@ type State =
       fields: Record<string, string>;
     }
   | { kind: "throttled"; token: string; message: string; waitMs: number }
-  | { kind: "done" }
+  | { kind: "done"; firstSet: boolean }
   | { kind: "invalid" };
 
 const LABELS = {
+  name: "Your name",
   password: "New password",
   passwordConfirmation: "Confirm new password",
 };
@@ -34,19 +35,24 @@ const LABELS = {
  */
 export function ResetForm() {
   const [state, setState] = useState<State>({ kind: "loading" });
+  // #335: links sent after sign-up or an invitation carry setup=1. The page
+  // offers the name, so the mailbox holder can correct it; the server only
+  // applies it when this really is the first password.
+  const [setup, setSetup] = useState(false);
   const read = useRef(false);
 
   useEffect(() => {
     // Strict Mode runs this twice, and the first run removes the fragment.
     if (read.current) return;
     read.current = true;
-    const token = new URLSearchParams(window.location.hash.slice(1)).get(
-      "token",
-    );
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const token = params.get("token");
+    const firstTime = params.get("setup") === "1";
     window.history.replaceState(null, "", window.location.pathname);
-    queueMicrotask(() =>
-      setState(token ? { kind: "form", token } : { kind: "invalid" }),
-    );
+    queueMicrotask(() => {
+      setSetup(firstTime);
+      setState(token ? { kind: "form", token } : { kind: "invalid" });
+    });
   }, []);
 
   // After the server's wait, the button works again without a reload.
@@ -75,10 +81,17 @@ export function ResetForm() {
         token,
         password: form.get("password"),
         passwordConfirmation: form.get("passwordConfirmation"),
+        // Sent only when filled in; an empty field keeps the current name.
+        ...(setup && String(form.get("name") ?? "").trim()
+          ? { name: String(form.get("name")).trim() }
+          : {}),
       }),
     }).catch(() => undefined);
     if (response?.ok) {
-      setState({ kind: "done" });
+      const result = (await response.json().catch(() => null)) as {
+        status?: string;
+      } | null;
+      setState({ kind: "done", firstSet: result?.status === "set" });
       return;
     }
     const result = (await response?.json().catch(() => null)) as {
@@ -120,11 +133,12 @@ export function ResetForm() {
           ref={(node) => node?.focus()}
           className="text-2xl font-semibold"
         >
-          Password changed
+          {state.firstSet ? "Password set" : "Password changed"}
         </h2>
         <p>
-          You&apos;ve been signed out everywhere. Sign in with your new
-          password.
+          {state.firstSet
+            ? "Your email address is confirmed. Sign in with your new password."
+            : "You've been signed out everywhere. Sign in with your new password."}
         </p>
         <Link href="/login" className={buttonVariants()}>
           Sign in
@@ -165,6 +179,16 @@ export function ResetForm() {
           {state.message}
         </p>
       ) : null}
+      {setup ? (
+        <AccountField
+          id="name"
+          label={LABELS.name}
+          autoComplete="name"
+          hint="Leave this empty to keep the name entered when the account was requested."
+          maxLength={200}
+          error={fields.name}
+        />
+      ) : null}
       <AccountField
         id="password"
         label={LABELS.password}
@@ -189,7 +213,13 @@ export function ResetForm() {
         aria-disabled={state.kind === "pending" || state.kind === "throttled"}
         disabled={state.kind === "throttled"}
       >
-        {state.kind === "pending" ? "Changing password…" : "Change password"}
+        {state.kind === "pending"
+          ? setup
+            ? "Setting password…"
+            : "Changing password…"
+          : setup
+            ? "Set password"
+            : "Change password"}
       </Button>
     </form>
   );
