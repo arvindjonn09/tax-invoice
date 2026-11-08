@@ -99,6 +99,9 @@ const Reset = z
     token: z.string().max(100),
     password,
     passwordConfirmation: z.string(),
+    // #335: the mailbox holder may correct the name chosen at sign-up or
+    // invitation. Applied only when the password is set for the first time.
+    name: z.string().trim().min(1).max(200).optional(),
   })
   .strict()
   .refine((value) => value.password === value.passwordConfirmation, {
@@ -594,6 +597,14 @@ export function resetPassword(deps: AccountDependencies) {
     const done = await db.$transaction(async (tx) => {
       const userId = await consumeToken(tx, input.token, "password_reset");
       if (!userId) return false;
+      // #335: an unverified address means the mailbox holder is setting a
+      // password for the first time (after sign-up or an invitation).
+      const firstSet = !(
+        await tx.user.findUniqueOrThrow({
+          where: { id: userId },
+          select: { emailVerified: true },
+        })
+      ).emailVerified;
       const updated = await tx.authAccount.updateMany({
         where: { userId, providerId: "credential" },
         data: { password: hash },
@@ -604,9 +615,30 @@ export function resetPassword(deps: AccountDependencies) {
       await tx.authSession.deleteMany({ where: { userId } });
       const user = await tx.user.update({
         where: { id: userId },
-        data: { emailVerified: true },
+        data: {
+          emailVerified: true,
+          ...(firstSet && input.name ? { name: input.name } : {}),
+        },
         select: { email: true },
       });
+      if (firstSet) {
+        // The terms were accepted by whoever submitted sign-up; the mailbox
+        // holder now confirms them (#335). Recorded once, with the versions.
+        const accepted = await tx.termsAcceptance.findFirst({
+          where: { userId },
+          orderBy: { acceptedAt: "desc" },
+          select: { termsVersion: true, privacyVersion: true },
+        });
+        if (accepted)
+          await tx.platformAuditEvent.create({
+            data: {
+              actorKind: "user",
+              userId,
+              action: "account.terms_confirmed",
+              metadata: accepted,
+            },
+          });
+      }
       await cancelPendingEmail(tx, { userId, kind: "password_reset" });
       await enqueueEmail(tx, deps.emailSecret(), {
         kind: "password_changed",
@@ -619,9 +651,10 @@ export function resetPassword(deps: AccountDependencies) {
           actorKind: "user",
           userId,
           action: "account.password_reset",
+          metadata: { firstSet },
         },
       });
-      return true;
+      return firstSet ? "set" : "reset";
     });
     if (!done) {
       return privateJson(
@@ -633,6 +666,7 @@ export function resetPassword(deps: AccountDependencies) {
       );
     }
     deps.dispatch();
-    return privateJson({ status: "reset" });
+    // "set" for a first password (the page says so), "reset" otherwise.
+    return privateJson({ status: done });
   });
 }
