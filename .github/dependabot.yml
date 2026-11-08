@@ -21,3 +21,8 @@ updates:
       time: "03:00"
       timezone: Australia/Sydney
     open-pull-requests-limit: 5
+    groups:
+      # CodeQL's init and analyze steps must run the same version; updating
+      # them in separate PRs fails static-analysis in both (#370, #374).
+      codeql:
+        patterns: ["github/codeql-action", "github/codeql-action/*"]
