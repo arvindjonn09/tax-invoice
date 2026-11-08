@@ -537,7 +537,16 @@ export function forgotPassword(deps: AccountDependencies) {
       });
       if (!user) return;
       if (deps.production() && DEMO_EMAIL.test(user.email)) return;
-      if (await over(db, `forgot:account:${user.id}`, 3600, 3)) {
+      // One IP's limit is reached first, and doesn't use up the account's, so
+      // someone who knows the address can't block the real person's reset.
+      const fromIp = `forgot:account:${user.id}:ip:${ip ?? "unknown"}`;
+      const account = `forgot:account:${user.id}`;
+      if (
+        (await over(db, `${fromIp}:hour`, 3600, 3)) ||
+        (await over(db, `${fromIp}:day`, 86_400, 6)) ||
+        (await over(db, `${account}:hour`, 3600, 10)) ||
+        (await over(db, `${account}:day`, 86_400, 24))
+      ) {
         await auditForgotThrottled(db, "account", user.id);
         return;
       }

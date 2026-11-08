@@ -7,6 +7,8 @@ All notable changes to JobFlow. Dates are Australia/Sydney. Each entry links the
 ### Added
 
 - Setting a password for the first time after sign-up or an invitation now offers the name to correct, says "Password set" instead of "Password changed", and records that the mailbox holder confirmed the terms the requester accepted ([#335](https://github.com/arvindjonn09/tax-invoice/issues/335)).
+- Issued invoices and credit notes now freeze the organisation's phone, business email, website and logo, and their PDFs show them with the logo embedded from private storage. Sent quotes freeze the same details plus "about" ([#229](https://github.com/arvindjonn09/tax-invoice/issues/229)).
+- Password reset emails are limited per IP and per account, so someone who knows an address can't use up its resets ([#318](https://github.com/arvindjonn09/tax-invoice/issues/318)).
 - Uploaded files are scanned for malware with ClamAV before they're stored. Infected and password-protected files are refused, and in every production build uploads stop safely when the scanner is unavailable (#136).
 - Signing up no longer takes a password: you set it from an emailed link, so nobody can choose a password for an address they don't control ([#327](https://github.com/arvindjonn09/tax-invoice/issues/327)).
 - A timer runs the scheduled jobs every 5 minutes on the self-hosted site, so trial reminders go out, with one install script for it and the maintenance page ([#234](https://github.com/arvindjonn09/tax-invoice/issues/234)).
