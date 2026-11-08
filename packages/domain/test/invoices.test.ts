@@ -101,7 +101,14 @@ describe("invoice title and GST (#47)", () => {
 describe("issue validation", () => {
   const base = {
     registered: true,
-    supplier: { legalName: "Sample Pty Ltd", abn: "12345678901" },
+    supplier: {
+      legalName: "Sample Pty Ltd",
+      abn: "12345678901",
+      addressLine1: "1 Sample St",
+      suburb: "Sampleton",
+      state: "NSW",
+      postcode: "2000",
+    },
     recipient: { name: "Acme Sample", abn: null },
     lines: [
       {
@@ -112,13 +119,15 @@ describe("issue validation", () => {
       },
     ],
     inclusive: 110n,
+    issueDate: "2026-11-07",
+    dueOn: null,
   };
 
   it("passes a complete tax invoice", () => {
     expect(issueProblems(base)).toEqual([]);
   });
 
-  it("needs lines with descriptions, and supplier legal name + ABN when registered", () => {
+  it("needs lines with descriptions, and supplier legal name + ABN", () => {
     expect(issueProblems({ ...base, lines: [] }).map((p) => p.field)).toEqual([
       "lines",
     ]);
@@ -129,10 +138,32 @@ describe("issue validation", () => {
       }).map((p) => p.field),
     ).toEqual(["lines.0.description"]);
     expect(
-      issueProblems({ ...base, supplier: { legalName: " ", abn: null } }).map(
-        (p) => p.field,
-      ),
+      issueProblems({
+        ...base,
+        supplier: { ...base.supplier, legalName: " ", abn: null },
+      }).map((p) => p.field),
     ).toEqual(["company.legalName", "company.abn"]);
+  });
+
+  it.each(["addressLine1", "suburb", "state", "postcode"])(
+    "needs the supplier's full address: %s",
+    (part) => {
+      for (const value of [null, " "])
+        expect(
+          issueProblems({
+            ...base,
+            supplier: { ...base.supplier, [part]: value },
+          }).map((p) => p.field),
+        ).toEqual(["company.address"]);
+    },
+  );
+
+  it("refuses a due date before the issue date, and only then", () => {
+    const fields = (dueOn: string) =>
+      issueProblems({ ...base, dueOn }).map((p) => p.field);
+    expect(fields("2026-11-06")).toEqual(["dueOn"]);
+    expect(fields("2026-11-07")).toEqual([]);
+    expect(fields("2026-11-08")).toEqual([]);
   });
 
   it("identifies the recipient on tax invoices of $1,000 or more", () => {
@@ -154,23 +185,42 @@ describe("issue validation", () => {
     ).toEqual([]);
   });
 
-  it("an unregistered company needs no ABN but can't charge GST", () => {
+  describe("an unregistered company", () => {
     const plain = {
       ...base,
       registered: false,
-      supplier: { legalName: null, abn: null },
       recipient: { name: null, abn: null },
       inclusive: 500_000n,
     };
-    expect(issueProblems(plain).map((p) => p.field)).toEqual([
-      "lines.0.taxCode",
-    ]);
-    expect(
-      issueProblems({
-        ...plain,
-        lines: [{ ...base.lines[0]!, taxCode: "OUT_OF_SCOPE" }],
-      }),
-    ).toEqual([]);
+
+    it("can't charge GST or need the recipient identified", () => {
+      expect(issueProblems(plain).map((p) => p.field)).toEqual([
+        "lines.0.taxCode",
+      ]);
+      expect(
+        issueProblems({
+          ...plain,
+          lines: [{ ...base.lines[0]!, taxCode: "OUT_OF_SCOPE" }],
+        }),
+      ).toEqual([]);
+    });
+
+    it("still needs its legal name, ABN and address", () => {
+      expect(
+        issueProblems({
+          ...plain,
+          lines: [{ ...base.lines[0]!, taxCode: "OUT_OF_SCOPE" }],
+          supplier: {
+            legalName: null,
+            abn: null,
+            addressLine1: null,
+            suburb: null,
+            state: null,
+            postcode: null,
+          },
+        }).map((p) => p.field),
+      ).toEqual(["company.legalName", "company.abn", "company.address"]);
+    });
   });
 });
 

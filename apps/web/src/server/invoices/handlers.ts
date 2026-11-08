@@ -607,10 +607,12 @@ export function invoiceHandlers(
         }));
         const problems = issueProblems({
           registered,
-          supplier: { legalName: company.legalName, abn: company.abn },
+          supplier: company,
           recipient: { name: customer.name, abn: customer.abn },
           lines: inputs,
           inclusive: before.inclusiveCents,
+          issueDate,
+          dueOn: before.dueOn ? toDay(before.dueOn) : null,
         });
         if (problems.length > 0)
           throw new Refusal(

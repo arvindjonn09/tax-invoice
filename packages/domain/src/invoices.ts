@@ -52,11 +52,21 @@ export function invoiceLines(
 
 export type IssueCheck = {
   registered: boolean;
-  supplier: { legalName: string | null; abn: string | null };
+  supplier: {
+    legalName: string | null;
+    abn: string | null;
+    addressLine1: string | null;
+    suburb: string | null;
+    state: string | null;
+    postcode: string | null;
+  };
   recipient: { name: string | null; abn: string | null };
   lines: readonly (InvoiceLineInput & { description: string })[];
   /** GST-inclusive total, when the lines are valid. */
   inclusive: Cents;
+  /** ISO dates. */
+  issueDate: string;
+  dueOn: string | null;
 };
 
 export type IssueProblem = { field: string; message: string };
@@ -82,28 +92,46 @@ export function issueProblems(input: IssueCheck): IssueProblem[] {
           "The company isn't registered for GST on the issue date, so no line can charge GST",
       });
   });
-  if (input.registered) {
-    if (!input.supplier.legalName?.trim())
-      problems.push({
-        field: "company.legalName",
-        message: "Add the company's legal name in Settings",
-      });
-    if (!input.supplier.abn)
-      problems.push({
-        field: "company.abn",
-        message: "Add the company's ABN in Settings",
-      });
-    if (
-      input.inclusive >= RECIPIENT_IDENTITY_THRESHOLD_CENTS &&
-      !input.recipient.name?.trim() &&
-      !input.recipient.abn
-    )
-      problems.push({
-        field: "customer",
-        message:
-          "A tax invoice of $1,000 or more must identify the customer by name or ABN",
-      });
-  }
+  if (input.dueOn && input.dueOn < input.issueDate)
+    problems.push({
+      field: "dueOn",
+      message: "The due date can't be before the issue date",
+    });
+  // Needed whatever the GST status: business customers generally withhold 47%
+  // of a payment when no ABN is quoted.
+  const { legalName, abn, addressLine1, suburb, state, postcode } =
+    input.supplier;
+  if (!legalName?.trim())
+    problems.push({
+      field: "company.legalName",
+      message: "Add the company's legal name in Settings",
+    });
+  if (!abn)
+    problems.push({
+      field: "company.abn",
+      message: "Add the company's ABN in Settings",
+    });
+  if (
+    !addressLine1?.trim() ||
+    !suburb?.trim() ||
+    !state?.trim() ||
+    !postcode?.trim()
+  )
+    problems.push({
+      field: "company.address",
+      message: "Add the company's full address in Settings",
+    });
+  if (
+    input.registered &&
+    input.inclusive >= RECIPIENT_IDENTITY_THRESHOLD_CENTS &&
+    !input.recipient.name?.trim() &&
+    !input.recipient.abn
+  )
+    problems.push({
+      field: "customer",
+      message:
+        "A tax invoice of $1,000 or more must identify the customer by name or ABN",
+    });
   return problems;
 }
 

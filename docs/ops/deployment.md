@@ -15,6 +15,8 @@ This is the runbook for putting a JobFlow release on staging and taking it back 
 
 ## Before you deploy
 
+- **In production, `OPERATOR_NOTIFY_EMAIL` must be set.** `/api/health/ready` stays not-ready without it, because owners are told their extension requests reach someone.
+
 1. Check that main's CI is green on the exact commit.
 2. Read the migrations it adds: `git diff <live> <new> --stat -- packages/database/prisma/migrations`. Decide whether each is **backward-compatible** (see below), and plan a quiet window for anything large or locking.
 3. Take a backup and verify it, then write down the stamp:
@@ -120,3 +122,4 @@ Add a line to the release log in [CHANGELOG.md](../../CHANGELOG.md) under the ve
 - [backups.md](backups.md): nightly encrypted backups, restore and drills.
 - [maintenance.md](maintenance.md): the maintenance page and deploys on the self-hosted site.
 - [documents.md](documents.md): the daily cleanup of unattached uploads.
+- [operator.md](operator.md): signing in to the operator area and setting up two-factor authentication.
