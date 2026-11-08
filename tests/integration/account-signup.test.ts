@@ -984,3 +984,114 @@ describe("password reset", () => {
     expect(text).not.toContain(token!);
   });
 });
+
+describe("first password after sign-up (#335)", () => {
+  async function signUpAndToken(address: string) {
+    const response = await signUp(deps)(
+      post("/api/account/sign-up", form(address, { name: "Requester Typed" })),
+    );
+    expect(response.status).toBe(202);
+    const [email] = await emailsFor(address);
+    // The set-password link tells the page it's a first password.
+    expect(email?.message?.text).toMatch(/#token=[A-Za-z0-9_-]{43}&setup=1/);
+    return tokenFrom(email?.message?.text ?? "");
+  }
+  const setPassword = (token: string | undefined, extra = {}) =>
+    resetPassword(deps)(
+      post("/api/account/password/reset", {
+        token,
+        password: "a password from the mailbox holder",
+        passwordConfirmation: "a password from the mailbox holder",
+        ...extra,
+      }),
+    );
+
+  it("lets the mailbox holder correct the name and confirms the terms", async () => {
+    const token = await signUpAndToken("first.set@example.com");
+    const response = await setPassword(token, { name: "  Mailbox Holder  " });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "set" });
+    const user = await client.user.findUniqueOrThrow({
+      where: { email: "first.set@example.com" },
+    });
+    expect(user).toMatchObject({ name: "Mailbox Holder", emailVerified: true });
+    const events = await client.platformAuditEvent.findMany({
+      where: { userId: user.id, action: "account.terms_confirmed" },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.metadata).toEqual({
+      termsVersion: TERMS_VERSION,
+      privacyVersion: PRIVACY_VERSION,
+    });
+  });
+
+  it("keeps the requested name when none is given", async () => {
+    const token = await signUpAndToken("keeps.name@example.com");
+    expect((await setPassword(token)).status).toBe(200);
+    expect(
+      (
+        await client.user.findUniqueOrThrow({
+          where: { email: "keeps.name@example.com" },
+        })
+      ).name,
+    ).toBe("Requester Typed");
+  });
+
+  it("a later reset says reset, ignores a name and confirms nothing again", async () => {
+    const address = "later.reset@example.com";
+    const token = await signUpAndToken(address);
+    expect((await setPassword(token)).status).toBe(200);
+    const user = await client.user.findUniqueOrThrow({
+      where: { email: address },
+    });
+    // A later reset link for the now-verified account.
+    const next = await client.$transaction((tx) =>
+      issueToken(tx, user.id, "password_reset"),
+    );
+    const response = await setPassword(next, { name: "Someone Else" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "reset" });
+    expect(
+      (await client.user.findUniqueOrThrow({ where: { id: user.id } })).name,
+    ).toBe("Requester Typed");
+    expect(
+      await client.platformAuditEvent.count({
+        where: { userId: user.id, action: "account.terms_confirmed" },
+      }),
+    ).toBe(1);
+  });
+
+  it("is still a first password after the address was verified another way (review)", async () => {
+    const address = "verified.first@example.com";
+    const token = await signUpAndToken(address);
+    // The address is confirmed through the verification email first.
+    await client.user.update({
+      where: { email: address },
+      data: { emailVerified: true },
+    });
+    const response = await setPassword(token, { name: "Holder Fixed" });
+    expect(await response.json()).toEqual({ status: "set" });
+    const user = await client.user.findUniqueOrThrow({
+      where: { email: address },
+    });
+    expect(user.name).toBe("Holder Fixed");
+    expect(
+      await client.platformAuditEvent.count({
+        where: { userId: user.id, action: "account.terms_confirmed" },
+      }),
+    ).toBe(1);
+  });
+
+  it("refuses control characters in the name with 400, not 500 (review)", async () => {
+    const token = await signUpAndToken("nul.name@example.com");
+    const response = await setPassword(token, { name: "Bad\u0000Name" });
+    expect(response.status).toBe(400);
+  });
+
+  it("refuses an over-long name", async () => {
+    const token = await signUpAndToken("long.name@example.com");
+    expect((await setPassword(token, { name: "x".repeat(201) })).status).toBe(
+      400,
+    );
+  });
+});

@@ -13,6 +13,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #221: trial access in actor resolution, GET /api/company/trial and the
 // trial permissions.
@@ -63,7 +64,7 @@ const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
 const today = () => sydneyDate(new Date());
 
 function setTrial(lastDay: string | null, extensions = 0) {
-  return client.company.update({
+  return operatorUpdate(client, {
     where: { id: companyId },
     data:
       lastDay === null

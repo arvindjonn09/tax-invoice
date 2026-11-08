@@ -69,7 +69,9 @@ it("rejects a company whose deferred creator membership remains missing", async 
 }) => {
   const { client, userA } = fixture;
   await expectRejectedWrite(client, async () => {
-    await client.company.create({ data: { name: "Orphan", createdBy: userA } });
+    await client.company.create({
+      data: { name: "Orphan", createdBy: userA, accessMode: "unrestricted" },
+    });
     await client.$executeRawUnsafe(
       "SET CONSTRAINTS companies_id_created_by_fkey IMMEDIATE",
     );

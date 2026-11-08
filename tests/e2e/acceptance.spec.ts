@@ -131,6 +131,7 @@ async function createCompany(variant: Variant): Promise<Company> {
         data: {
           id,
           name: `Acceptance ${variant.name} ${run}`,
+          accessMode: "unrestricted",
           legalName: "Synthetic Acceptance Pty Ltd",
           abn: syntheticAbn("515151515"),
           addressLine1: "1 Synthetic Street",
