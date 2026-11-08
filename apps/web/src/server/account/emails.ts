@@ -34,8 +34,32 @@ export function accountExistsEmail(to: string, appUrl: string): EmailMessage {
       "Someone tried to create a JobFlow account with this email address, but one already exists.",
       "",
       `If it was you, sign in here: ${appUrl}/login`,
+      `If you need a password, choose one here: ${appUrl}/forgot-password`,
       "",
       "If it wasn't you, no action is needed. Your account hasn't changed.",
+    ].join("\n"),
+  };
+}
+
+/** A new sign-up: only the mailbox holder sets the password (#327). */
+export function finishSignupEmail(
+  to: string,
+  appUrl: string,
+  token: string,
+): EmailMessage {
+  return {
+    to,
+    subject: "Set your JobFlow password",
+    text: [
+      "Someone used this email address to create a JobFlow account.",
+      "",
+      "If it was you, open the link below to choose your password. It works once and expires in 1 hour.",
+      "",
+      `${appUrl}/reset-password#token=${token}`,
+      "",
+      "Then sign in to set up your business.",
+      "",
+      "If it wasn't you, you can ignore this email.",
     ].join("\n"),
   };
 }

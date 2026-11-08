@@ -79,8 +79,6 @@ export function SignupForm({
       body: JSON.stringify({
         name: form.get("name"),
         email: form.get("email"),
-        password: form.get("password"),
-        passwordConfirmation: form.get("passwordConfirmation"),
         acceptTerms: form.get("acceptTerms") === "on",
         termsVersion,
         privacyVersion,
@@ -117,12 +115,12 @@ export function SignupForm({
         <h2 className="text-2xl font-semibold">Check your email</h2>
         <p className="text-muted-foreground">
           Check your email to verify your address. We&apos;ve sent a link to{" "}
-          <strong>{state.email}</strong> that works for 24 hours, then sign in
-          to set up your business.
+          <strong>{state.email}</strong> to choose your password. It expires in
+          1 hour. Then sign in to set up your business.
         </p>
         <p className="text-sm text-muted-foreground">
           Nothing arrived? Check your spam folder, or{" "}
-          <Link className="text-link underline" href="/verify-email">
+          <Link className="text-link underline" href="/forgot-password">
             request a new link
           </Link>
           .
@@ -158,25 +156,6 @@ export function SignupForm({
         required
         maxLength={320}
         error={fields.email}
-      />
-      <Field
-        id="password"
-        label="Password"
-        type="password"
-        autoComplete="new-password"
-        hint="At least 12 characters. A short phrase works well."
-        required
-        minLength={12}
-        maxLength={128}
-        error={fields.password}
-      />
-      <Field
-        id="passwordConfirmation"
-        label="Confirm password"
-        type="password"
-        autoComplete="new-password"
-        required
-        error={fields.passwordConfirmation}
       />
       <div className="flex items-start gap-3">
         <input
