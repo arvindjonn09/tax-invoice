@@ -1,3 +1,4 @@
+import { supplierSnapshot } from "../company/supplier-snapshot";
 import {
   type Actor,
   can,
@@ -716,16 +717,8 @@ export function invoiceHandlers(
             issueDate: new Date(`${issueDate}T00:00:00Z`),
             title,
             gstRegistered: registered,
-            supplierSnapshot: {
-              name: company.name,
-              legalName: company.legalName,
-              abn: company.abn,
-              addressLine1: company.addressLine1,
-              addressLine2: company.addressLine2,
-              suburb: company.suburb,
-              state: company.state,
-              postcode: company.postcode,
-            },
+            // #229: version 2, with contact details and the current logo.
+            supplierSnapshot: await supplierSnapshot(tx, company),
             customerSnapshot: {
               name: customer.name,
               abn: customer.abn,
