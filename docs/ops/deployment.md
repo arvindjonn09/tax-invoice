@@ -118,11 +118,11 @@ The steps above are for the staging Compose stack. On the self-hosted site (`job
 1. On a branch, revert the merge: `git revert -m 1 <merge>`. Keep any migration, as in step 1 of the Compose rollback above. Open a PR, get CI green and merge it.
 2. Deploy the new tip of `main` as usual (`maintenance.md` § Deploy). `deploy.sh` only deploys the tip, so the revert has to be merged first.
 
-**If the site is broken and can't wait for CI:** turn maintenance on by hand (`touch /var/lib/jobflow-maintenance/on`), so visitors see the maintenance page instead of errors. Then do the code-only rollback. Maintenance stays on until the fixed deploy turns it off.
+**If the site is broken and can't wait for CI:** turn maintenance on by hand (`touch /var/lib/jobflow-maintenance/on`), so visitors see the maintenance page instead of errors. Then do the code-only rollback. Backups skip themselves while maintenance is on, so `deploy.sh` will stop for lack of a fresh backup: take one first (`rm` the flag, `sudo systemctl start jobflow-backup.service`, put the flag back), or deploy with `JOBFLOW_SKIP_BACKUP=1` if the newest backup is recent enough. Maintenance stays on until the fixed deploy turns it off.
 
 **A migration damaged data, or isn't backward-compatible:**
 1. Turn maintenance on and stop the app: `touch /var/lib/jobflow-maintenance/on`, then `sudo systemctl stop jobflow.service`.
-2. Find the pre-deploy backup: the newest folder in `/home/prod/jobflow-backups` from before the deploy (the deploy log prints "Pre-deploy backup made and verified"). The same backup is on the share in `/mnt/jobflow/backups`.
+2. Find the pre-deploy backup: the deploy log prints its folder ("Pre-deploy backup: /home/prod/jobflow-backups/…"). Use that local copy while the host is available. The share (`/mnt/jobflow/backups`) has it too only if the share was reachable; if the deploy said the share was unreachable, the hourly retry copies it later, so the share copy may lag.
 3. Restore it into a **new, empty** database and bucket, as in the drill below (backups.md § Restore). Never restore over the live database.
 4. Point the app at the restored copy: change `DATABASE_URL` and `S3_BUCKET` in `/home/prod/tax-invoice-run/.env`. Then re-run `sudo bash infra/backup/host/install.sh` (type `/mnt/jobflow`; it keeps the key), so backups and alerts protect the restored copy.
 5. Merge a revert that also removes the bad migration (the Compose steps above explain why), and deploy it.

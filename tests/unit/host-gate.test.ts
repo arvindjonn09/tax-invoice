@@ -67,6 +67,10 @@ describe("deploy script (#326)", () => {
     // Exit 2 (share unreachable) still left a local backup; anything else stops.
     expect(deploy).toContain("--property=ExecMainStatus");
     expect(deploy).toContain('JOBFLOW_SKIP_BACKUP:-}" = 1');
+    // A skipped run (maintenance already on) isn't a backup: a complete new
+    // folder must exist (Codex review).
+    expect(deploy).toContain('[[ "$newest" < "$started" ]]');
+    expect(deploy).toContain('"$backups/$newest/manifest.json"');
     expect(read("sudoers-jobflow-deploy")).toContain(
       "/usr/bin/systemctl start jobflow-backup.service",
     );
