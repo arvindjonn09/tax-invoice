@@ -5,6 +5,7 @@ import { createAuth } from "../../apps/web/src/server/auth/config";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
 import {
   ENROLMENT_CODE_HEADER,
+  OPERATOR_MFA_MAX_AGE_MS,
   consumeEnrolmentCode,
   isOperator,
   operatorAllowlist,
@@ -309,6 +310,41 @@ describe("TOTP enrolment", () => {
     expect(await db.twoFactor.count({ where: { userId: user.id } })).toBe(0);
   });
 
+  it("keeps the code usable after a mistyped password", async () => {
+    const user = await newOperator();
+    const cookie = cookieFrom(await signIn(user.email));
+    const code = await issueCode(user.id);
+    const typo = await auth.handler(
+      authRequest(
+        "/two-factor/enable",
+        { password: "not the right password" },
+        { cookie, [ENROLMENT_CODE_HEADER]: code },
+      ),
+    );
+    expect(typo.status).toBe(400);
+    expect((await typo.json()).code).toBe("INVALID_PASSWORD");
+    expect(await db.twoFactor.count({ where: { userId: user.id } })).toBe(0);
+    expect((await enable(cookie, code)).status).toBe(200);
+  });
+
+  it("without a code, a wrong password still gets the 403, not a password check", async () => {
+    const user = await newOperator();
+    const cookie = cookieFrom(await signIn(user.email));
+    for (const headers of [
+      { cookie },
+      { cookie, [ENROLMENT_CODE_HEADER]: "000000" },
+    ]) {
+      const refused = await auth.handler(
+        authRequest(
+          "/two-factor/enable",
+          { password: "not the right password" },
+          headers,
+        ),
+      );
+      expect(refused.status).toBe(403);
+    }
+  });
+
   it("refuses an expired code and a used code", async () => {
     const user = await newOperator();
     const code = await issueCode(user.id);
@@ -456,6 +492,83 @@ describe("TOTP enrolment", () => {
           },
         }),
       ).toBe(1);
+    });
+
+    it("stops trusting TOTP after 12 hours, until it's passed again (#323)", async () => {
+      const user = await newOperator();
+      const { totpURI, cookie } = await enrol(user.id, user.email);
+      const age = (ms: number) =>
+        db.authSession.updateMany({
+          where: { userId: user.id },
+          data: { mfaVerifiedAt: new Date(Date.now() - ms) },
+        });
+      await age(OPERATOR_MFA_MAX_AGE_MS - 60_000);
+      expect((await production(cookie)).status).toBe(200);
+      await age(OPERATOR_MFA_MAX_AGE_MS + 1_000);
+      expect((await production(cookie)).status).toBe(404);
+      // A new sign-in has to pass TOTP again, and then it counts.
+      const pending = cookieFrom(await signIn(user.email));
+      const verified = await auth.handler(
+        authRequest(
+          "/two-factor/verify-totp",
+          { code: totp(totpURI) },
+          { cookie: pending },
+        ),
+      );
+      expect(verified.status).toBe(200);
+      expect((await production(cookieFrom(verified))).status).toBe(200);
+      // The old session stays refused.
+      expect((await production(cookie)).status).toBe(404);
+    });
+
+    it("says why when the session ended before TOTP could be recorded (#323)", async () => {
+      const user = await newOperator();
+      const { totpURI } = await enrol(user.id, user.email);
+      const pending = cookieFrom(await signIn(user.email));
+      const before = await db.platformAuditEvent.count({
+        where: { userId: user.id, action: "operator.mfa_verified" },
+      });
+      // The session row disappears between the plugin's check and the hook.
+      const racing = createAuth({
+        secret: "x".repeat(32),
+        baseURL: ORIGIN,
+        production: false,
+        db: new Proxy(db, {
+          get(target, key) {
+            if (key !== "$transaction") return Reflect.get(target, key);
+            return (work: (tx: unknown) => unknown) =>
+              target.$transaction((tx) =>
+                Promise.resolve(
+                  work(
+                    new Proxy(tx, {
+                      get(inner, name) {
+                        if (name !== "authSession")
+                          return Reflect.get(inner, name);
+                        return { updateMany: async () => ({ count: 0 }) };
+                      },
+                    }),
+                  ),
+                ),
+              );
+          },
+        }),
+      });
+      const response = await racing.handler(
+        authRequest(
+          "/two-factor/verify-totp",
+          { code: totp(totpURI) },
+          { cookie: pending },
+        ),
+      );
+      expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({
+        message: "Your session ended. Sign in again to continue.",
+      });
+      expect(
+        await db.platformAuditEvent.count({
+          where: { userId: user.id, action: "operator.mfa_verified" },
+        }),
+      ).toBe(before);
     });
 
     it("accepts a sign-in that passes a backup code", async () => {

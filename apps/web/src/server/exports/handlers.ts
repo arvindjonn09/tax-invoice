@@ -358,6 +358,16 @@ export function exportHandlers(db: () => PrismaClient) {
       params,
     );
     if (!checked.success) return invalid(checked.error);
+    // Only validated values reach the audit log: free text or a stray
+    // documentId would otherwise be stored there, and the document kept (#260).
+    const audited = {
+      params: {
+        ...checked.data,
+        ...(name.data === "profitability" && params.jobId !== undefined
+          ? { jobId: params.jobId }
+          : {}),
+      },
+    };
     if (
       name.data === "profitability" &&
       params.jobId !== undefined &&
@@ -397,7 +407,7 @@ export function exportHandlers(db: () => PrismaClient) {
             actorUserId: actor.userId,
             action: "report.export_refused",
             target: { type: "report_export", id: name.data },
-            after: { export: name.data, params, reason: "incomplete_gst" },
+            after: { export: name.data, ...audited, reason: "incomplete_gst" },
           });
           return out;
         }
@@ -406,7 +416,7 @@ export function exportHandlers(db: () => PrismaClient) {
           actorUserId: actor.userId,
           action: "report.exported",
           target: { type: "report_export", id: name.data },
-          after: { export: name.data, params, rows: out.rows.length },
+          after: { export: name.data, ...audited, rows: out.rows.length },
         });
         return out;
       },

@@ -8,6 +8,16 @@ import { createCredentialUser } from "../auth/credentials";
 export const DEMO_COMPANY_ID = "d0000000-0000-4000-8000-000000000001";
 export const DEMO_COMPANY_NAME = "Sample Contracting Co (Demo)";
 
+/** Synthetic details, so a demo invoice can be issued (#348). */
+const DEMO_DETAILS = {
+  legalName: DEMO_COMPANY_NAME,
+  abn: "80000000001",
+  addressLine1: "1 Sample Street",
+  suburb: "Sampleton",
+  state: "NSW",
+  postcode: "2000",
+} as const;
+
 /** One synthetic user per role; `.test` is a reserved TLD (no real inbox). */
 export const DEMO_USERS: readonly {
   role: Role;
@@ -87,7 +97,15 @@ export async function seedDemo(
     const ownerId = userIds.get("owner") ?? "";
     const company = await tx.company.findUnique({
       where: { id: DEMO_COMPANY_ID },
-      select: { isDemo: true },
+      select: {
+        isDemo: true,
+        legalName: true,
+        abn: true,
+        addressLine1: true,
+        suburb: true,
+        state: true,
+        postcode: true,
+      },
     });
     if (company && !company.isDemo) {
       throw new Error("The demo company id is in use by a non-demo company");
@@ -98,11 +116,25 @@ export async function seedDemo(
         data: {
           id: DEMO_COMPANY_ID,
           name: DEMO_COMPANY_NAME,
+          ...DEMO_DETAILS,
           isDemo: true,
           createdBy: ownerId,
         },
       });
       result.createdCompany = true;
+    } else {
+      // An older demo company: fill in only the details still missing, so
+      // anything typed in Settings stays.
+      const missing = Object.fromEntries(
+        Object.entries(DEMO_DETAILS).filter(
+          ([key]) => company[key as keyof typeof DEMO_DETAILS] === null,
+        ),
+      );
+      if (Object.keys(missing).length > 0)
+        await tx.company.update({
+          where: { id: DEMO_COMPANY_ID },
+          data: missing,
+        });
     }
     for (const demo of DEMO_USERS) {
       const userId = userIds.get(demo.role) ?? "";

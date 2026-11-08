@@ -106,6 +106,21 @@ export function trialStatus(lastDay: string, now: Date): TrialStatus {
   return { daysRemaining, phase };
 }
 
+export const TRIAL_THRESHOLDS = ["d7", "d3", "d1", "ended"] as const;
+export type TrialThreshold = (typeof TRIAL_THRESHOLDS)[number];
+
+/**
+ * The latest reminder that applies with this many days left (S10 AC1-2), so a
+ * late run skips straight to it. Null while it's more than 7 days away.
+ */
+export function trialThreshold(daysRemaining: number): TrialThreshold | null {
+  if (daysRemaining <= 0) return "ended";
+  if (daysRemaining === 1) return "d1";
+  if (daysRemaining <= 3) return "d3";
+  if (daysRemaining <= 7) return "d7";
+  return null;
+}
+
 /**
  * The new last day when an operator approves `days` (1–365): counted from
  * the later of the current last day and yesterday, so an expired trial gets

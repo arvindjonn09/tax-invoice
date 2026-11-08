@@ -4,10 +4,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/shell/page-header";
 import { getDatabase } from "@/server/auth";
-import { requireActor } from "@/server/authz";
+import { requireActorWithAccess } from "@/server/authz";
 import { sydneyToday, toDay } from "@/server/company/gst";
 import { navItemFor } from "@/server/navigation";
 import { gstStatusOn } from "@jobflow/domain";
+import { ContactDetailsForm } from "@/features/company/contact-details-form";
+import { LogoUploader } from "@/features/company/logo-uploader";
 import { type GstSettings, GstSettingsPanel } from "./gst-settings";
 import { type Profile, ProfileForm } from "./profile-form";
 
@@ -20,9 +22,10 @@ export const dynamic = "force-dynamic";
  * any module they can't use. The APIs enforce the same rules.
  */
 export default async function SettingsPage() {
-  const actor = await requireActor("company.read");
+  const { actor, access } = await requireActorWithAccess("company.read");
   if (!navItemFor(actor.role, "settings")) notFound();
   const canSeeTax = can(actor.role, "gst_settings.read");
+  const writable = can(actor.role, "company.update") && !access.readOnly;
   const db = getDatabase();
   const [company, rows] = await Promise.all([
     db.company.findUniqueOrThrow({ where: { id: actor.companyId } }),
@@ -63,7 +66,7 @@ export default async function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="Company details, numbering and GST registration."
+        description="Company details, logo, numbering and GST registration."
         breadcrumbs={[
           { label: "JobFlow", href: "/home" },
           { label: "Settings" },
@@ -90,6 +93,27 @@ export default async function SettingsPage() {
             </h2>
             <ProfileForm
               profile={profile}
+              editable={can(actor.role, "company.update")}
+            />
+          </section>
+          <section
+            aria-labelledby="branding-heading"
+            className="space-y-6 rounded-lg border bg-card p-6 text-card-foreground"
+          >
+            <h2 id="branding-heading" className="text-xl font-semibold">
+              Logo and contact details
+            </h2>
+            <LogoUploader
+              hasLogo={Boolean(company.logoDocumentId)}
+              editable={writable}
+            />
+            <ContactDetailsForm
+              details={{
+                phone: company.phone,
+                businessEmail: company.businessEmail,
+                website: company.website,
+                about: company.about,
+              }}
               editable={can(actor.role, "company.update")}
             />
           </section>
