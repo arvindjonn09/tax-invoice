@@ -5,7 +5,7 @@ import { createAuth } from "../../apps/web/src/server/auth/config";
 import { createCredentialUser } from "../../apps/web/src/server/auth/credentials";
 import { createWithPolicy } from "../../apps/web/src/server/authz/policy";
 import { invoiceHandlers } from "../../apps/web/src/server/invoices/handlers";
-import { syntheticAbn } from "../helpers/abn";
+import { SYNTHETIC_ADDRESS, syntheticAbn } from "../helpers/abn";
 import {
   type CommittedDatabase,
   withCommittedDatabase,
@@ -87,6 +87,15 @@ beforeAll(async () => {
     data: {
       legalName: "Sample Contracting Pty Ltd",
       abn: syntheticAbn("470000001"),
+      ...SYNTHETIC_ADDRESS,
+    },
+  });
+  await db.company.update({
+    where: { id: plainCompanyId },
+    data: {
+      legalName: "Plain Sample Pty Ltd",
+      abn: syntheticAbn("470000002"),
+      ...SYNTHETIC_ADDRESS,
     },
   });
   await db.companyGstRegistration.create({
@@ -352,6 +361,55 @@ describe("issuing a tax invoice", () => {
         data: { abn: syntheticAbn("470000001") },
       });
     }
+  });
+
+  it("refuses a due date before the issue date (#348)", async () => {
+    const { body } = await draft({ dueOn: "2026-01-01" });
+    const early = await issue(body.id, "accountant", {
+      issueDate: "2026-01-02",
+    });
+    expect(early.status).toBe(400);
+    expect(Object.keys((await early.json()).fields)).toEqual(["dueOn"]);
+    expect(
+      (await issue(body.id, "accountant", { issueDate: "2026-01-01" })).status,
+    ).toBe(200);
+  });
+
+  it("an unregistered company still needs its business details (#348)", async () => {
+    const created = await r().create(
+      call("plainowner", "POST", {
+        customerId: plainCustomerId,
+        lines: [{ ...INSTALL, taxCode: "OUT_OF_SCOPE" }],
+      }),
+      undefined,
+    );
+    const { id } = await created.json();
+    const details = await db.company.findUniqueOrThrow({
+      where: { id: plainCompanyId },
+    });
+    await db.company.update({
+      where: { id: plainCompanyId },
+      data: { legalName: null, abn: null, postcode: null },
+    });
+    try {
+      const refused = await issue(id, "plainowner");
+      expect(refused.status).toBe(400);
+      expect(Object.keys((await refused.json()).fields)).toEqual([
+        "company.legalName",
+        "company.abn",
+        "company.address",
+      ]);
+    } finally {
+      await db.company.update({
+        where: { id: plainCompanyId },
+        data: {
+          legalName: details.legalName,
+          abn: details.abn,
+          postcode: details.postcode,
+        },
+      });
+    }
+    expect((await issue(id, "plainowner")).status).toBe(200);
   });
 
   it("mixed tax codes and inclusive entry, rounded per line", async () => {

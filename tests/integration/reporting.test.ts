@@ -3137,6 +3137,26 @@ describe("ageing, cash movement and accountant exports (#56)", () => {
         context: undefined,
       })
     ).json();
+    // #260: only validated values reach the audit log.
+    const stray = "00000000-0000-4000-8000-0000000000aa";
+    expect(
+      (
+        await runExport(
+          f.actor,
+          "cash",
+          `${range}&documentId=${stray}&note=free-text-from-a-tenant`,
+        )
+      ).status,
+    ).toBe(200);
+    const strayAudit = await db.auditEvent.findFirstOrThrow({
+      where: { companyId: f.company.id, action: "report.exported" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(JSON.stringify(strayAudit.metadata)).not.toContain(stray);
+    expect(JSON.stringify(strayAudit.metadata)).not.toContain("free-text");
+    expect(JSON.stringify(strayAudit.metadata)).toContain(
+      range.split("&")[0]!.split("=")[1]!,
+    );
     const before = await db.auditEvent.count({
       where: { companyId: f.company.id, action: "report.exported" },
     });
