@@ -157,10 +157,16 @@ The self-hosted site backs up to a Windows file share, which the owner's Windows
 **When the Windows computer is off or asleep:**
 - The local backup is still made and kept, and the nightly run fails, so `systemctl status jobflow-backup.service` shows it.
 - **Every hour**, `jobflow-backup-sync.timer` runs `sync.sh` on its own. The first run after the computer is back copies everything that was missed. That unit shows "failed" until the copy succeeds.
-- Touching the folder mounts the share on demand. The attempt is capped at 60 seconds, so a sleeping computer can't hang the job.
+- Touching the folder mounts the share on demand. The attempt is capped at 60 seconds, so a sleeping computer can't hang the job. Only a mounted Windows (SMB) share counts: systemd's on-demand placeholder is always there, so it doesn't.
 - Local backups are kept for 30 days, so the share can be away for up to 30 days without losing a copy.
 
 The nightly run is skipped while maintenance is on during a deploy. A lock stops the nightly copy and the hourly retry from running at the same time.
+
+**Email alerts (#355):** every day at 09:00 Sydney time, `jobflow-backup-health.timer` checks the backups and emails `OPERATOR_NOTIFY_EMAIL`, through the app's SMTP settings, if:
+- no complete backup on this server is newer than 26 hours (the nightly backup is failing), or
+- the newest backup on the share is more than 2 days old (the Windows computer has been off or unreachable that long, or copies are failing).
+
+It sends nothing when backups are healthy, so the computer sleeping overnight doesn't cause an email. While a problem lasts, the email repeats once a day. If the email can't be sent, `jobflow-backup-health.service` shows "failed". To run the check now: `sudo systemctl start jobflow-backup-health.service` (it emails only if there is a problem). The installer sends a test email every time it runs.
 
 **Install** (once, after a deploy that includes it):
 
@@ -169,12 +175,12 @@ sudo bash /home/prod/tax-invoice-run/infra/backup/host/install.sh
 ```
 
 It installs `cifs-utils` and `postgresql-client-16`. Then:
-- **Share already mounted** (for example `/mnt/jobflow`, with `uid=prod,gid=prod`): type its folder when asked. Nothing changes in `/etc/fstab`.
+- **Share already mounted** (for example `/mnt/jobflow`, with `uid=prod,gid=prod`): type its folder when asked. It must be a Windows (SMB) share, not a local folder. Nothing changes in `/etc/fstab`.
 - **Otherwise:** leave that empty, then give the share (`//computer/folder`) and the Windows account (`COMPUTER\user` for a local account). It saves the account in a root-only file under `/etc/jobflow`, and mounts the share on demand at `/mnt/jobflow-backup` (SMB 3.1.1, encrypted). `/etc/fstab` is saved first as `/etc/fstab.before-jobflow-backup`.
 
 Backups go in a `backups` folder on the share. The script then:
-- Creates the read-only `jobflow_backup` database role (`pg_read_all_data`). It does this through the app's `DATABASE_URL`. If that login can't create roles, it stops and asks for `BACKUP_ADMIN_DATABASE_URL`, an owner connection used only for this step.
-- Creates the encryption key if there isn't one yet, installs both timers, and makes the first backup.
+- Creates the read-only `jobflow_backup` database role (`pg_read_all_data`), on the same host and port as the app's `DATABASE_URL`. It does this through the app's login. If that login isn't a superuser (on PostgreSQL 16, `CREATEROLE` alone can't grant `pg_read_all_data`), it stops and asks for `BACKUP_ADMIN_DATABASE_URL`, a superuser connection used only for this step. Database passwords are passed to `psql` in its environment, never on its command line.
+- Copies the email settings (`SMTP_*`, `EMAIL_FROM`, `OPERATOR_NOTIFY_EMAIL`) into the backup settings, creates the encryption key if there isn't one yet, installs the three timers, makes the first backup, and sends a test alert email.
 
 **Save the key it prints** somewhere other than this server and the share, such as a password manager. Without it, no backup can be restored. Running the script again keeps the existing key.
 
@@ -182,7 +188,7 @@ Backups go in a `backups` folder on the share. The script then:
 
 ```sh
 systemctl list-timers 'jobflow-backup*'                       # last and next runs
-journalctl -u jobflow-backup.service -u jobflow-backup-sync.service -n 50
+journalctl -u jobflow-backup.service -u jobflow-backup-sync.service -u jobflow-backup-health.service -n 50
 ls <share folder>/backups                                     # the copies on the share
 ```
 

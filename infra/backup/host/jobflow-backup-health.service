@@ -1,0 +1,21 @@
+# Daily backup health check (#355). Started by jobflow-backup-health.timer;
+# installed by infra/backup/host/install.sh. Emails OPERATOR_NOTIFY_EMAIL only
+# when there's a problem. It shows "failed" if the email can't be sent.
+[Unit]
+Description=JobFlow backup health check and email alert
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=prod
+WorkingDirectory=/home/prod/tax-invoice-run
+# BACKUP_ROOT, BACKUP_SHARE_*, SMTP_*, EMAIL_FROM, OPERATOR_NOTIFY_EMAIL and
+# PATH. Root-owned, 0600. No encryption key: the check never decrypts.
+EnvironmentFile=/etc/jobflow/backup.env
+ExecStart=/bin/sh /home/prod/tax-invoice-run/infra/backup/host/health.sh
+# Up to 30 min waiting for a running backup, then the check itself.
+TimeoutStartSec=2400
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
