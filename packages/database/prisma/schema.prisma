@@ -189,7 +189,8 @@ model Company {
   jobPrefix                 String                   @default("JOB-") @map("job_prefix") @db.VarChar(10)
   basPeriod                 BasReportingPeriod       @default(quarterly) @map("bas_period")
   /// ADR 0004 D2: trial companies come only from self-service onboarding (#210).
-  accessMode                CompanyAccessMode        @default(unrestricted) @map("access_mode")
+  /// No default (#260): every insert chooses; only the operator changes it.
+  accessMode                CompanyAccessMode        @map("access_mode")
   trialStartedAt            DateTime?                @map("trial_started_at") @db.Timestamptz(3)
   /// Last full day of the trial in Australia/Sydney.
   trialLastDay              DateTime?                @map("trial_last_day") @db.Date

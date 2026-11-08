@@ -1,2 +1,3 @@
-# Lets the deploy script (#326) stop and start the app, and nothing else.
-prod ALL=(root) NOPASSWD: /usr/bin/systemctl is-active jobflow.service, /usr/bin/systemctl stop jobflow.service, /usr/bin/systemctl start jobflow.service
+# Lets the deploy script (#326) stop and start the app, and take the
+# pre-deploy backup (#359), and nothing else.
+prod ALL=(root) NOPASSWD: /usr/bin/systemctl is-active jobflow.service, /usr/bin/systemctl stop jobflow.service, /usr/bin/systemctl start jobflow.service, /usr/bin/systemctl start jobflow-backup.service

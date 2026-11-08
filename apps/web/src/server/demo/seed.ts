@@ -115,6 +115,8 @@ export async function seedDemo(
       await tx.company.create({
         data: {
           id: DEMO_COMPANY_ID,
+          // The demo company has no trial (#260: no column default).
+          accessMode: "unrestricted",
           name: DEMO_COMPANY_NAME,
           ...DEMO_DETAILS,
           isDemo: true,

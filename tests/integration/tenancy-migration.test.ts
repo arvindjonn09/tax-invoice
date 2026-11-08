@@ -26,6 +26,7 @@ await withIsolatedDatabase(async env => {
     await check(true);
     await checkAuth(true);
     // Roll back newest first: later migrations depend on users/companies.
+    await run('rollbacks/20261108120000_trial_columns_guard.sql');
     await run('rollbacks/20261106100000_platform_operator.sql');
     await run('rollbacks/20261103110000_trial_profile_guard.sql');
     await run('rollbacks/20261103100000_signup_accounts.sql');
