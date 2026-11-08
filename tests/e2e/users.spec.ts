@@ -46,6 +46,7 @@ test.beforeAll(async () => {
       data: {
         id: companyId,
         name: "Synthetic Browser Company",
+        accessMode: "unrestricted",
         isDemo: true,
         createdBy: ownerId,
       },

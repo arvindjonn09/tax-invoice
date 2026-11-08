@@ -15,6 +15,7 @@ import {
   withCommittedDatabase,
 } from "../helpers/committed-database";
 import { syntheticFactory } from "../helpers/factories";
+import { operatorUpdate } from "../helpers/operator-update";
 
 // #137: uploads never attached to anything are deleted after the grace
 // period, object first and audited; attached documents are never touched.
@@ -450,7 +451,7 @@ describe("company logos and read-only companies (#211)", () => {
   });
 
   it("keeps cleaning up for a read-only trial company (housekeeping, S9 AC7)", async () => {
-    await db.company.update({
+    await operatorUpdate(db, {
       where: { id: companyId },
       data: {
         isDemo: false,
@@ -465,7 +466,7 @@ describe("company logos and read-only companies (#211)", () => {
       expect(result.deleted.map((d) => d.id)).toContain(old.id);
       expect(await db.document.count({ where: { id: old.id } })).toBe(0);
     } finally {
-      await db.company.update({
+      await operatorUpdate(db, {
         where: { id: companyId },
         data: { accessMode: "unrestricted" },
       });
