@@ -574,3 +574,71 @@ describe("quotes (#44)", () => {
     expect((await draft({ customerId: otherCustomerId })).status).toBe(400);
   });
 });
+
+describe("supplier details frozen at send (#229)", () => {
+  it("stores snapshot v2 with about when sent, unchanged by later profile edits", async () => {
+    await db.company.update({
+      where: { id: companyId },
+      data: {
+        phone: "02 5550 0101",
+        businessEmail: "quotes@sample.invalid",
+        website: "https://sample.invalid",
+        about: "Synthetic fit-outs since 2020.",
+      },
+    });
+    const created = await draft();
+    // A draft follows the live profile: nothing frozen yet.
+    expect(created.body).toMatchObject({ supplier: null, supplierNote: null });
+    const sent = await act("send", created.body.id);
+    expect(sent.status).toBe(200);
+    const frozen = {
+      v: 2,
+      phone: "02 5550 0101",
+      businessEmail: "quotes@sample.invalid",
+      website: "https://sample.invalid",
+      about: "Synthetic fit-outs since 2020.",
+      logo: null,
+    };
+    expect(sent.body).toMatchObject({ supplier: frozen, supplierNote: null });
+
+    await db.company.update({
+      where: { id: companyId },
+      data: {
+        phone: "02 5550 0202",
+        businessEmail: "new@sample.invalid",
+        website: "https://new.sample.invalid",
+        about: "Changed after sending.",
+      },
+    });
+    const read = await json(
+      await r().read(call("manager", "GET"), one(created.body.id)),
+    );
+    expect(read.body).toMatchObject({ supplier: frozen });
+    // The database refuses a change to a sent quote's snapshot (#211 guard).
+    await expect(
+      db.quote.update({
+        where: { id: created.body.id },
+        data: { supplierSnapshot: { v: 2, name: "Rewritten" } },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("says when a quote was sent before snapshots were recorded", async () => {
+    const created = await draft();
+    await act("send", created.body.id);
+    // Simulate a pre-M6 sent quote: no snapshot. The guard blocks updates,
+    // so clear it with the trigger disabled, as a migration would find it.
+    await db.$transaction([
+      db.$executeRawUnsafe(`ALTER TABLE quotes DISABLE TRIGGER USER`),
+      db.$executeRaw`UPDATE quotes SET supplier_snapshot = NULL WHERE id = ${created.body.id}::uuid`,
+      db.$executeRawUnsafe(`ALTER TABLE quotes ENABLE TRIGGER USER`),
+    ]);
+    const read = await json(
+      await r().read(call("manager", "GET"), one(created.body.id)),
+    );
+    expect(read.body).toMatchObject({
+      supplier: null,
+      supplierNote: "Supplier details not recorded at send",
+    });
+  });
+});
