@@ -23,7 +23,8 @@ const PUBLIC_PATHS = [
   "/api/health",
   "/api/health/ready",
 ];
-const SIGNED_IN_PATHS = ["/dashboard", "/api/session"];
+// Better Auth's session endpoint, and a signed-in page.
+const SIGNED_IN_PATHS = ["/dashboard", "/api/auth/get-session"];
 
 const failures = [];
 const rows = [];

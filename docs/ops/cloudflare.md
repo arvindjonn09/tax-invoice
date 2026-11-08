@@ -80,7 +80,7 @@ JOBFLOW_EDGE_COOKIE_A='…' JOBFLOW_EDGE_COOKIE_B='…' \
   node scripts/ops/check-edge-cache.mjs https://jobflow.shivomsangha.com
 ```
 
-It then also fetches `/dashboard` and `/api/session` as each user, and fails if either response is cached, or if user B ever receives user A's response. Cookies are read from the environment, never printed. Never use a real customer's session. Record the output in the issue or PR.
+It then also fetches `/dashboard` and `/api/auth/get-session` as each user, and fails if either response is cached, or if user B ever receives user A's response. Cookies are read from the environment, never printed. Never use a real customer's session. Record the output in the issue or PR.
 
 ## Owner actions
 
